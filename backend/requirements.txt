@@ -19,3 +19,5 @@ spacy
 kiwipiepy
 neo4j
 SPARQLWrapper
+rdflib>=7.0.0
+pyyaml>=6.0

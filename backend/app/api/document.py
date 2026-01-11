@@ -31,17 +31,40 @@ async def upload_document(
         select(DocModel).filter(DocModel.kb_id == kb_id, DocModel.filename == file.filename)
     )
     existing_doc = result.scalars().first()
+    
     if existing_doc:
-        raise HTTPException(status_code=409, detail=f"Document '{file.filename}' already exists in this Knowledge Base.")
+        logger.info(f"Overwriting existing document: {file.filename}")
+        
+        # 1. Clear existing vectors from Milvus to prevent duplicates
+        try:
+            from app.core.milvus import create_collection
+            collection = create_collection(kb_id)
+            collection.load()
+            
+            # Delete by doc_id
+            expr = f'doc_id == "{existing_doc.id}"'
+            collection.delete(expr)
+            collection.flush()
+            logger.info(f"Deleted old chunks for doc {existing_doc.id} from Milvus")
+        except Exception as e:
+            logger.warning(f"Failed to clear old chunks from Milvus during overwrite: {e}")
+            
+        # 2. Update existing DB record
+        existing_doc.status = DocumentStatus.PROCESSING.value
+        from datetime import datetime
+        existing_doc.updated_at = datetime.utcnow()
+        
+        doc = existing_doc
+    else:
+        # Create new Document record
+        doc = DocModel(
+            kb_id=kb_id,
+            filename=file.filename,
+            file_type=file.filename.split(".")[-1],
+            status=DocumentStatus.PROCESSING.value 
+        )
+        db.add(doc)
 
-    # Create Document record
-    doc = DocModel(
-        kb_id=kb_id,
-        filename=file.filename,
-        file_type=file.filename.split(".")[-1],
-        status=DocumentStatus.PROCESSING.value # Start as processing or pending
-    )
-    db.add(doc)
     await db.commit()
     await db.refresh(doc)
     
