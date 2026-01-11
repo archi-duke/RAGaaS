@@ -127,3 +127,10 @@ To maintain long-term stability and scalability, all new code MUST adhere to the
 *   **Private Implementation**: Prefix with `_` (e.g., `_cosine_similarity`). These should NOT be called from outside the class/module.
 *   **Public Interface**: Explicitly exported in `__init__.py` if it's a package.
 *   **LLM Guideline**: When implementing a feature, **always check `__init__.py`** to see what is exposed. Do not import from internal sub-modules if a public facade exists.
+
+## 6. System Behavior Policies
+
+### 6.1 File Upload & Ingestion
+*   **Overwrite Policy (Strict)**: When a user uploads a file with a filename that already exists in the Knowledge Base, the system **MUST overwrite** the existing document. Rejecting the upload with a 409 Conflict is PROHIBITED.
+*   **Cleanup Requirement**: Before processing the re-uploaded file, existing derived data (Chunks, Embeddings, Graph Triples) associated with the `doc_id` MUST be invalidated/deleted to prevent duplication or stale data.
+*   **User Intent**: The user's latest upload is always the source of truth.

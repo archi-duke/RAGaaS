@@ -103,7 +103,7 @@ services:
     volumes:
       - ./backend:/app
       - ./backend/data:/app/data
-      - ../Doc2Onto:/Doc2Onto
+      - /Users/dukekimm/Works/Doc2Onto:/Doc2Onto
     ports:
       - "8000:8000"
     depends_on:
