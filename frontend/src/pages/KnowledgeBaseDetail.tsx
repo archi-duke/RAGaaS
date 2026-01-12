@@ -435,6 +435,7 @@ export default function KnowledgeBaseDetail() {
                         <div style={{ overflow: 'hidden', height: '100%', minHeight: 0 }}>
                             <ChatInterface
                                 kbId={id!}
+                                graphBackend={kb.graph_backend}
                                 strategy={searchStrategy}
                                 bm25TopK={bm25TopK}
                                 bm25Tokenizer={bm25Tokenizer}
@@ -463,7 +464,11 @@ export default function KnowledgeBaseDetail() {
 
                         {/* Right: Results */}
                         <div style={{ overflow: 'hidden', height: '100%', minHeight: 0 }}>
-                            <SearchResults chunks={retrievedChunks} />
+                            <SearchResults
+                                chunks={retrievedChunks}
+                                kbId={id!}
+                                graphBackend={kb.graph_backend}
+                            />
                         </div>
                     </div>
                 </div>

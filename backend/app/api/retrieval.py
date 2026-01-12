@@ -349,10 +349,12 @@ async def chat_with_kb(
                 {
                     "role": "system",
                     "content": "You are a helpful assistant that answers questions based on the provided context. "
+                               "The context generally consists of Korean documents. "
+                               "Regardless of the language of the system instructions, YOU MUST ANSWER IN KOREAN (한국어). "
                                "If multiple entities or items match the question, LIST ALL OF THEM. "
                                "When asked about 'participants' or 'users' of a skill/item, ALSO INCLUDE its 'creators', 'masters', or 'teachers' mentioned in the context. "
                                "If the context doesn't contain enough information to answer the question, say so. "
-                               "Always cite which chunks you used (e.g., 'According to Chunk 1...')."
+                               "Always cite which chunks you used (e.g., '[Chunk 1]에 따르면...')."
                 },
                 {
                     "role": "user",

@@ -43,6 +43,7 @@ interface ChatInterfaceProps {
     useRawLog?: boolean;
     customQueryPrompt?: string; // Add this
     onChunksReceived: (chunks: any[]) => void;
+    graphBackend?: string;
 }
 
 export default function ChatInterface({
@@ -69,7 +70,8 @@ export default function ChatInterface({
     useRelationFilter,
     useRawLog,
     customQueryPrompt, // Add Destructuring
-    onChunksReceived
+    onChunksReceived,
+    graphBackend
 }: ChatInterfaceProps) {
     const [messages, setMessages] = useState<Message[]>([]);
     const [input, setInput] = useState('');
@@ -254,67 +256,7 @@ export default function ChatInterface({
                         >
                             {msg.content}
 
-                            {msg.role === 'assistant' && msg.chunks && msg.chunks.length > 0 && (() => {
-                                // DEBUG OUTPUT
-                                const firstChunk = msg.chunks[0];
-                                const hasGraphMeta = !!firstChunk.graph_metadata;
-                                const graphEnts = firstChunk.graph_metadata?.found_graph_entities;
 
-                                const entities = new Set<string>();
-                                msg.chunks.forEach(chunk => {
-                                    const meta = chunk.graph_metadata || chunk.metadata;
-                                    if (meta?.found_graph_entities) {
-                                        meta.found_graph_entities.forEach((e: string) => entities.add(e));
-                                    }
-                                    if (meta?.extracted_entities) {
-                                        meta.extracted_entities.forEach((e: string) => entities.add(e));
-                                    }
-                                });
-                                const entityList = Array.from(entities);
-
-                                return (
-                                    <div style={{ marginTop: '0.8rem', borderTop: '1px solid #eee', paddingTop: '0.5rem' }}>
-                                        {/* DEBUG INFO - REMOVE AFTER FIX */}
-                                        <div style={{ fontSize: '0.6rem', color: 'red' }}>
-                                            Debug: Chunks: {msg.chunks.length},
-                                            HasGraphMeta: {String(hasGraphMeta)},
-                                            FoundEnts: {JSON.stringify(graphEnts)},
-                                            EntityListLen: {entityList.length}
-                                        </div>
-
-                                        {entityList.length > 0 && (
-                                            <>
-                                                <div style={{ fontSize: '0.75rem', fontWeight: 600, marginBottom: '0.3rem', color: '#555' }}>
-                                                    Knowledge Graph Entities:
-                                                </div>
-                                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
-                                                    {entityList.map(entity => (
-                                                        <button
-                                                            key={entity}
-                                                            onClick={() => window.open(`/graph-viewer?kb_id=${kbId}&entity=${encodeURIComponent(entity)}&backend=${enableGraphSearch ? 'neo4j' : 'ontology'}`, '_blank')}
-                                                            style={{
-                                                                border: '1px solid #ddd',
-                                                                background: '#f0f9ff',
-                                                                color: '#0066cc',
-                                                                borderRadius: '15px',
-                                                                padding: '2px 8px',
-                                                                fontSize: '0.7rem',
-                                                                cursor: 'pointer',
-                                                                display: 'flex',
-                                                                alignItems: 'center',
-                                                                gap: '3px'
-                                                            }}
-                                                            title="Visualize Graph"
-                                                        >
-                                                            🕸️ {entity}
-                                                        </button>
-                                                    ))}
-                                                </div>
-                                            </>
-                                        )}
-                                    </div>
-                                );
-                            })()}
 
                             {msg.role === 'assistant' && (msg.execution_time !== undefined || msg.strategy) && (
                                 <div style={{

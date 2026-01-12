@@ -269,37 +269,50 @@ async def save_extraction_rules(data: dict = Body(...)):
 async def get_query_prompt_content(type: str = "ontology"):
     try:
         if type == "neo4j":
+            file_path = Path("data/prompts/cypher_generation_prompt.txt")
+            if file_path.exists():
+                return {"content": file_path.read_text(encoding="utf-8")}
             from app.services.retrieval.cypher_generator import CypherGenerator
-            return {"content": CypherGenerator.SYSTEM_PROMPT}
+            return {"content": CypherGenerator.DEFAULT_SYSTEM_PROMPT}
         else:
+            file_path = Path("data/prompts/sparql_generation_prompt.txt")
+            if file_path.exists():
+                return {"content": file_path.read_text(encoding="utf-8")}
             from app.doc2onto.qa.sparql_generator import SPARQLGenerator
-            return {"content": SPARQLGenerator.SYSTEM_PROMPT} 
-    except ImportError as e:
-         return {"content": f"Error loading generator: {e}"}
+            return {"content": SPARQLGenerator.DEFAULT_SYSTEM_PROMPT} 
     except Exception as e:
          return {"content": f"Error: {e}"}
 
+@router.post("/query-prompt/save")
+async def save_query_prompt(data: dict = Body(...)):
+    content = data.get("content", "")
+    p_type = data.get("type", "ontology")
+    
+    if not content:
+        raise HTTPException(status_code=400, detail="Content is required")
+        
+    if p_type == "neo4j":
+        file_path = Path("data/prompts/cypher_generation_prompt.txt")
+    else:
+        file_path = Path("data/prompts/sparql_generation_prompt.txt")
+        
+    try:
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_text(content, encoding="utf-8")
+        return {"ok": True}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to save: {str(e)}")
+
 @router.get("/extraction-prompt/content")
 async def get_extraction_prompt():
-    # Try different paths to be robust
-    paths = [
-        Path("data/prompts/graph_extraction_prompt.txt"),
-        Path("backend/data/prompts/graph_extraction_prompt.txt"),
-        Path("/app/data/prompts/graph_extraction_prompt.txt")
-    ]
+    file_path = Path("data/prompts/graph_extraction_prompt.txt")
+    if file_path.exists():
+        return {"content": file_path.read_text(encoding="utf-8")}
     
-    file_path = None
-    for p in paths:
-        if p.exists():
-            file_path = p
-            break
-            
-    if not file_path:
-        return {"content": "Prompt file not found."}
-    
-    with open(file_path, "r", encoding="utf-8") as f:
-        content = f.read()
-    return {"content": content}
+    # Fallback to hardcoded default if file missing
+    from app.services.ingestion.graph import GraphProcessor
+    # We temporarily use a dummy processor to get its default
+    return {"content": "Prompt file not found. Please contact admin."}
 
 @router.post("/extraction-prompt/save")
 async def save_extraction_prompt(data: dict = Body(...)):

@@ -151,14 +151,38 @@ class Doc2OntoProcessor:
                 # shutil.rmtree(output_dir, ignore_errors=True)
                 pass
 
+    def normalize_entity_name(self, name: str) -> str:
+        """
+        Normalize entity name for Fuseki URI.
+        Removes common prefixes like '001번', '참가자' and special chars.
+        Returns the normalized name.
+        """
+        import re
+        # 1. Remove common prefixes/suffixes (Customize as needed)
+        # remove '001번 ', '101번 ' etc. (digit + 번)
+        name = re.sub(r'^\d+번\s*', '', name)
+        # remove '참가자 '
+        name = re.sub(r'^참가자\s*', '', name)
+        
+        # 2. Basic cleanup (same as _sanitize_uri logic usually)
+        # but here we want to keep Korean chars valid for URI generation later
+        return name.strip()
+
     async def _load_to_fuseki(self, output_dir: str, kb_id: str):
-        """Load TriG files to Fuseki using RAGaaS's fuseki_client for proper auth."""
+        """Load TriG files to Fuseki using RAGaaS's fuseki_client with Normalization."""
         from app.core.fuseki import fuseki_client
         import requests
         from requests.auth import HTTPBasicAuth
+        import re
         
         base_trig = os.path.join(output_dir, "base.trig")
         evidence_trig = os.path.join(output_dir, "evidence.trig")
+        
+        print(f"[Doc2Onto] Checking for output files in {output_dir}:")
+        if os.path.exists(output_dir):
+             print(f"[Doc2Onto] Files: {os.listdir(output_dir)}")
+        else:
+             print(f"[Doc2Onto] Output dir {output_dir} does NOT exist!")
         
         # Use RAGaaS naming convention (kb_ prefix)
         safe_name = f"kb_{kb_id.replace('-', '_')}"
@@ -170,28 +194,135 @@ class Doc2OntoProcessor:
         gsp_url = f"{settings.FUSEKI_URL}/{safe_name}/data"
         auth = HTTPBasicAuth("admin", "admin")
         
-        print(f"[Doc2Onto] Uploading to Fuseki dataset: {safe_name}")
+        print(f"[Doc2Onto] Uploading to Fuseki dataset: {safe_name} via {gsp_url}")
         
         for trig_path in [base_trig, evidence_trig]:
             if os.path.exists(trig_path):
                 try:
+                    # Check file size
+                    print(f"[Doc2Onto] Found {os.path.basename(trig_path)} ({os.path.getsize(trig_path)} bytes)")
+                    
                     with open(trig_path, "r", encoding="utf-8") as f:
                         content = f.read()
                     
-                    response = requests.post(
-                        gsp_url,
-                        data=content.encode("utf-8"),
-                        headers={"Content-Type": "application/trig"},
-                        auth=auth,
-                        timeout=60
-                    )
-                    
-                    if response.status_code in [200, 201, 204]:
-                        print(f"[Doc2Onto] Uploaded {os.path.basename(trig_path)} to Fuseki")
+                    if not content.strip():
+                        print(f"[Doc2Onto] SKIPPING {os.path.basename(trig_path)}: File is empty.")
+                        continue
+
+                    # --- NORMALIZATION LOGIC ---
+                    if os.path.basename(trig_path) == "base.trig":
+                        print("[Doc2Onto] Applying Entity Normalization to base.trig...")
+                        normalized_lines = []
+                        
+                        # Regex to capture local names in URIs: <.../inst/NAME> or <.../class/NAME>
+                        # We focus on 'inst' (instances) mainly.
+                        # Pattern: <http://example.org/onto/inst/OriginalName>
+                        uri_pattern = re.compile(r'<(http://example.org/onto/inst/)([^>]+)>')
+                        
+                        # Track aliases to add: {normalized_uri: {set of aliases}}
+                        aliases_to_add = {}
+
+                        lines = content.split('\n')
+                        for line in lines:
+                            # Function to replace and track
+                            def replace_and_track(match):
+                                prefix = match.group(1)
+                                original_local = match.group(2)
+                                
+                                # Decode if it's percent encoded? Usually it's not in trig file text unless written so.
+                                # But TrigBuilder usually writes readable chars if not strict.
+                                # Let's assume it's readable.
+                                import urllib.parse
+                                decoded_name = urllib.parse.unquote(original_local)
+                                
+                                normalized_name = self.normalize_entity_name(decoded_name)
+                                
+                                # If changed, track alias
+                                if normalized_name != decoded_name:
+                                    norm_uri = f"{prefix}{normalized_name}"
+                                    if norm_uri not in aliases_to_add:
+                                        aliases_to_add[norm_uri] = set()
+                                    aliases_to_add[norm_uri].add(decoded_name)
+                                    return f"<{prefix}{normalized_name}>"
+                                else:
+                                    return match.group(0)
+
+                            new_line = uri_pattern.sub(replace_and_track, line)
+                            normalized_lines.append(new_line)
+                        
+                        # Add Aliases (skos:altLabel)
+                        if aliases_to_add:
+                            print(f"[Doc2Onto] Adding {len(aliases_to_add)} normalized entities with aliases.")
+                            # Ensure prefixes are available if not present
+                            # Usually base.trig has prefixes at top. We append at end or inside graph block?
+                            # Trig structure is: PREFIX ... { GRAPH ... { ... } }
+                            # Simpler: Just append to the main graph block if possible, or use INSERT DATA later?
+                            # Parsing Trig relies on brackets.
+                            # EASIER: Just append simple triples at the end if it's Turtle, but Trig is named graphs.
+                            # We should insert aliases into the SAME lines if we can, or just append to content before last '}'
+                            
+                            # Let's try to inject into the default graph or the specific named graph.
+                            # Doc2Onto uses: GRAPH <urn:onto:base> { ... }
+                            # We can find the closing brace of that graph?
+                            # Or simpler: Just send a separate SPARQL UPDATE for aliases after file upload.
+                            # Changing file content is risky for brackets.
+                            # STRATEGY: 
+                            # 1. Upload normalized content (modified file).
+                            # 2. Perform SPARQL Update for aliases.
+                            
+                            content = '\n'.join(normalized_lines)
+                        
+                        # Upload normalized content
+                        response = requests.post(
+                            gsp_url,
+                            data=content.encode("utf-8"),
+                            headers={"Content-Type": "application/trig"},
+                            auth=auth,
+                            timeout=60
+                        )
+                        
+                        if response.status_code in [200, 201, 204]:
+                            print(f"[Doc2Onto] SUCCESS: Uploaded normalized base.trig")
+                            
+                            # Insert Aliases via SPARQL Update
+                            if aliases_to_add:
+                                print(f"[Doc2Onto] Inserting aliases for normalized entities...")
+                                update_query = "PREFIX skos: <http://www.w3.org/2004/02/skos/core#>\nINSERT DATA { GRAPH <urn:onto:base> {\n"
+                                for uri, alias_set in aliases_to_add.items():
+                                    for alias in alias_set:
+                                        # Escape alias
+                                        safe_alias = alias.replace('"', '\\"')
+                                        update_query += f"  <{uri}> skos:altLabel \"{safe_alias}\" .\n"
+                                update_query += "} }"
+                                
+                                update_endpoint = f"{settings.FUSEKI_URL}/{safe_name}/update"
+                                try:
+                                    requests.post(update_endpoint, data={"update": update_query}, auth=auth)
+                                    print("[Doc2Onto] Aliases inserted successfully.")
+                                except Exception as e:
+                                    print(f"[Doc2Onto] Failed to insert aliases: {e}")
+                                    
+                        else:
+                            print(f"[Doc2Onto] ERROR: Failed to upload normalized base.trig: {response.status_code} {response.text}")
+
                     else:
-                        print(f"[Doc2Onto] Failed to upload {os.path.basename(trig_path)}: {response.status_code} {response.text}")
+                        # EVIDENCE TRIG (Usually metadata, no normalization needed or safer not to touch)
+                        response = requests.post(
+                            gsp_url,
+                            data=content.encode("utf-8"),
+                            headers={"Content-Type": "application/trig"},
+                            auth=auth,
+                            timeout=60
+                        )
+                        if response.status_code in [200, 201, 204]:
+                            print(f"[Doc2Onto] SUCCESS: Uploaded {os.path.basename(trig_path)}")
+                        else:
+                            print(f"[Doc2Onto] ERROR: Failed to upload {os.path.basename(trig_path)}: {response.status_code}")
+
                 except Exception as e:
-                    print(f"[Doc2Onto] Error uploading {trig_path}: {e}")
+                    print(f"[Doc2Onto] EXCEPTION uploading {trig_path}: {e}")
+            else:
+                print(f"[Doc2Onto] MISSING: {trig_path} not found.")
 
     async def _load_to_neo4j(self, output_dir: str, kb_id: str, doc_id: str):
         """

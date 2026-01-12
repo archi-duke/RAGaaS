@@ -63,9 +63,10 @@ class FusekiBackend(GraphBackend):
                     PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
                     PREFIX owl: <http://www.w3.org/2002/07/owl#>
                     PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
-                    PREFIX inst: <http://example.org/onto/inst/> 
-                    PREFIX rel: <http://example.org/onto/rel/> 
-                    PREFIX prop: <http://example.org/onto/prop/>
+                    PREFIX inst: <http://rag.local/entity/> 
+                    PREFIX rel: <http://rag.local/relation/> 
+                    PREFIX prop: <http://rag.local/property/>
+
                     """
                     
                     
@@ -73,7 +74,7 @@ class FusekiBackend(GraphBackend):
                     # This is crucial because Doc2Onto loads data (base.trig) into named graphs
                     if "WHERE" in generated_sparql:
                         # Simple injection: replace the first 'WHERE' with 'FROM <urn:x-arq:UnionGraph> WHERE'
-                        # Note: This assumes standard SPARQL query structure.
+                        # This ensures we search across all named graphs where Doc2Onto puts the data
                         sparql_query_content = generated_sparql.replace("WHERE", "FROM <urn:x-arq:UnionGraph>\nWHERE", 1)
                     else:
                         sparql_query_content = generated_sparql
@@ -165,7 +166,11 @@ class FusekiBackend(GraphBackend):
         
         filter_clause = " || ".join(entity_filters) if entity_filters else "1=1"
 
-        # Enhanced SPARQL query - Search in all Named Graphs (for Doc2Onto TriG format)
+        # DEBUG: Print exact filter clause and entities
+        print(f"DEBUG: [Fuseki] Search Entities: {entities}")
+        print(f"DEBUG: [Fuseki] Filter Clause: {filter_clause}")
+
+        # Enhanced SPARQL query - Search Default Graph (where Fallback data lives)
         sparql_query = f"""
         PREFIX rel: <{self.namespace_relation}>
         PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
@@ -173,23 +178,25 @@ class FusekiBackend(GraphBackend):
         PREFIX ns1: <http://example.org/onto/rel/>
         PREFIX inst: <http://example.org/onto/inst/>
         
-        SELECT DISTINCT ?chunkUri ?s ?p ?o ?sLabel ?oLabel
+        SELECT DISTINCT ?s ?p ?o ?sLabel ?oLabel ?chunkUri
         WHERE {{
-            GRAPH ?g {{
-                ?s ?p ?o .
-                
-                # Optional labels for filtering and display
-                OPTIONAL {{ ?s rdfs:label ?sLabel }}
-                OPTIONAL {{ ?o rdfs:label ?oLabel }}
-                
-                FILTER (
-                    ?p != <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> &&
-                    ({filter_clause})
-                )
-            }}
+            # Search triples matching filters
+            ?s ?p ?o .
             
-            # Identify if this is an evidence graph or base graph
-            BIND(IF(STRSTARTS(STR(?g), "urn:ragchunk:"), ?g, <http://rag.local/source/unknown>) AS ?chunkUri)
+            # Optional labels
+            OPTIONAL {{ ?s rdfs:label ?sLabel }}
+            OPTIONAL {{ ?o rdfs:label ?oLabel }}
+            
+            # Filter Logic
+            FILTER (
+                # Exclude internal types if needed, but keep it broad for now
+                ?p != <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> &&
+                ({filter_clause})
+            )
+            
+            # Try to find source chunks linked to Subject or Object via hasSource
+            OPTIONAL {{ ?s <http://rag.local/relation/hasSource> ?chunkUri }}
+            OPTIONAL {{ ?o <http://rag.local/relation/hasSource> ?chunkUri2 }}
         }}
         LIMIT 100
         """
@@ -237,8 +244,9 @@ class FusekiBackend(GraphBackend):
             if "rdf-syntax-ns#" in p_uri or "prov#" in p_uri or "evidence/" in p_uri:
                 continue
             
-            s_display = s_label if s_label else (s_uri.split("/")[-1].replace("_", " ") if s_uri else "[Unknown URI]")
-            o_display = o_label if o_label else (o_val.split("/")[-1].replace("_", " ") if o_val.startswith("http") else o_val) or "[Unknown Value]"
+            s_display = s_label if s_label else (urllib.parse.unquote(s_uri.split("/")[-1]).replace("_", " ") if s_uri else "[Unknown URI]")
+            o_display = o_label if o_label else (urllib.parse.unquote(o_val.split("/")[-1]).replace("_", " ") if o_val.startswith("http") else o_val) or "[Unknown Value]"
+
             p_display = urllib.parse.unquote(p_uri.split("/")[-1].replace("_", " "))
             
             if s_display and p_display and o_display:

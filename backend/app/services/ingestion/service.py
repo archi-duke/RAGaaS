@@ -133,7 +133,14 @@ class IngestionService:
             # 4.5. Doc2Onto Graph Ingestion (if enabled)
             # Doc2Onto handles triple extraction and links to RAGaaS chunks
             
-            if use_doc2onto and doc2onto_processor.enabled:
+            # FORCE FALLBACK to RAGaaS extraction (User Request)
+            print("[Ingestion] Forcing Fallback Graph Extraction (Skipping Doc2Onto)")
+            await self._fallback_graph_extraction(
+                text, doc_id, kb_id, texts_to_embed, graph_backend, config
+            )
+            
+            # Original Doc2Onto logic (Disabled)
+            if False and use_doc2onto and doc2onto_processor.enabled:
                 import tempfile
                 import os
                 
