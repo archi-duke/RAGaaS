@@ -6,7 +6,7 @@ from typing import Optional, Dict
 class CypherGenerator:
     """자연어 질문을 Neo4j Cypher 쿼리로 변환하는 LLM 기반 생성기"""
 
-    SYSTEM_PROMPT = """당신은 Neo4j 그래프 데이터베이스 전문가입니다. 
+    DEFAULT_SYSTEM_PROMPT = """당신은 Neo4j 그래프 데이터베이스 전문가입니다. 
 주어진 지식 그래프의 노드 라벨, 속성, 관계 구조를 기반으로 최적의 Cypher 쿼리를 생성하세요.
 
 [지식 그래프 스키마 특징]
@@ -22,7 +22,7 @@ class CypherGenerator:
    - chunk_id, doc_id, text, section_path 등
 4. 관계 (Relationships):
    - 관계 유형은 한국어로 된 경우가 많으며 반드시 백틱(`)으로 감싸야 합니다. (예: -[:`스승`]-, -[:`제자`]-)
-   - 엔티티 노드와 청크 노드는 -[:`MENTIONED_IN`]-> 관계로 연결될 수 있습니다. (엔티티 -[:MENTIONED_IN]-> 청크)
+   - 엔티티 노드와 청크 노드는 -[:`MENTIONED_IN`]-> 관계로 연결될 수 있습니다. (엔티티 -[:`MENTIONED_IN`]-> 청크)
 
 [쿼리 작성 원칙]
 1. 엔티티 검색: 질문에 언급된 개체는 `name` 속성을 사용하여 매칭하세요.
@@ -83,19 +83,16 @@ class CypherGenerator:
             pass
 
     def generate(self, question: str, context: Optional[str] = None, mode: str = "graph", custom_prompt: Optional[str] = None, inverse_search_mode: str = "auto") -> Dict:
-        """사용자 질문을 Cypher로 변환
+        """사용자 질문을 Cypher로 변환"""
         
-        Args:
-            question: 자연어 질문
-            context: 추가 정보 (예: 스키마 요약, 엔티티 후보 등)
-            mode: 현재는 "graph" 모드가 기본입니다.
-            custom_prompt: 사용자 정의 추가 프롬프트 (최우선 적용)
-            inverse_search_mode: 역방향 검색 모드 ("auto", "always", "none")
-            
-        Returns:
-            Cypher 정보를 포함한 딕셔너리
-        """
-        system_prompt = self.SYSTEM_PROMPT
+        # Dynamic Load from File
+        from pathlib import Path
+        prompt_path = Path("data/prompts/cypher_generation_prompt.txt")
+        if prompt_path.exists():
+            system_prompt = prompt_path.read_text(encoding="utf-8")
+        else:
+            system_prompt = self.DEFAULT_SYSTEM_PROMPT
+
         
         # 그래프 검색 모드 특화 지침 (필요 시 보강)
         if mode == "graph":

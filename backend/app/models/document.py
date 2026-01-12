@@ -9,6 +9,8 @@ class DocumentStatus(str, enum.Enum):
     PROCESSING = "processing"
     COMPLETED = "completed"
     ERROR = "error"
+    DELETING = "deleting"
+
 
 class Document(Base):
     __tablename__ = "documents"

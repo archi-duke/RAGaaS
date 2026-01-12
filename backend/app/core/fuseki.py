@@ -123,4 +123,20 @@ class FusekiClient:
             logger.error(f"Error executing SPARQL query on {kb_id}: {e}")
             return {}
 
+    def update_sparql(self, kb_id: str, update_query: str) -> bool:
+        """Execute a SPARQL UPDATE query (INSERT/DELETE)."""
+        dataset_url = self._get_dataset_url(kb_id)
+        update_url = f"{dataset_url}/update"
+        
+        try:
+            sparql = SPARQLWrapper(update_url)
+            sparql.setCredentials("admin", "admin")
+            sparql.setMethod(POST)
+            sparql.setQuery(update_query)
+            sparql.query()
+            return True
+        except Exception as e:
+            logger.error(f"Error executing SPARQL update on {kb_id}: {e}")
+            return False
+
 fuseki_client = FusekiClient()

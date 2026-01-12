@@ -100,28 +100,31 @@ async def list_documents(kb_id: str, db: AsyncSession = Depends(get_db)):
     return result.scalars().all()
 
 @router.delete("/{kb_id}/documents/{doc_id}")
-async def delete_document(kb_id: str, doc_id: str, db: AsyncSession = Depends(get_db)):
+async def delete_document(
+    kb_id: str, 
+    doc_id: str, 
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db)
+):
     result = await db.execute(select(DocModel).filter(DocModel.id == doc_id, DocModel.kb_id == kb_id))
     doc = result.scalars().first()
+    
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
-    
-    await db.delete(doc)
-    await db.commit()
-    
-    # Delete from Milvus
-    try:
-        from app.core.milvus import create_collection
-        collection = create_collection(kb_id)
-        collection.load()
-        expr = f'doc_id == "{doc_id}"'
-        collection.delete(expr)
-        collection.flush()
-        print(f"Deleted chunks for doc {doc_id} from Milvus")
-    except Exception as e:
-        print(f"Failed to delete chunks from Milvus for doc {doc_id}: {e}")
 
-    return {"ok": True}
+    # Transactional Deletion: Mark as DELETING and run background task
+    try:
+        doc.status = DocumentStatus.DELETING.value
+        await db.commit()
+        
+        from app.services.ingestion.cleanup_service import cleanup_service
+        background_tasks.add_task(cleanup_service.perform_cascading_deletion, kb_id, doc_id)
+        
+        return {"ok": True, "message": "Deletion started in background"}
+        
+    except Exception as e:
+        logger.error(f"Failed to initiate deletion for doc {doc_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/{kb_id}/documents/{doc_id}/chunks")
 async def get_document_chunks(kb_id: str, doc_id: str, db: AsyncSession = Depends(get_db)):

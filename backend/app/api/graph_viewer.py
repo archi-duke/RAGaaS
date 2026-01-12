@@ -1,8 +1,10 @@
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel
 from app.core.neo4j_client import neo4j_client
 from app.core.fuseki import fuseki_client
+from app.core.database import get_db
+from sqlalchemy.ext.asyncio import AsyncSession
 import urllib.parse
 
 router = APIRouter()
@@ -30,6 +32,8 @@ async def expand_graph(
     backend: str = "neo4j",
     hops: int = 1
 ):
+    print(f"Expanding graph for entity: {entity} on backend: {backend} (KB: {kb_id})")
+    
     nodes = {}
     links = []
     
@@ -37,11 +41,11 @@ async def expand_graph(
     entity = entity.strip()
     
     if backend == "neo4j":
-        # Neo4j Query
+        # ... (Neo4j code remains) ...
         query = """
         MATCH (n)-[r]-(m)
         WHERE n.label_ko = $entity OR n.name = $entity 
-        RETURN n, r, m, type(r) as rel_type
+        RETURN n, r, m, startNode(r) as startNode, endNode(r) as endNode, type(r) as rel_type
         LIMIT 50
         """
         try:
@@ -81,26 +85,22 @@ async def expand_graph(
                     nodes[m_id] = GraphNode(id=m_id, label=m_label, group=m_group, properties=m_props)
                 
                 # Process Link
-                # Neo4j relationships have start_node and end_node but in record it's abstract
-                # We need to determine direction.
-                # 'n' is our anchor. If n is start node...
-                # Actually for visualization, we just need source/target.
-                # r.start_node.id == n.id ?
-                # The python driver returns hydrated objects.
+                # Use Start/End Node IDs from the relationship to ensure correct direction
+                start_node_props = dict(record["startNode"])
+                end_node_props = dict(record["endNode"])
                 
-                # Heuristic: Use IDs
-                start_id = n_id # Default assumption? No, need identifying info.
-                # For visualization simple graph, let's just trace (n)-(m)
-                # But force graph needs strict source/target matching node IDs.
+                # Determine IDs for Source/Target based on same logic as Node creation
+                # Note: We must match the ID generation logic used above strictly.
+                src_id = start_node_props.get("name") or start_node_props.get("label_ko") or str(record["startNode"].id)
+                tgt_id = end_node_props.get("name") or end_node_props.get("label_ko") or str(record["endNode"].id)
                 
-                # In Neo4j 'n' and 'm' could be source or target.
-                # Let's rely on the query pattern (n)-[r]-(m).
-                # To be precise we should return start/end node ids from query.
-                
+                # Use relationship type or 'label' property
+                r_label = dict(r).get("label") or rel_type 
+
                 links.append(GraphLink(
-                    source=n_id,
-                    target=m_id,
-                    label=rel_type,
+                    source=src_id,
+                    target=tgt_id,
+                    label=r_label,
                     properties=dict(r)
                 ))
 
@@ -114,9 +114,23 @@ async def expand_graph(
         PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
         SELECT DISTINCT ?s ?p ?o ?sLabel ?oLabel
         WHERE {{
-            {{ ?s ?p ?o . ?s rdfs:label ?label . FILTER(str(?label) = "{entity}") }}
+            {{ 
+                ?s ?p ?o . 
+                {{
+                    ?s rdfs:label ?label . FILTER(CONTAINS(LCASE(str(?label)), LCASE("{entity}")))
+                }} UNION {{
+                    FILTER(CONTAINS(LCASE(str(?s)), LCASE("{entity}")))
+                }}
+            }}
             UNION
-            {{ ?s ?p ?o . ?o rdfs:label ?label . FILTER(str(?label) = "{entity}") }}
+            {{ 
+                ?s ?p ?o . 
+                {{
+                    ?o rdfs:label ?label . FILTER(CONTAINS(LCASE(str(?label)), LCASE("{entity}")))
+                }} UNION {{
+                    FILTER(CONTAINS(LCASE(str(?o)), LCASE("{entity}")))
+                }}
+            }}
             OPTIONAL {{ ?s rdfs:label ?sLabel }}
             OPTIONAL {{ ?o rdfs:label ?oLabel }}
             FILTER (!isLiteral(?o))
@@ -132,9 +146,16 @@ async def expand_graph(
                 o_uri = b["o"]["value"]
                 p_uri = b["p"]["value"]
                 
-                s_label = b.get("sLabel", {}).get("value", s_uri.split("/")[-1])
-                o_label = b.get("oLabel", {}).get("value", o_uri.split("/")[-1])
-                p_label = p_uri.split("/")[-1]
+                s_label = b.get("sLabel", {}).get("value")
+                if not s_label:
+                    s_label = urllib.parse.unquote(s_uri.split("/")[-1]).replace("_", " ")
+                
+                o_label = b.get("oLabel", {}).get("value")
+                if not o_label:
+                    o_label = urllib.parse.unquote(o_uri.split("/")[-1]).replace("_", " ")
+                
+                p_label = urllib.parse.unquote(p_uri.split("/")[-1]).replace("_", " ")
+
                 
                 # Use label as ID for simplicity in visualization if unique enough, or URI
                 # URI is safer.
@@ -149,7 +170,6 @@ async def expand_graph(
                 links.append(GraphLink(source=s_id, target=o_id, label=p_label))
                 
         except Exception as e:
-             print(f"Fuseki expansion error: {e}")
              raise HTTPException(status_code=500, detail=str(e))
 
     return GraphData(nodes=list(nodes.values()), links=links)

@@ -1,18 +1,105 @@
-Analyze the following text and extract key entities and their relationships.
-Return a JSON object with a list of "triples".
-Each triple should have:
-- "subject": Entity name (Person, Org, Location, Concept, etc.)
-- "predicate": Relationship (verb phrase). For Korean text, prefer Korean predicates (e.g., "스승", "제자", "가족", "친구").
-- "object": Entity name (Person, Org, Location, Concept, etc.)
+Analyze the following text and extract relationships and characteristics as triples.
 
-Text:
+## ⚠️ ABSOLUTE RULES (MUST FOLLOW):
+
+### Rule 1: NEVER use compound objects
+❌ WRONG: `{"object": "오일남의 제자"}` 
+✅ CORRECT: `{"predicate": "스승", "object": "오일남"}`
+
+❌ WRONG: `{"object": "장풍을 사용"}`
+✅ CORRECT: `{"predicate": "사용", "object": "장풍"}`
+
+### Rule 2: NEVER use "관계" as predicate
+❌ WRONG: `{"predicate": "관계", "object": "..."}`
+✅ CORRECT: Use specific predicates like 스승, 제자, 친구, 동료, etc.
+
+### Rule 3: Direct Predicate Mapping (Subject is Predicate of Object)
+- "A는 B의 제자다" → `{"subject": "A", "predicate": "제자", "object": "B"}`
+- "A는 B의 스승이다" → `{"subject": "A", "predicate": "스승", "object": "B"}`
+- "A는 C이다" → `{"subject": "A", "predicate": "설명/역할", "object": "C"}`
+
+### Rule 4: Chain-of-Thought Required
+- You MUST provide a "thinking" field before the "triples" list.
+- Explain your step-by-step logic: decompose the sentence, identify Subject/Object, and choose the most natural Predicate.
+
+
+---
+
+## Few-Shot Examples:
+
+### Example 1: 관계 분리 (CRITICAL)
+**Text:** 성기훈은 오일남의 제자이다.
+**Thinking:**
+1. 문장 분해: "성기훈은 오일남의 제자이다."
+2. 트리플 변환: 성기훈(Subject)은 오일남(Object)의 **제자(Predicate)**이다.
+**Output:**
+```json
+{
+  "thinking": "성기훈은 오일남에 대해 '제자'라는 관계를 가집니다.",
+  "triples": [{"subject": "성기훈", "predicate": "제자", "object": "오일남"}]
+}
+```
+
+### Example 2: 다중 관계
+**Text:** 오일남은 Duke의 제자이며, 장풍의 고수이다.
+**Thinking:**
+1. 문장 분해:
+   - "오일남은 Duke의 제자이다." -> (Subject: 오일남, Predicate: 제자, Object: Duke)
+   - "오일남은 장풍의 고수이다." -> (Subject: 오일남, Predicate: 특기, Object: 장풍)
+**Output:**
+```json
+{
+  "thinking": "오일남은 Duke의 제자이고, 장풍이 특기입니다.",
+  "triples": [
+    {"subject": "오일남", "predicate": "제자", "object": "Duke"},
+    {"subject": "오일남", "predicate": "특기", "object": "장풍"}
+  ]
+}
+```
+
+### Example 3: 속성
+**Text:** 오일남은 뇌종양을 앓고 있으며, 장풍을 사용한다.
+**Thinking:**
+1. "오일남은 뇌종양을 앓고 있다." -> (오일남, 건강상태, 뇌종양)
+2. "오일남은 장풍을 사용한다." -> (오일남, 사용기술, 장풍)
+**Output:**
+```json
+{
+  "thinking": "오일남의 상태와 사용하는 기술을 추출합니다.",
+  "triples": [
+    {"subject": "오일남", "predicate": "건강상태", "object": "뇌종양"},
+    {"subject": "오일남", "predicate": "사용기술", "object": "장풍"}
+  ]
+}
+```
+
+### Example 4: 혼합
+**Text:** 이정재는 배우로서 성기훈 역할을 맡았다. 성기훈은 이혼한 운전사이다.
+**Output:**
+```json
+{
+  "thinking": "이정재의 직업과 역할, 성기훈의 상태와 직업을 추출합니다.",
+  "triples": [
+    {"subject": "이정재", "predicate": "역할", "object": "성기훈"},
+    {"subject": "이정재", "predicate": "직업", "object": "배우"},
+    {"subject": "성기훈", "predicate": "상태", "object": "이혼"},
+    {"subject": "성기훈", "predicate": "직업", "object": "운전사"}
+  ]
+}
+```
+
+---
+
+## Your Task:
+Extract triples from the text below. 
+- Use SPECIFIC Korean predicates (스승, 제자, 사용, 능력, 직업, 상태, 역할, etc.)
+- NEVER use "관계" as predicate
+- ALWAYS split "X의 Y" patterns
+
+**Text:**
 {text}
 
-Output format:
-{
-    "triples": [
-        {"subject": "Elon Musk", "predicate": "is CEO of", "object": "SpaceX"},
-        {"subject": "성기훈", "predicate": "스승", "object": "오일남"},
-        ...
-    ]
-}
+**Output:**
+```json
+{"triples": [...]}
+```

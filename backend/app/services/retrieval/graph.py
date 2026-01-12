@@ -53,19 +53,19 @@ class GraphRetrievalStrategy(RetrievalStrategy):
             if use_raw_log:
                 trace_logs.append(formatted_msg)
 
-        log(f"Graph Search Start for query: {query}")
+        log(f"🚀 Graph Search Start for query: {query}")
         
         # 1. Analyze query for semantic understanding
         query_analysis = await self._analyze_query(query)
-        log(f"DEBUG: Query analysis: {query_analysis}")
+        log(f"DEBUG: Query Analysis -> Type: {query_analysis.get('query_type')}, Hops: {query_analysis.get('hops', 1)}, Rel: {query_analysis.get('relationship_type')}")
         
         # 2. Extract Entities from Query
         entities = await self._extract_entities(kb_id, query)
-        log(f"DEBUG: Extracted entities: {entities}")
+        log(f"DEBUG: 🔍 Extracted entities: {entities}")
         
         # 3. Expand entities - find related entities in graph
         expanded_entities = await self._expand_entities(kb_id, entities)
-        log(f"DEBUG: Expanded entities: {expanded_entities}")
+        log(f"DEBUG: 🔗 Expanded entities: {expanded_entities}")
         
         all_entities = list(set(entities + expanded_entities))
         
@@ -79,9 +79,9 @@ class GraphRetrievalStrategy(RetrievalStrategy):
         # Detect if query asks for multi-hop relationships
         if any(keyword in query.lower() for keyword in ["의 스승의", "의 제자의", "master's master", "student's student"]):
             graph_hops = max(graph_hops, 2)
-            log(f"DEBUG: Detected multi-hop query, setting hops to {graph_hops}")
+            log(f"DEBUG: 🔀 Detected multi-hop query, setting hops to {graph_hops}")
         
-        log(f"DEBUG: Searching graph with hops={graph_hops}")
+        log(f"DEBUG: 🔎 Searching graph with hops={graph_hops}")
         graph_backend_type = kwargs.get("graph_backend", "ontology")
         
         # Use Factory to get backend instance
@@ -99,10 +99,22 @@ class GraphRetrievalStrategy(RetrievalStrategy):
             **kwargs
         )
         
+        # Log triple count
+        found_triples = graph_result.get("triples", [])
+        log(f"DEBUG: 🕸️ Graph Query Completed. Found {len(found_triples)} triples.")
+
         # Safely get chunk_ids allowing default empty list if key missing
         chunk_ids = graph_result.get("chunk_ids", [])
+        
+        # [FIX] Normalize chunk IDs: Fuseki (fallback) uses '_section_' but Milvus uses '_'
         if chunk_ids:
-             log(f"DEBUG: Found {len(chunk_ids)} chunks via direct mapping: {chunk_ids}")
+            chunk_ids = [str(cid).replace("_section_", "_") for cid in chunk_ids]
+
+        if chunk_ids:
+             log(f"DEBUG: ✅ Direct Graph Mapping Success: Mapped {len(chunk_ids)} chunks from graph nodes. IDs: {chunk_ids}")
+        else:
+             log(f"DEBUG: ⚠️ No direct chunks mapped from graph nodes.")
+
         # Else: Silent, as we will log Entity-Guided step below
         
         # 5. Fetch content from Milvus
@@ -120,10 +132,11 @@ class GraphRetrievalStrategy(RetrievalStrategy):
             all_entities = list(set(all_entities))
             
         if not results or (len(results) == 1 and results[0].get("chunk_id") == "GRAPH_METADATA_ONLY"):
-            log(f"DEBUG: Graph search incomplete (0 chunks). Performing Entity-Guided Hybrid Search with: {all_entities}")
+            log(f"DEBUG: 🔄 Fallback triggered. Reason: No direct graph-to-chunk matches found.")
+            log(f"DEBUG: Executing Entity-Guided Hybrid Search with entities: {all_entities}")
             fallback_results = await self._fallback_search(kb_id, query, all_entities, top_k)
             if fallback_results:
-                log(f"DEBUG: Entity-Guided Search success! Retrieved {len(fallback_results)} chunks.")
+                log(f"DEBUG: ✅ Entity-Guided Search success! Retrieved {len(fallback_results)} chunks.")
                 results = fallback_results
         
         # 7. Add graph metadata

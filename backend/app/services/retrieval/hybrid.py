@@ -208,11 +208,16 @@ class HybridRetrievalStrategy(RetrievalStrategy):
                                 "doc": doc_entry,
                                 "bm25_score": 0.0,
                                 "graph_metadata": res.get("graph_metadata"),
-                                "vector_score": 0.0
+                                "vector_score": 0.0,
+                                "original_metadata": res.get("metadata", {})
                             }
                         else:
                             # Update existing candidate with graph metadata
                             candidate_map[cid]["graph_metadata"] = res.get("graph_metadata")
+                            # Merge original metadata (preserve source if graph found it)
+                            if "original_metadata" not in candidate_map[cid]:
+                                candidate_map[cid]["original_metadata"] = {}
+                            candidate_map[cid]["original_metadata"].update(res.get("metadata", {}))
 
         # 5. Vector Scoring (Re-ranking) on Candidates
         # Calculate Cosine Similarity between Query Vector and Candidate Vectors
@@ -311,7 +316,8 @@ class HybridRetrievalStrategy(RetrievalStrategy):
                     "bm25_score": item["bm25_score"],
                     "vector_score": item["vector_score"],
                     "bm25_rank": bm25_rank,
-                    "vector_rank": vec_rank
+                    "vector_rank": vec_rank,
+                    **(item.get("original_metadata", {}) or {})
                 },
                 "graph_metadata": item["graph_metadata"] or graph_metadata
             })

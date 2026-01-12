@@ -2,9 +2,11 @@ import React, { useState } from 'react';
 
 interface SearchResultsProps {
     chunks: any[];
+    kbId?: string;
+    graphBackend?: string;
 }
 
-export default function SearchResults({ chunks }: SearchResultsProps) {
+export default function SearchResults({ chunks, kbId, graphBackend }: SearchResultsProps) {
     const [activeTab, setActiveTab] = useState<'graph' | 'chunks'>('chunks');
 
     // Reset tab to chunks when new results arrive
@@ -88,55 +90,72 @@ export default function SearchResults({ chunks }: SearchResultsProps) {
                 {/* Chunks Tab */}
                 {activeTab === 'chunks' && (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                        {chunks.map((chunk, idx) => (
-                            <div
-                                key={idx}
-                                className="card"
-                                style={{
-                                    padding: '1rem',
-                                    background: '#f8fafc',
-                                    borderRadius: '8px',
-                                    border: '1px solid var(--border)',
-                                    borderLeft: '4px solid var(--primary)'
-                                }}
-                            >
-                                <div style={{
-                                    display: 'flex',
-                                    justifyContent: 'space-between',
-                                    marginBottom: '0.5rem',
-                                    fontSize: '0.75rem',
-                                    color: 'var(--text-secondary)'
-                                }}>
-                                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                                        <span style={{ fontWeight: 600 }}>Chunk {idx + 1}</span>
-                                        {chunk.chunk_id && (
-                                            <span className="badge" style={{ fontSize: '0.65rem', backgroundColor: '#f1f5f9', color: '#475569' }}>
-                                                ID: {chunk.chunk_id}
+                        {chunks.map((chunk, idx) => {
+                            const isGraph = chunk.metadata?.source === 'graph' || chunk.metadata?.source === 'graph_fallback';
+                            return (
+                                <div
+                                    key={idx}
+                                    className="card"
+                                    style={{
+                                        padding: '1rem',
+                                        background: isGraph ? '#f0fdf4' : '#f8fafc',
+                                        borderRadius: '8px',
+                                        border: isGraph ? '1px solid #86efac' : '1px solid var(--border)',
+                                        borderLeft: isGraph ? '4px solid #166534' : '4px solid var(--primary)',
+                                        position: 'relative'
+                                    }}
+                                >
+                                    <div style={{
+                                        display: 'flex',
+                                        justifyContent: 'space-between',
+                                        marginBottom: '0.5rem',
+                                        fontSize: '0.75rem',
+                                        color: 'var(--text-secondary)'
+                                    }}>
+                                        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                                            <span style={{
+                                                fontWeight: 600,
+                                                background: isGraph ? '#dcfce7' : 'transparent',
+                                                color: isGraph ? '#14532d' : 'inherit',
+                                                padding: isGraph ? '0.2rem 0.6rem' : '0',
+                                                borderRadius: isGraph ? '20px' : '0',
+                                                border: isGraph ? '1px solid #bbf7d0' : 'none',
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                gap: '4px'
+                                            }}>
+                                                {isGraph && <span>🕸️</span>}
+                                                Chunk {idx + 1}
                                             </span>
-                                        )}
+                                            {chunk.chunk_id && (
+                                                <span className="badge" style={{ fontSize: '0.65rem', backgroundColor: '#f1f5f9', color: '#475569' }}>
+                                                    ID: {chunk.chunk_id}
+                                                </span>
+                                            )}
+                                        </div>
+                                        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                                            {isGraph && (
+                                                <span className="badge" style={{ fontSize: '0.65rem', backgroundColor: '#dcfce7', color: '#166534' }}>
+                                                    Graph
+                                                </span>
+                                            )}
+                                            <span className="badge badge-secondary" style={{ fontSize: '0.7rem' }}>
+                                                Score: {chunk.score?.toFixed(4)}
+                                                {chunk.l2_score != null && ` (L2: ${chunk.l2_score.toFixed(4)})`}
+                                            </span>
+                                        </div>
                                     </div>
-                                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                                        {chunk.metadata?.source === 'graph' && (
-                                            <span className="badge" style={{ fontSize: '0.65rem', backgroundColor: '#dcfce7', color: '#166534' }}>
-                                                Graph
-                                            </span>
-                                        )}
-                                        <span className="badge badge-secondary" style={{ fontSize: '0.7rem' }}>
-                                            Score: {chunk.score?.toFixed(4)}
-                                            {chunk.l2_score != null && ` (L2: ${chunk.l2_score.toFixed(4)})`}
-                                        </span>
+                                    <div style={{
+                                        fontSize: '0.9rem',
+                                        lineHeight: '1.6',
+                                        color: 'var(--text-primary)',
+                                        whiteSpace: 'pre-wrap'
+                                    }}>
+                                        {chunk.content ? chunk.content.replace(/\n\s*\n/g, '\n').trim() : ''}
                                     </div>
                                 </div>
-                                <div style={{
-                                    fontSize: '0.9rem',
-                                    lineHeight: '1.6',
-                                    color: 'var(--text-primary)',
-                                    whiteSpace: 'pre-wrap'
-                                }}>
-                                    {chunk.content}
-                                </div>
-                            </div>
-                        ))}
+                            );
+                        })}
                     </div>
                 )}
 
@@ -147,7 +166,6 @@ export default function SearchResults({ chunks }: SearchResultsProps) {
                         borderLeft: '4px solid var(--primary)',
                         padding: '1rem'
                     }}>
-                        {/* 1. Only show Entities if Graph Mode (graphMetadata exists). Otherwise show Keywords. */}
                         {graphMetadata ? (
                             <div style={{ marginBottom: '1.5rem' }}>
                                 <div style={{ fontSize: '0.8rem', fontWeight: 600, marginBottom: '0.5rem', color: 'var(--text-primary)' }}>
@@ -156,9 +174,29 @@ export default function SearchResults({ chunks }: SearchResultsProps) {
                                 <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
                                     {graphMetadata.extracted_entities && graphMetadata.extracted_entities.length > 0 ? (
                                         graphMetadata.extracted_entities.map((entity: string, idx: number) => (
-                                            <span key={idx} className="badge" style={{ fontSize: '0.8rem', background: 'white', border: '1px solid #bae6fd', color: '#0369a1' }}>
+                                            <button
+                                                key={idx}
+                                                className="badge"
+                                                onClick={() => {
+                                                    if (kbId) {
+                                                        window.open(`/graph-viewer?kb_id=${kbId}&entity=${encodeURIComponent(entity)}&backend=${graphBackend || 'neo4j'}`, '_blank');
+                                                    }
+                                                }}
+                                                style={{
+                                                    fontSize: '0.8rem',
+                                                    background: 'white',
+                                                    border: '1px solid #bae6fd',
+                                                    color: '#0369a1',
+                                                    cursor: kbId ? 'pointer' : 'default',
+                                                    display: 'flex',
+                                                    alignItems: 'center',
+                                                    gap: '4px'
+                                                }}
+                                                title={kbId ? "Visualize Graph" : undefined}
+                                            >
+                                                {kbId && <span>🕸️</span>}
                                                 {entity}
-                                            </span>
+                                            </button>
                                         ))
                                     ) : (
                                         <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', fontStyle: 'italic' }}>None detected</span>
@@ -357,19 +395,10 @@ function GraphDetailsTabs({ graphMetadata, chunks }: { graphMetadata: any, chunk
                                 </div>
                                 <ul style={{ margin: 0, paddingLeft: '1.2rem', fontSize: '0.75rem', color: '#15803d' }}>
                                     <li>Total Chunks Found in Graph: <strong>{graphMetadata.total_chunks_found}</strong></li>
-                                    <li>Chunks Displayed: <strong>{chunks.filter((c: any) => c.metadata?.source === 'graph').length}</strong></li>
                                     <li>Graph Backend: <strong>{graphMetadata.graph_backend || 'ontology'}</strong></li>
                                 </ul>
 
-                                {graphMetadata.total_chunks_found > 0 && (
-                                    <div style={{ marginTop: '0.5rem', paddingTop: '0.5rem', borderTop: '1px dashed #bbf7d0' }}>
-                                        <div style={{ fontSize: '0.7rem', fontWeight: 600, marginBottom: '0.2rem', color: '#166534' }}>Discovered IDs:</div>
-                                        <div style={{ fontSize: '0.7rem', color: '#15803d', wordBreak: 'break-all' }}>
-                                            {chunks.filter((c: any) => c.chunk_id && c.metadata?.source === 'graph')
-                                                .map((c: any) => c.chunk_id).join(', ') || '(Chunk IDs hidden)'}
-                                        </div>
-                                    </div>
-                                )}
+
                             </div>
                         )}
 

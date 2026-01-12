@@ -1,31 +1,48 @@
 version: '3.5'
 
 # Use this docker-compose when Milvus is already running externally
-# Set MILVUS_HOST and MILVUS_PORT environment variables
+# Set OPENAI_API_KEY environment variable
 
 services:
   backend:
     container_name: ragaas-backend
     image: ragaas-backend:latest
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
     environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
       - USE_LOCAL_MODEL=true
       - LOCAL_MODEL_PATH=/app/models/all-MiniLM-L6-v2
-      - MILVUS_HOST=${MILVUS_HOST:-localhost}
+      - MILVUS_HOST=standalone
       - MILVUS_PORT=${MILVUS_PORT:-19530}
-      - DATABASE_URL=sqlite:////app/data/rag_system.db
+      - FUSEKI_URL=http://fuseki:3030
+      - NEO4J_URI=bolt://neo4j:7687
+      - DATABASE_URL=sqlite+aiosqlite:////app/data/rag_system.db
     volumes:
+      - ./backend:/app
       - ./backend/data:/app/data
       - ./models:/app/models:ro
     ports:
       - "8000:8000"
-    network_mode: host # Use host network to access external Milvus
+    networks:
+      - milvus
     restart: unless-stopped
 
   frontend:
     container_name: ragaas-frontend
     image: ragaas-frontend:latest
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
     ports:
-      - "80:80"
+      - "5173:80"
     depends_on:
       - backend
+    networks:
+      - milvus
     restart: unless-stopped
+
+networks:
+  milvus:
+    external: true
