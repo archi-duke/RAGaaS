@@ -1,5 +1,5 @@
 import logging
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 from app.core.neo4j_client import neo4j_client
 from .base import GraphBackend
 
@@ -30,13 +30,10 @@ class Neo4jBackend(GraphBackend):
         # Use Doc2Onto CypherGenerator
         print(f"DEBUG: [Neo4j] Generating Cypher using Doc2Onto CypherGenerator for: {query_text}")
         
-        # Import settings if not already imported at top-level to avoid circular deps if any
-        # But better to import at top if possible. For now, lazy import to be safe inside method or just use it.
         from app.core.config import settings
         
         try:
             generator = CypherGenerator(api_key=settings.OPENAI_API_KEY)
-            # Context can be enriched with extracted entities
             context = f"관련 엔티티 후보: {', '.join(entities)}" if entities else None
             
             custom_prompt = kwargs.get("custom_query_prompt")
@@ -64,7 +61,6 @@ class Neo4jBackend(GraphBackend):
             # Execute generated query
             records = neo4j_client.execute_query(cypher_query)
             
-            chunk_ids = set()
             discovered_entities = set()
             
             # Parse results (handle various return formats)
@@ -75,58 +71,27 @@ class Neo4jBackend(GraphBackend):
                         labels = set(value.labels)
                         props = dict(value)
                         
-                        if "Chunk" in labels:
-                            if "id" in props:
-                                chunk_ids.add(props["id"])
-                        elif "Entity" in labels or "Class" in labels or "Instance" in labels:
-                            # It's an entity, keep track to find chunks later
+                        if "Entity" in labels or "Class" in labels or "Instance" in labels:
                             label_ko = props.get("label_ko") or props.get("name")
                             if label_ko:
                                 discovered_entities.add(label_ko)
-                    # If value is string (maybe already an ID or Text)
                     elif isinstance(value, str):
-                        # Simple heuristic: if it looks like a chunk ID (has underscore), try it
-                        if "_" in value and "|" not in value: # doc_id_idx format
-                            # Verify if it's a chunk? Too risky to assume.
-                            pass
-                        else:
-                            # Might be an entity name
+                        # Might be an entity name
+                        if value and len(value) > 1:
                             discovered_entities.add(value)
                             
-            print(f"DEBUG: [Neo4j] Direct chunks found: {len(chunk_ids)}")
             print(f"DEBUG: [Neo4j] Discovered entities from query result: {len(discovered_entities)}")
             
-            # If we found entities but no chunks, find chunks connected to these entities
-            if discovered_entities:
-                # Limit to prevent explosion
-                target_entities = list(discovered_entities)[:20]
-                
-                chunk_query = """
-                MATCH (e:Entity)-[:MENTIONED_IN]->(c:Chunk)
-                WHERE e.label_ko IN $entities OR e.name IN $entities
-                RETURN DISTINCT c.id as chunk_id
-                LIMIT 50
-                """
-                c_records = neo4j_client.execute_query(chunk_query, {"entities": target_entities})
-                for r in c_records:
-                    chunk_ids.add(r["chunk_id"])
-                    
-            chunk_ids_list = list(chunk_ids)
-            print(f"DEBUG: [Neo4j] Final chunks found: {len(chunk_ids_list)}")
+            # 순수 그래프에서 트리플 조회 (MENTIONED_IN 없음)
+            triples = self._fetch_triples_from_graph(kb_id, entities, list(discovered_entities))
             
-            triples = []
-            if chunk_ids_list:
-                # Pass entities AND discovered entities to focus the triple retrieval
-                focus_set = set(entities)
-                if discovered_entities:
-                    focus_set.update(discovered_entities)
-                
-                triples = self._fetch_relevant_triples(chunk_ids_list, list(focus_set))
+            # SQLite에서 트리플 오프셋 정보 조회
+            triples_with_offset, chunk_ids = await self._attach_offsets_to_triples(kb_id, triples)
 
             return {
-                "chunk_ids": chunk_ids_list,
+                "chunk_ids": chunk_ids,  # 그래프 검색으로 발견된 관련 청크 ID
                 "sparql_query": cypher_query,
-                "triples": triples,
+                "triples": triples_with_offset,
                 "thought": thought,
                 "found_entities": list(discovered_entities)
             }
@@ -137,65 +102,99 @@ class Neo4jBackend(GraphBackend):
             traceback.print_exc()
             return {"chunk_ids": [], "sparql_query": "Error", "triples": []}
 
-    def _fetch_relevant_triples(self, chunk_ids: List[str], focus_entities: List[str] = None) -> List[Dict[str, str]]:
-        """Fetch triples connected to the discovered chunks, prioritizing those related to the query entities."""
+    def _fetch_triples_from_graph(self, kb_id: str, input_entities: List[str], discovered_entities: List[str]) -> List[Dict[str, str]]:
+        """순수 그래프에서 관련 트리플 조회 (Chunk 노드 없음)"""
         triples = []
         try:
-            # Use any relationship type (not just :RELATION) since we now use dynamic types
-            # Support both Doc2Onto schema (label_ko) and legacy schema (name)
+            # Combine entities for focus
+            focus_entities = list(set(input_entities + discovered_entities))[:30]
             
-            # Base query structure
+            if not focus_entities:
+                return []
+            
+            # 순수 Entity-Relation 그래프에서 트리플 조회
             triples_query = """
             MATCH (s:Entity)-[r]->(o:Entity)
-            WHERE type(r) <> 'MENTIONED_IN'
-              AND ((s)-[:MENTIONED_IN]->(:Chunk {id: $chunk_id}) 
-                   OR (o)-[:MENTIONED_IN]->(:Chunk {id: $chunk_id}))
-            """
-            
-            # Apply entity filter if provided to reduce noise
-            params = {"chunk_id": None} # placeholder
-            if focus_entities:
-                # Safe matching with COALESCE to handle potential NULLs
-                triples_query += """
-                AND (COALESCE(s.name, '') IN $entities OR COALESCE(o.name, '') IN $entities OR COALESCE(s.label_ko, '') IN $entities OR COALESCE(o.label_ko, '') IN $entities)
-                """
-                params["entities"] = focus_entities
-            
-            triples_query += """
+            WHERE s.kb_id = $kb_id
+              AND type(r) <> 'MENTIONED_IN'
+              AND (s.name IN $entities OR o.name IN $entities)
             RETURN DISTINCT 
-                COALESCE(s.label_ko, s.name, "Node(" + elementId(s) + ")") as subj, 
+                s.name as subj, 
                 type(r) as pred, 
-                COALESCE(o.label_ko, o.name, "Node(" + elementId(o) + ")") as obj
-            LIMIT 20
+                o.name as obj,
+                r.is_inverse as is_inverse
+            LIMIT 30
             """
             
-            print(f"DEBUG: Fetching triples with focus_entities: {focus_entities}")
+            print(f"DEBUG: [Neo4j] Fetching triples for entities: {focus_entities[:5]}...")
 
-            seen_triples = set()
-            # If entity filter is active, we can scan more chunks
-            check_chunks = chunk_ids[:30] if focus_entities else chunk_ids[:5]
+            t_records = neo4j_client.execute_query(triples_query, {
+                "kb_id": kb_id,
+                "entities": focus_entities
+            })
             
-            for chunk_id in check_chunks:
-
-                try:
-                    p = params.copy()
-                    p["chunk_id"] = chunk_id
-                    t_records = neo4j_client.execute_query(triples_query, p)
-                    for r in t_records:
-                        triple_key = (r["subj"], r["pred"], r["obj"])
-                        if triple_key not in seen_triples:
-                            seen_triples.add(triple_key)
-                            triples.append({
-                                "subject": r["subj"], 
-                                "predicate": r["pred"], 
-                                "object": r["obj"]
-                            })
-                except Exception as e:
-                    logger.warning(f"Error fetching triples for chunk {chunk_id}: {e}")
+            seen = set()
+            for r in t_records:
+                key = (r["subj"], r["pred"], r["obj"])
+                if key not in seen:
+                    seen.add(key)
+                    triples.append({
+                        "subject": r["subj"], 
+                        "predicate": r["pred"], 
+                        "object": r["obj"],
+                        "is_inverse": r.get("is_inverse", False)
+                    })
             
-            print(f"DEBUG: Found {len(triples)} relevant triples from discovered chunks (Focus: {focus_entities})")
+            print(f"DEBUG: [Neo4j] Found {len(triples)} triples from pure graph")
         except Exception as e:
-            logger.error(f"Error in _fetch_relevant_triples: {e}")
+            logger.error(f"Error in _fetch_triples_from_graph: {e}")
         
         return triples
 
+    async def _attach_offsets_to_triples(self, kb_id: str, triples: List[Dict]) -> Tuple[List[Dict], List[str]]:
+        """SQLite에서 트리플의 소스 오프셋 정보 조회하여 첨부"""
+        from app.models.triple_chunk_mapping import compute_triple_hash
+        from app.core.database import SessionLocal
+        from sqlalchemy.future import select
+        from app.models.triple_chunk_mapping import TripleChunkMapping
+        
+        discovered_chunk_ids = set()
+        
+        try:
+            async with SessionLocal() as db:
+                for triple in triples:
+                    triple_hash = compute_triple_hash(
+                        triple["subject"],
+                        triple["predicate"],
+                        triple["object"]
+                    )
+                    
+                    result = await db.execute(
+                        select(TripleChunkMapping)
+                        .filter(TripleChunkMapping.kb_id == kb_id)
+                        .filter(TripleChunkMapping.triple_hash == triple_hash)
+                    )
+                    mappings = result.scalars().all()
+                    
+                    if mappings:
+                        # 오프셋은 첫 번째 매핑의 것 사용 (어차피 동일)
+                        triple["source_start"] = mappings[0].source_start
+                        triple["source_end"] = mappings[0].source_end
+                        
+                        # 관련된 청크 ID 수집
+                        for m in mappings:
+                            if m.chunk_id:
+                                discovered_chunk_ids.add(m.chunk_id)
+                    else:
+                        # 매핑이 없으면 오프셋 없음
+                        triple["source_start"] = None
+                        triple["source_end"] = None
+                        
+        except Exception as e:
+            logger.warning(f"Error attaching offsets to triples: {e}")
+            # Continue without offsets
+            for triple in triples:
+                triple["source_start"] = None
+                triple["source_end"] = None
+        
+        return triples, list(discovered_chunk_ids)

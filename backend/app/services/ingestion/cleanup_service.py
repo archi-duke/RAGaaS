@@ -41,6 +41,51 @@ class CleanupService:
         except Exception as e:
             logger.error(f"Fuseki cleanup error for {doc_id}: {e}")
 
+        # 1.5. Neo4j Cleanup (Graph)
+        try:
+            from app.core.neo4j_client import neo4j_client
+            # Neo4j는 doc_id 기반 삭제가 어려우므로 (트리플에 doc_id 없음)
+            # TripleChunkMapping에서 해당 doc_id의 트리플을 찾아서 삭제
+            from app.models.triple_chunk_mapping import TripleChunkMapping
+            async with SessionLocal() as db:
+                from sqlalchemy import select
+                result = await db.execute(
+                    select(TripleChunkMapping.subject, TripleChunkMapping.predicate, TripleChunkMapping.object)
+                    .filter(TripleChunkMapping.doc_id == doc_id)
+                    .distinct()
+                )
+                triples_to_delete = result.fetchall()
+                
+                if triples_to_delete:
+                    for subj, pred, obj in triples_to_delete:
+                        try:
+                            # 정확히 일치하는 관계만 삭제
+                            delete_query = """
+                            MATCH (s:Entity {name: $subj, kb_id: $kb_id})-[r]->(o:Entity {name: $obj, kb_id: $kb_id})
+                            WHERE type(r) = $pred
+                            DELETE r
+                            """
+                            neo4j_client.execute_query(delete_query, {
+                                "subj": subj,
+                                "obj": obj,
+                                "pred": pred,
+                                "kb_id": kb_id
+                            })
+                        except Exception as rel_e:
+                            logger.warning(f"Neo4j relation delete error: {rel_e}")
+                    
+                    # 고아 노드 정리 (관계가 없는 노드 삭제)
+                    orphan_query = """
+                    MATCH (n:Entity {kb_id: $kb_id})
+                    WHERE NOT (n)--()
+                    DELETE n
+                    """
+                    neo4j_client.execute_query(orphan_query, {"kb_id": kb_id})
+                    
+                    logger.info(f"Neo4j cleanup complete for doc {doc_id}: deleted {len(triples_to_delete)} relations")
+        except Exception as e:
+            logger.error(f"Neo4j cleanup error for {doc_id}: {e}")
+
         # 2. Milvus Cleanup (Vector)
         try:
             collection = create_collection(kb_id)
@@ -54,10 +99,16 @@ class CleanupService:
 
         # 3. SQLite Cleanup (Final Step)
         try:
+            from app.models.triple_chunk_mapping import TripleChunkMapping  # Lazy import
             async with SessionLocal() as db:
+                # 관련 TripleChunkMapping 삭제
+                await db.execute(delete(TripleChunkMapping).where(TripleChunkMapping.doc_id == doc_id))
+                
+                # 문서 레코드 삭제
                 await db.execute(delete(Document).where(Document.id == doc_id))
+                
                 await db.commit()
-                logger.info(f"Document record deleted from SQLite for {doc_id}")
+                logger.info(f"Document record and triple mappings deleted from SQLite for {doc_id}")
         except Exception as e:
             logger.error(f"SQLite cleanup error for {doc_id}: {e}")
 

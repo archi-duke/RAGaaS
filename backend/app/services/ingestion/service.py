@@ -61,13 +61,20 @@ class IngestionService:
                 config = chunking_config
 
             if chunking_strategy == "size":
-                texts = chunking_service.chunk_by_size(
+                # 오프셋 정보를 포함하여 청킹 (트리플-청크 매핑에 필수)
+                chunks_data = chunking_service.chunk_by_size_with_offset(
                     text,
                     chunk_size=int(config.get("chunk_size", 1000)),
                     overlap=int(config.get("overlap", 200)),
                     separators=config.get("separators")
                 )
-                chunks = [{"content": t, "metadata": {}} for t in texts]
+                chunks = [{
+                    "content": item["content"],
+                    "metadata": {
+                        "start_index": item["start_offset"],
+                        "end_index": item["end_offset"]
+                    }
+                } for item in chunks_data]
             elif chunking_strategy == "parent_child":
                 chunks = chunking_service.chunk_parent_child(
                     text,
@@ -98,8 +105,16 @@ class IngestionService:
                     )
                 chunks = [{"content": t, "metadata": {}} for t in texts]
             else:
-                texts = chunking_service.chunk_by_size(text)
-                chunks = [{"content": t, "metadata": {}} for t in texts]
+                chunks_data = chunking_service.chunk_by_size_with_offset(text)
+                chunks = []
+                for item in chunks_data:
+                    chunks.append({
+                        "content": item["content"],  # "text" → "content"로 수정
+                        "metadata": {
+                            "start_index": item["start_offset"],
+                            "end_index": item["end_offset"]
+                        }
+                    })
 
             # 3. Embedding
             texts_to_embed = [c["content"] for c in chunks if c["content"].strip()]
@@ -136,7 +151,7 @@ class IngestionService:
             # FORCE FALLBACK to RAGaaS extraction (User Request)
             print("[Ingestion] Forcing Fallback Graph Extraction (Skipping Doc2Onto)")
             await self._fallback_graph_extraction(
-                text, doc_id, kb_id, texts_to_embed, graph_backend, config
+                text, doc_id, kb_id, texts_to_embed, graph_backend, config, chunks=chunks
             )
             
             # Original Doc2Onto logic (Disabled)
@@ -295,7 +310,8 @@ class IngestionService:
         kb_id: str,
         texts_to_embed: List[str],
         graph_backend: str,
-        config: dict
+        config: dict,
+        chunks: List[dict] = None  # 청크 오프셋 매핑을 위해 추가
     ):
         """Fallback to legacy LLM-based graph extraction when Doc2Onto is disabled."""
         print(f"[Fallback] Using legacy LLM graph extraction for {doc_id}...")
@@ -311,23 +327,33 @@ class IngestionService:
             except Exception as e:
                 print(f"Warning: Could not create/verify Fuseki dataset: {e}")
         
-        sections = chunking_service.split_into_sections(
+        # 오프셋 포함 섹션 분할
+        sections = chunking_service.split_into_sections_with_offset(
             text, 
             section_size=graph_section_size,
             overlap=graph_section_overlap
         )
         
-        
         all_triples = []
         all_rdf_triples = []
         
-        for i, section_text in enumerate(sections):
+        for i, section in enumerate(sections):
+            section_text = section["text"]
+            section_start = section["start_offset"]
+            section_end = section["end_offset"]
             section_id = f"{doc_id}_section_{i}"
+            
             try:
                 graph_result = await graph_processor.extract_graph_elements(
                     section_text, section_id, kb_id, config
                 )
                 triples = graph_result.get("structured_triples", [])
+                
+                # 각 트리플에 소스 오프셋 추가
+                for triple in triples:
+                    triple["source_start"] = section_start
+                    triple["source_end"] = section_end
+                
                 all_triples.extend(triples)
                 
                 # Fuseki는 나중에 일괄 처리
@@ -347,7 +373,7 @@ class IngestionService:
             
             print(f"[Fallback] Raw triples: {len(all_triples)}")
             
-            # 1. 노이즈 제거 및 정규화
+            # 1. 노이즈 제거 및 정규화 (오프셋 정보 유지)
             filtered_triples = post_process_triples(
                 all_triples,
                 confidence_threshold=config.get("confidence_threshold", 0.0),
@@ -355,11 +381,14 @@ class IngestionService:
             )
             print(f"[Fallback] After filtering: {len(filtered_triples)}")
             
-            # 2. 역관계 자동 생성
+            # 2. 역관계 자동 생성 (원본의 오프셋 상속)
             final_triples = add_inverse_relations(filtered_triples)
             print(f"[Fallback] With inverse relations: {len(final_triples)}")
             
-            # 3. 백엔드별 적재
+            # 3. 트리플-오프셋 매핑 저장 (SQLite)
+            await self._save_triple_mappings(kb_id, doc_id, final_triples, chunks)
+            
+            # 4. 백엔드별 적재
             if is_neo4j:
                 all_triples = final_triples
             else:
@@ -369,8 +398,6 @@ class IngestionService:
                 print(f"[Fallback] Inserted {len(rdf_triples)} RDF triples to Fuseki")
         
         if is_neo4j and all_triples:
-            chunk_ids = [f"{doc_id}_{i}" for i in range(len(texts_to_embed))]
-            
             print(f"[Fallback] Inserting {len(all_triples)} triples to Neo4j...")
             
             for triple in all_triples:
@@ -381,7 +408,7 @@ class IngestionService:
                     MERGE (s:Entity {name: $subj, kb_id: $kb_id})
                     MERGE (o:Entity {name: $obj, kb_id: $kb_id})
                     WITH s, o
-                    CALL apoc.merge.relationship(s, $pred, {}, {}, o, {}) YIELD rel
+                    CALL apoc.merge.relationship(s, $pred, {}, $props, o, $props) YIELD rel
                     RETURN rel
 
                     """
@@ -389,50 +416,88 @@ class IngestionService:
                         "subj": triple["subject"],
                         "obj": triple["object"],
                         "pred": triple["predicate"],
-                        "kb_id": kb_id
+                        "kb_id": kb_id,
+                        "props": {"is_inverse": triple.get("is_inverse", False)}
                     })
                 except Exception as e:
                     print(f"Error inserting triple: {e}")
             
             print(f"[Fallback] Neo4j insertion complete.")
-
             
-            # Link entities to chunks
-            for i, chunk_text in enumerate(texts_to_embed):
-                chunk_id = chunk_ids[i]
-                chunk_text_lower = chunk_text.lower()
-                
-                for triple in all_triples:
-                    subj = triple["subject"]
-                    obj = triple["object"]
-                    
-                    subj_in_chunk = subj.lower() in chunk_text_lower
-                    obj_in_chunk = obj.lower() in chunk_text_lower
-                    
-                    if subj_in_chunk or obj_in_chunk:
-                        try:
-                            link_query = "MERGE (c:Chunk {id: $chunk_id})"
-                            params = {"chunk_id": chunk_id}
-                            
-                            if subj_in_chunk:
-                                link_query += """
-                                WITH c
-                                MATCH (s:Entity {name: $subj})
-                                MERGE (s)-[:MENTIONED_IN]->(c)
-                                """
-                                params["subj"] = subj
-                            if obj_in_chunk:
-                                link_query += """
-                                WITH c
-                                MATCH (o:Entity {name: $obj})
-                                MERGE (o)-[:MENTIONED_IN]->(c)
-                                """
-                                params["obj"] = obj
-                                
-                            neo4j_client.execute_query(link_query, params)
-                        except:
-                            pass
+            # NOTE: Chunk 노드 및 MENTIONED_IN 관계 생성 로직 제거됨
+            # 트리플-청크 매핑은 SQLite 해시 테이블로 관리
             
             print(f"[Fallback] Graph ingestion complete for {kb_id}")
+
+    async def _save_triple_mappings(self, kb_id: str, doc_id: str, triples: List[dict], chunks: List[dict] = None):
+        """트리플-오프셋 매핑을 SQLite에 저장"""
+        from app.models.triple_chunk_mapping import TripleChunkMapping, compute_triple_hash
+        import uuid
+        
+        # Pre-process chunks for faster lookup
+        doc_chunks = []
+        if chunks:
+            for i, c in enumerate(chunks):
+                meta = c.get("metadata", {})
+                start = meta.get("start_index")
+                end = meta.get("end_index")
+                # 청크 ID 생성 (process_document와 동일한 로직)
+                # 주의: process_document에서 id를 명시적으로 전달받지 않았으므로 재비생
+                chunk_id = f"{doc_id}_{i}"
+                if start is not None and end is not None:
+                     doc_chunks.append({"id": chunk_id, "start": int(start), "end": int(end)})
+        
+        try:
+            async with SessionLocal() as db:
+                count = 0
+                for triple in triples:
+                    # 오프셋 정보가 없으면 스킵
+                    if "source_start" not in triple or "source_end" not in triple:
+                        continue
+                    
+                    t_start = int(triple["source_start"])
+                    t_end = int(triple["source_end"])
+                    
+                    triple_hash = compute_triple_hash(
+                        triple["subject"],
+                        triple["predicate"],
+                        triple["object"]
+                    )
+                    
+                    # Find overlapping chunks
+                    related_chunk_ids = []
+                    if doc_chunks:
+                        for dc in doc_chunks:
+                             # Overlap check: max(s1, s2) < min(e1, e2)
+                             if max(dc["start"], t_start) < min(dc["end"], t_end):
+                                 related_chunk_ids.append(dc["id"])
+                    
+                    # If no related chunks found (or no chunks info), save with None (legacy behavior)
+                    if not related_chunk_ids:
+                        related_chunk_ids = [None]
+                        
+                    for chunk_id in related_chunk_ids:
+                        mapping = TripleChunkMapping(
+                            id=str(uuid.uuid4()),
+                            kb_id=kb_id,
+                            doc_id=doc_id,
+                            chunk_id=chunk_id,
+                            triple_hash=triple_hash,
+                            subject=triple["subject"],
+                            predicate=triple["predicate"],
+                            object=triple["object"],
+                            source_start=t_start,
+                            source_end=t_end
+                        )
+                        db.add(mapping)
+                        count += 1
+                
+                await db.commit()
+                print(f"[Fallback] Saved {count} triple mappings (split by chunks) to SQLite (doc_id: {doc_id})")
+                
+                await db.commit()
+                print(f"[Fallback] Saved {len(triples)} triple mappings to SQLite (doc_id: {doc_id})")
+        except Exception as e:
+            print(f"[Fallback] Error saving triple mappings: {e}")
 
 ingestion_service = IngestionService()

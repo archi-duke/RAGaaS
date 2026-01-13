@@ -6,6 +6,107 @@ interface SearchResultsProps {
     graphBackend?: string;
 }
 
+// 청크 팝업 모달 컴포넌트
+function ChunkPopup({ triple, chunks, onClose }: { triple: any; chunks: any[]; onClose: () => void }) {
+    const sourceStart = triple.source_start;
+    const sourceEnd = triple.source_end;
+
+    // 1. 우선: chunk_id가 있으면 직접 매칭
+    // 2. 폴백: 텍스트 기반 매칭 (subject OR object 포함 - AND 대신 OR 사용)
+    let relatedChunks = [];
+
+    // chunk_id가 트리플에 있는 경우 (백엔드에서 저장한 매핑)
+    if (triple.chunk_ids && triple.chunk_ids.length > 0) {
+        relatedChunks = chunks.filter(c => triple.chunk_ids.includes(c.chunk_id));
+    }
+
+    // chunk_id 매칭이 없으면 텍스트 기반 폴백 (더 관대한 매칭)
+    if (relatedChunks.length === 0) {
+        const subj = (triple.subject || '').toLowerCase();
+        const obj = (triple.object || '').toLowerCase();
+
+        relatedChunks = chunks.filter(c => {
+            const content = (c.content || '').toLowerCase();
+            // OR 조건: subject 또는 object 중 하나라도 포함되면 매칭
+            return content.includes(subj) || content.includes(obj);
+        });
+    }
+
+    relatedChunks = relatedChunks.slice(0, 3);
+
+    return (
+        <div style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: 'rgba(0,0,0,0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000
+        }} onClick={onClose}>
+            <div style={{
+                background: 'white',
+                borderRadius: '12px',
+                maxWidth: '600px',
+                maxHeight: '80vh',
+                overflow: 'auto',
+                padding: '1.5rem',
+                boxShadow: '0 10px 40px rgba(0,0,0,0.2)'
+            }} onClick={e => e.stopPropagation()}>
+                <div style={{ marginBottom: '1rem' }}>
+                    <div style={{ fontSize: '0.8rem', color: '#64748b' }}>Source for Triple:</div>
+                    <div style={{ fontSize: '1rem', fontWeight: 600, color: '#0369a1' }}>
+                        {triple.subject} → {triple.predicate} → {triple.object}
+                    </div>
+                    {sourceStart != null && sourceEnd != null && (
+                        <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginTop: '4px' }}>
+                            📍 Character offset: {sourceStart} ~ {sourceEnd}
+                        </div>
+                    )}
+                </div>
+
+                {relatedChunks.length > 0 ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                        {relatedChunks.map((chunk, idx) => (
+                            <div key={idx} style={{
+                                padding: '0.75rem',
+                                background: '#f8fafc',
+                                borderRadius: '8px',
+                                border: '1px solid #e2e8f0',
+                                fontSize: '0.85rem',
+                                lineHeight: 1.6
+                            }}>
+                                <div style={{ fontSize: '0.7rem', color: '#64748b', marginBottom: '0.5rem' }}>
+                                    Chunk {idx + 1}
+                                </div>
+                                {chunk.content?.substring(0, 300)}...
+                            </div>
+                        ))}
+                    </div>
+                ) : (
+                    <div style={{ color: '#94a3b8', fontStyle: 'italic', textAlign: 'center', padding: '2rem' }}>
+                        No matching chunks found in current results.
+                    </div>
+                )}
+
+                <button onClick={onClose} style={{
+                    marginTop: '1rem',
+                    padding: '0.5rem 1rem',
+                    background: '#0369a1',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                    width: '100%'
+                }}>Close</button>
+            </div>
+        </div>
+    );
+}
+
 export default function SearchResults({ chunks, kbId, graphBackend }: SearchResultsProps) {
     const [activeTab, setActiveTab] = useState<'graph' | 'chunks'>('chunks');
 
@@ -234,6 +335,7 @@ export default function SearchResults({ chunks, kbId, graphBackend }: SearchResu
 // Sub-component for Graph Tabs to keep code clean
 function GraphDetailsTabs({ graphMetadata, chunks }: { graphMetadata: any, chunks: any[] }) {
     const [subTab, setSubTab] = React.useState<'triples' | 'query' | 'log'>('triples');
+    const [selectedTriple, setSelectedTriple] = React.useState<any>(null);
 
     const subTabStyle = (isActive: boolean) => ({
         padding: '0.5rem 1rem',
@@ -307,6 +409,8 @@ function GraphDetailsTabs({ graphMetadata, chunks }: { graphMetadata: any, chunk
                                             }
                                         };
 
+                                        const hasOffset = triple.source_start != null && triple.source_end != null;
+
                                         return (
                                             <div key={idx} style={{
                                                 padding: '0.5rem',
@@ -316,17 +420,42 @@ function GraphDetailsTabs({ graphMetadata, chunks }: { graphMetadata: any, chunk
                                                 fontFamily: 'monospace',
                                                 display: 'flex',
                                                 alignItems: 'center',
+                                                justifyContent: 'space-between',
                                                 flexWrap: 'wrap',
                                                 gap: '0.25rem'
                                             }}>
-                                                <span style={{ color: '#0284c7', fontWeight: 600 }}>{formatValue(s)}</span>
-                                                {p && (
-                                                    <>
-                                                        <span style={{ color: '#94a3b8' }}>→</span>
-                                                        <span style={{ color: '#7c3aed' }}>{formatValue(p)}</span>
-                                                        <span style={{ color: '#94a3b8' }}>→</span>
-                                                        <span style={{ color: '#0284c7', fontWeight: 600 }}>{formatValue(o)}</span>
-                                                    </>
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                                                    <span style={{ color: '#0284c7', fontWeight: 600 }}>{formatValue(s)}</span>
+                                                    {p && (
+                                                        <>
+                                                            <span style={{ color: '#94a3b8' }}>→</span>
+                                                            <span style={{ color: '#7c3aed' }}>{formatValue(p)}</span>
+                                                            <span style={{ color: '#94a3b8' }}>→</span>
+                                                            <span style={{ color: '#0284c7', fontWeight: 600 }}>{formatValue(o)}</span>
+                                                        </>
+                                                    )}
+                                                </div>
+                                                {hasOffset && (
+                                                    <button
+                                                        onClick={() => setSelectedTriple(triple)}
+                                                        style={{
+                                                            fontSize: '0.65rem',
+                                                            padding: '0.2rem 0.5rem',
+                                                            background: triple.is_inverse ? '#fff1f2' : '#e0f2fe',
+                                                            border: `1px solid ${triple.is_inverse ? '#fda4af' : '#7dd3fc'}`,
+                                                            borderRadius: '4px',
+                                                            cursor: 'pointer',
+                                                            color: triple.is_inverse ? '#e11d48' : '#0369a1',
+                                                            whiteSpace: 'nowrap',
+                                                            display: 'flex',
+                                                            alignItems: 'center',
+                                                            gap: '4px'
+                                                        }}
+                                                        title={`Source: ${triple.source_start}~${triple.source_end}${triple.is_inverse ? ' (Inverse Relation)' : ''}`}
+                                                    >
+                                                        <span>📄</span>
+                                                        {triple.source_start}~{triple.source_end}
+                                                    </button>
                                                 )}
                                             </div>
                                         );
@@ -473,6 +602,15 @@ function GraphDetailsTabs({ graphMetadata, chunks }: { graphMetadata: any, chunk
                     </div>
                 )}
             </div>
+
+            {/* Chunk Popup Modal */}
+            {selectedTriple && (
+                <ChunkPopup
+                    triple={selectedTriple}
+                    chunks={chunks}
+                    onClose={() => setSelectedTriple(null)}
+                />
+            )}
         </div>
     );
 }
