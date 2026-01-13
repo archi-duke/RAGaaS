@@ -340,8 +340,8 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
         oe_section_aware: true,
         confidence_threshold: 0.6,
         max_candidates_per_chunk: 20,
-        graph_section_size: 6000,
-        graph_section_overlap: 500
+        graph_section_size: 2500,
+        graph_section_overlap: 1000
     });
 
     const [showRuleModal, setShowRuleModal] = useState(false);
@@ -364,8 +364,8 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
             // Initialize graph params from KB config
             setGraphParams(prev => ({
                 ...prev,
-                graph_section_size: data.chunking_config?.graph_section_size || 6000,
-                graph_section_overlap: data.chunking_config?.graph_section_overlap || 500
+                graph_section_size: data.chunking_config?.graph_section_size || 2500,
+                graph_section_overlap: data.chunking_config?.graph_section_overlap || 1000
             }));
         } catch (err) {
             console.error("Failed to load KB config", err);

@@ -29,11 +29,25 @@
       object: "무궁화 꽃이 피었습니다"
 
 - text: "오징어 게임의 우승 상금은 456억 원이다."
-  properties:
-    - entity: "오징어 게임"
-      property: "우승 상금"
-      value: "456억 원"
   triples:
     - subject: "오징어 게임"
       predicate: "우승 상금"
       object: "456억 원"
+
+- text: "기훈은 어린 시절 친구인 조상우, 탈북자 강새벽 등 다른 플레이어들과 동맹을 맺고 게임에서 살아남기 위해 노력했다."
+  triples:
+    - subject: "기훈"
+      predicate: "친구"
+      object: "조상우"
+    - subject: "기훈"
+      predicate: "동맹"
+      object: "조상우"
+    - subject: "강새벽"
+      predicate: "출신"
+      object: "탈북자"
+    - subject: "기훈"
+      predicate: "동맹"
+      object: "강새벽"
+    - subject: "기훈"
+      predicate: "목적"
+      object: "생존"

@@ -29,12 +29,14 @@ class CypherGenerator:
    (예: `MATCH (n:Entity {name: "성기훈"})`)
 2. 유연한 매칭: 정확한 이름을 모를 경우 `CONTAINS`를 활용하세요.
    (예: `MATCH (n:Entity) WHERE n.name CONTAINS "기훈"`)
-3. 관계 방향 고려: 관계 방향이 불확실하므로 항상 방향 없이 검색하세요. (예: `(n)-[:`관계`]-(m)`)
-4. 다단계(Multi-hop) 연결: 질문이 여러 단계를 거치는 경우 화살표를 이어 붙이세요.
-   (예: `MATCH (n:Entity {name: "성기훈"})-[:`제자`]-(m)-[:`제자`]-(o) RETURN o.name`)
+3. 관계 방향 고려: 관계 방향이 불확실하므로, 기본적으로는 방향 없이 검색(`(n)-[:`관계`]-(m)`)하되, 논리적 순서가 명확한 경우(`스승의 스승`, `A의 자식의 자식` 등)에는 방향성을 고려한 패턴(`(n)<-[:`제자`]-(m)`)도 함께 시도하세요.
+4. 다단계(Multi-hop) 연결 및 순환 방지: 질문이 여러 단계를 거치는 경우, 시작 노드와 끝 노드가 같지 않도록 조건을 추가하세요.
+   (예: `MATCH (n:Entity {name: "성기훈"})-[:`제자`|`스승`]-(m)-[:`제자`|`스승`]-(o) WHERE n <> o RETURN o.name`)
 5. 근거(Evidence) 탐색: 만약 질문이 "근거"나 "텍스트"를 요구하면 :Chunk 노드와 연결하세요.
    (예: `MATCH (n:Entity {name: "성기훈"})-[:`MENTIONED_IN`]->(c:Chunk) RETURN c.text`)
-6. 결과 형식: `RETURN` 구문을 사용하며, 변수명은 질문의 의도를 잘 반영하도록 지정하세요 (예: n.name AS answer).
+6. 결과 형식: `RETURN` 구문을 사용하며, 반환 값은 **노드 객체(Nodes)와 관계(Relationships)를 모두 포함**하여 그래프 구조를 파악할 수 있게 하세요.
+   (예: `RETURN n, m, o`)
+
 7. 결과 정제: 가능한 중복을 제거하기 위해 `DISTINCT`를 사용하거나 리스트로 수집(`collect`)하세요.
 
 반드시 아래 JSON 형식으로만 응답하세요:

@@ -265,13 +265,21 @@ export default function KnowledgeBaseDetail() {
         if (!deleteDocId) return;
         try {
             await docApi.delete(id!, deleteDocId);
+
+            // Optimistic update: Remove from local state immediately
+            setDocuments(prevDocs => prevDocs.filter(doc => doc.id !== deleteDocId));
+
             setDeleteDocId(null);
-            loadDocs();
+
+            // Re-fetch to confirm state (slightly delayed to ensure DB consistency)
+            setTimeout(() => loadDocs(), 500);
         } catch (error) {
             console.error('Failed to delete document:', error);
             alert('Failed to delete document');
+            loadDocs(); // Revert on failure
         }
     };
+
 
     if (!kb) {
         return (

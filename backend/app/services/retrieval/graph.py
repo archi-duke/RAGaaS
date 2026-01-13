@@ -102,6 +102,8 @@ class GraphRetrievalStrategy(RetrievalStrategy):
         # Log triple count
         found_triples = graph_result.get("triples", [])
         log(f"DEBUG: 🕸️ Graph Query Completed. Found {len(found_triples)} triples.")
+        if found_triples:
+            log(f"DEBUG: Triple Samples: {found_triples[:5]}...")
 
         # Safely get chunk_ids allowing default empty list if key missing
         chunk_ids = graph_result.get("chunk_ids", [])

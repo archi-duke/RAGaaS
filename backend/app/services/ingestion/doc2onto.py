@@ -535,26 +535,43 @@ class Doc2OntoProcessor:
                     continue
                 try:
                     record = json.loads(line)
+                    # 각 레코드의 triples 배열에서 트리플 추출
+                    for triple in record.get("triples", []):
+                        if not triple.get("subject") or not triple.get("object"):
+                            continue
+                        if triple["subject"] == "Unknown" or triple["object"] == "Unknown":
+                            continue
+                            
+                        triples.append({
+                            "subject": triple.get("subject", ""),
+                            "predicate": triple.get("predicate", ""),
+                            "object": triple.get("object", ""),
+                            "confidence": triple.get("confidence", 1.0),
+                            "source_chunk_id": triple.get("source_chunk_id", "")
+                        })
                 except json.JSONDecodeError as e:
                     print(f"[Doc2Onto] JSON parse error in candidates file line: {e}")
                     continue
-                    if not triple.get("subject") or not triple.get("object"):
-                        continue
-                    if triple["subject"] == "Unknown" or triple["object"] == "Unknown":
-                        continue
-                        
-                    triples.append({
-                        "subject": triple.get("subject", ""),
-                        "predicate": triple.get("predicate", ""),
-                        "object": triple.get("object", ""),
-                        "chunk_id": triple.get("source_chunk_id", 0)
-                    })
         
-        print(f"[Doc2Onto] Found {len(triples)} triples to insert")
+        print(f"[Doc2Onto] Raw triples from candidates: {len(triples)}")
+        
+        # 후처리 적용
+        from app.services.ingestion.graph_postprocessor import post_process_triples, add_inverse_relations
+        
+        filtered_triples = post_process_triples(
+            triples,
+            confidence_threshold=0.6,
+            normalize=True
+        )
+        print(f"[Doc2Onto] After filtering: {len(filtered_triples)}")
+        
+        final_triples = add_inverse_relations(filtered_triples)
+        print(f"[Doc2Onto] With inverse relations: {len(final_triples)}")
+
         
         count = 0
-        for triple in triples:
-            source_chunk_id = triple['chunk_id']  # e.g., "debug_squid_game|v1|0000"
+        for triple in final_triples:
+            source_chunk_id = triple['source_chunk_id']  # e.g., "debug_squid_game|v1|0000"
             
             # Extract chunk index from source_chunk_id
             # Format: "doc_name|version|chunk_idx" -> extract last part as int
