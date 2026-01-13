@@ -1,8 +1,11 @@
 import re
 import urllib.parse
-from typing import List, Dict, Any
+import logging
+from typing import List, Dict, Any, Tuple
 from .base import GraphBackend
 from app.core.fuseki import fuseki_client
+
+logger = logging.getLogger(__name__)
 
 class FusekiBackend(GraphBackend):
     """Fuseki (Ontology) implementation of GraphBackend."""
@@ -111,10 +114,13 @@ class FusekiBackend(GraphBackend):
                         
                         print(f"DEBUG: [Fuseki] Found {len(found_entities)} entities from graph for chunk retrieval: {found_entities}")
 
+                        # 오프셋 정보 첨부
+                        triples_with_offset, discovered_chunk_ids = await self._attach_offsets_to_triples(kb_id, triples)
+
                         return {
-                            "chunk_ids": [], # Let graph.py handle retrieval using found_entities
+                            "chunk_ids": discovered_chunk_ids, # 오프셋에서 발견된 청크 ID
                             "sparql_query": sparql_query,
-                            "triples": triples,
+                            "triples": triples_with_offset,
                             "found_entities": list(found_entities) # Pass this back!
                         }
                     else:
@@ -240,8 +246,15 @@ class FusekiBackend(GraphBackend):
             s_label = binding.get("sLabel", {}).get("value", "")
             o_label = binding.get("oLabel", {}).get("value", "")
             
-            # Skip metadata predicates
-            if "rdf-syntax-ns#" in p_uri or "prov#" in p_uri or "evidence/" in p_uri:
+            # Skip metadata predicates (RDF schema, provenance, etc.)
+            if any(noise in p_uri for noise in [
+                "rdf-syntax-ns#",      # rdf:type 등
+                "rdf-schema#",         # rdfs:label, rdfs:comment 등
+                "prov#",               # provenance 정보
+                "evidence/",           # 증거 메타데이터
+                "owl#",                # OWL 온톨로지 메타데이터
+                "hasSource",           # 소스 링크 (내부용)
+            ]):
                 continue
             
             s_display = s_label if s_label else (urllib.parse.unquote(s_uri.split("/")[-1]).replace("_", " ") if s_uri else "[Unknown URI]")
@@ -267,9 +280,63 @@ class FusekiBackend(GraphBackend):
                 unique_triples.append(t)
         
         print(f"DEBUG: Found {len(chunk_ids)} chunk_ids and {len(unique_triples)} triples from graph (Fallback)")
+        
+        # 오프셋 정보 첨부
+        triples_with_offset, discovered_chunk_ids = await self._attach_offsets_to_triples(kb_id, unique_triples)
+        
+        # 기존 chunk_ids와 오프셋에서 발견된 chunk_ids 합치기
+        all_chunk_ids = list(set(chunk_ids) | set(discovered_chunk_ids))
                 
         return {
-            "chunk_ids": list(set(chunk_ids)),
+            "chunk_ids": all_chunk_ids,
             "sparql_query": sparql_query.strip(),
-            "triples": unique_triples
+            "triples": triples_with_offset
         }
+
+    async def _attach_offsets_to_triples(self, kb_id: str, triples: List[Dict]) -> Tuple[List[Dict], List[str]]:
+        """SQLite에서 트리플의 소스 오프셋 정보 조회하여 첨부 (Neo4j 백엔드와 동일 로직)"""
+        from app.models.triple_chunk_mapping import compute_triple_hash
+        from app.core.database import SessionLocal
+        from sqlalchemy.future import select
+        from app.models.triple_chunk_mapping import TripleChunkMapping
+        
+        discovered_chunk_ids = set()
+        
+        try:
+            async with SessionLocal() as db:
+                for triple in triples:
+                    triple_hash = compute_triple_hash(
+                        triple.get("subject", ""),
+                        triple.get("predicate", ""),
+                        triple.get("object", "")
+                    )
+                    
+                    result = await db.execute(
+                        select(TripleChunkMapping)
+                        .filter(TripleChunkMapping.kb_id == kb_id)
+                        .filter(TripleChunkMapping.triple_hash == triple_hash)
+                    )
+                    mappings = result.scalars().all()
+                    
+                    if mappings:
+                        # 오프셋은 첫 번째 매핑의 것 사용 (어차피 동일)
+                        triple["source_start"] = mappings[0].source_start
+                        triple["source_end"] = mappings[0].source_end
+                        
+                        # 관련된 청크 ID 수집
+                        for m in mappings:
+                            if m.chunk_id:
+                                discovered_chunk_ids.add(m.chunk_id)
+                    else:
+                        # 매핑이 없으면 오프셋 없음
+                        triple["source_start"] = None
+                        triple["source_end"] = None
+                        
+        except Exception as e:
+            logger.warning(f"Error attaching offsets to triples: {e}")
+            # Continue without offsets
+            for triple in triples:
+                triple["source_start"] = None
+                triple["source_end"] = None
+        
+        return triples, list(discovered_chunk_ids)
