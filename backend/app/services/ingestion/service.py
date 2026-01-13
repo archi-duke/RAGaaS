@@ -252,6 +252,42 @@ class IngestionService:
             except Exception as db_err:
                 print(f"Error updating document status to ERROR: {str(db_err)}")
 
+    def _convert_triples_to_rdf(self, triples: List[dict], kb_id: str, doc_id: str) -> List[str]:
+        """구조화된 트리플을 RDF 형식으로 변환"""
+        import re
+        import urllib.parse
+        
+        def sanitize_uri(text: str) -> str:
+            """URI에 사용할 수 있도록 텍스트 정리"""
+            clean = re.sub(r'[^a-zA-Z0-9_\uAC00-\uD7A3\u0400-\u04FF]+', '_', text.strip())
+            return urllib.parse.quote(clean)
+        
+        rdf_lines = []
+        namespace_entity = "http://rag.local/entity/"
+        namespace_relation = "http://rag.local/relation/"
+        
+        for t in triples:
+            subj = sanitize_uri(t.get("subject", ""))
+            pred = sanitize_uri(t.get("predicate", ""))
+            obj = sanitize_uri(t.get("object", ""))
+            
+            if not all([subj, pred, obj]):
+                continue
+            
+            s_uri = f"<{namespace_entity}{subj}>"
+            p_uri = f"<{namespace_relation}{pred}>"
+            o_uri = f"<{namespace_entity}{obj}>"
+            
+            # 트리플 추가
+            rdf_lines.append(f"{s_uri} {p_uri} {o_uri} .")
+            
+            # Label 추가 (검색 성능 향상)
+            rdf_lines.append(f'{s_uri} <http://www.w3.org/2000/01/rdf-schema#label> "{t["subject"]}" .')
+            rdf_lines.append(f'{p_uri} <http://www.w3.org/2000/01/rdf-schema#label> "{t["predicate"]}" .')
+            rdf_lines.append(f'{o_uri} <http://www.w3.org/2000/01/rdf-schema#label> "{t["object"]}" .')
+        
+        return rdf_lines
+
     async def _fallback_graph_extraction(
         self,
         text: str,
@@ -281,7 +317,10 @@ class IngestionService:
             overlap=graph_section_overlap
         )
         
+        
         all_triples = []
+        all_rdf_triples = []
+        
         for i, section_text in enumerate(sections):
             section_id = f"{doc_id}_section_{i}"
             try:
@@ -289,34 +328,74 @@ class IngestionService:
                     section_text, section_id, kb_id, config
                 )
                 triples = graph_result.get("structured_triples", [])
+                all_triples.extend(triples)
                 
+                # Fuseki는 나중에 일괄 처리
                 if not is_neo4j:
                     rdf_triples = graph_result.get("rdf_triples", [])
-                    if rdf_triples:
-                        fuseki_client.insert_triples(kb_id, rdf_triples)
-                else:
-                    all_triples.extend(triples)
+                    all_rdf_triples.extend(rdf_triples)
                     
             except Exception as e:
                 print(f"Error processing graph for section {i}: {e}")
         
+        print(f"[Fallback] Total sections processed: {len(sections)}, Total triples collected: {len(all_triples)}")
+
+        
+        # 후처리: 필터링 + 정규화 + 역관계 생성 (Neo4j와 Fuseki 모두)
+        if all_triples:
+            from app.services.ingestion.graph_postprocessor import post_process_triples, add_inverse_relations
+            
+            print(f"[Fallback] Raw triples: {len(all_triples)}")
+            
+            # 1. 노이즈 제거 및 정규화
+            filtered_triples = post_process_triples(
+                all_triples,
+                confidence_threshold=config.get("confidence_threshold", 0.0),
+                normalize=True
+            )
+            print(f"[Fallback] After filtering: {len(filtered_triples)}")
+            
+            # 2. 역관계 자동 생성
+            final_triples = add_inverse_relations(filtered_triples)
+            print(f"[Fallback] With inverse relations: {len(final_triples)}")
+            
+            # 3. 백엔드별 적재
+            if is_neo4j:
+                all_triples = final_triples
+            else:
+                # Fuseki: 구조화된 트리플을 RDF로 변환
+                rdf_triples = self._convert_triples_to_rdf(final_triples, kb_id, doc_id)
+                fuseki_client.insert_triples(kb_id, rdf_triples)
+                print(f"[Fallback] Inserted {len(rdf_triples)} RDF triples to Fuseki")
+        
         if is_neo4j and all_triples:
             chunk_ids = [f"{doc_id}_{i}" for i in range(len(texts_to_embed))]
             
+            print(f"[Fallback] Inserting {len(all_triples)} triples to Neo4j...")
+            
             for triple in all_triples:
                 try:
+                    # APOC을 사용하여 동적 관계 타입 생성
+                    # predicate를 관계 타입으로 직접 사용 (예: :스승, :제자)
                     query = """
-                    MERGE (s:Entity {name: $subj})
-                    MERGE (o:Entity {name: $obj})
-                    MERGE (s)-[:RELATION {type: $pred}]->(o)
+                    MERGE (s:Entity {name: $subj, kb_id: $kb_id})
+                    MERGE (o:Entity {name: $obj, kb_id: $kb_id})
+                    WITH s, o
+                    CALL apoc.merge.relationship(s, $pred, {}, {}, o, {}) YIELD rel
+                    RETURN rel
+
                     """
                     neo4j_client.execute_query(query, {
                         "subj": triple["subject"],
                         "obj": triple["object"],
-                        "pred": triple["predicate"]
+                        "pred": triple["predicate"],
+                        "kb_id": kb_id
                     })
                 except Exception as e:
                     print(f"Error inserting triple: {e}")
+            
+            print(f"[Fallback] Neo4j insertion complete.")
+
             
             # Link entities to chunks
             for i, chunk_text in enumerate(texts_to_embed):

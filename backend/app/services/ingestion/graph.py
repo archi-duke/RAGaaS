@@ -8,6 +8,7 @@ import logging
 import re
 import urllib.parse
 from app.core.fuseki import fuseki_client
+import yaml
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +111,34 @@ class GraphProcessor:
              else:
                 prompt_template = default_prompt_template
 
+
+        # Load Few-shot examples for In-Context Learning
+        examples_path = Path("extraction_examples.yaml")
+        if not examples_path.exists():
+             examples_path = Path("/app/extraction_examples.yaml")
+             
+        if examples_path.exists():
+            try:
+                with open(examples_path, "r", encoding="utf-8") as f:
+                    examples = yaml.safe_load(f)
+                    if examples:
+                        examples_str = "\n\n[Few-shot Examples (Learn from these patterns)]\n"
+                        for ex in examples:
+                            triples = ex.get('triples', [])
+                            if not triples and 'properties' in ex:
+                                triples = []
+                            examples_str += f"Input Text: {ex['text']}\nOutput JSON: {json.dumps({'triples': triples}, ensure_ascii=False)}\n\n"
+                        
+                        prompt_template += examples_str
+                        logger.info(f"[Graph] Loaded {len(examples)} few-shot examples from {examples_path}")
+                    else:
+                        logger.warning(f"[Graph] Examples file found but empty or invalid content")
+            except Exception as e:
+                logger.warning(f"Failed to load examples: {e}")
+        else:
+             logger.warning(f"[Graph] Extraction examples file not found at {examples_path}")
+
+
         # MULTI-PASS STRATEGY IMPLEMENTATION (HYBRID)
         
         # Pass 1: HYBRID Entity Extraction (spaCy + LLM filtering)
@@ -146,37 +175,36 @@ class GraphProcessor:
             spacy_candidates = set()
         
         # Step 1b: LLM filters and completes the entity list
-        if spacy_candidates:
-            filter_prompt = f"""Given these candidate entities from text analysis: {list(spacy_candidates)}
+        # Step 1b: LLM filters and completes the entity list
+        # We allow LLM to expand upon spaCy candidates to catch missed entities (e.g., "강새벽")
+        candidates_str = str(list(spacy_candidates)) if spacy_candidates else "None"
+        
+        filter_prompt = f"""Analyze the provided text and identify ALL key entities (Persons, Organizations, Concepts, Locations, Artifacts).
 
-Review the original text and:
-1. KEEP only meaningful entities (persons, organizations, concepts, skills)
-2. ADD any important entities that were missed
-3. REMOVE duplicates, particles, or meaningless words
+I have run a basic NLP extraction and found these potential candidates: {candidates_str}
 
-Original Text:
+**Your Task:**
+1. **Verity & Filter**: Keep valid candidates from the list above.
+2. **Discover Missing**: Read the text carefully to find **missed entities** that the NLP tool failed to catch (e.g., specific names, nicknames, novel terms).
+   - *Example*: If text mentions "탈북자 강새벽", but NLP missed "강새벽", you MUST add it.
+3. **Clean & Normalize**: Remove common nouns/particles. formatting.
+
+Text:
 {text}
 
-Return JSON:
+Return JSON with a single list of unique entities:
 {{"entities": ["Entity1", "Entity2", ...]}}
 """
-        else:
-            # Fallback to pure LLM if spaCy failed
-            prompt_path_p1 = Path("data/prompts/graph_entity_extraction_prompt.txt")
-            if prompt_path_p1.exists():
-                filter_prompt = prompt_path_p1.read_text(encoding="utf-8").replace("{text}", text)
-            else:
-                filter_prompt = f"Extract key entities from: {text}\nReturn JSON: {{\"entities\": [...]}}"
         
         try:
             r1 = await self.client.chat.completions.create(
-                model="gpt-4o",
+                model="gpt-4o", # Use strong model for entity discovery
                 messages=[{"role": "user", "content": filter_prompt}],
-                temperature=0,
+                temperature=0.1,
                 response_format={"type": "json_object"}
             )
             entities = json.loads(r1.choices[0].message.content).get("entities", [])
-            print(f"[Graph] Pass 1 Final entities ({len(entities)}): {entities[:10]}...")
+            logger.info(f"[Graph] Pass 1 Final entities ({len(entities)}): {entities[:10]}...")
         except Exception as e:
             logger.error(f"Pass 1 LLM failed: {e}")
             entities = list(spacy_candidates) if spacy_candidates else []

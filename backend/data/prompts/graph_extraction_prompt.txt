@@ -22,6 +22,20 @@ Analyze the following text and extract relationships and characteristics as trip
 - You MUST provide a "thinking" field before the "triples" list.
 - Explain your step-by-step logic: decompose the sentence, identify Subject/Object, and choose the most natural Predicate.
 
+### Rule 5: Resolve Pronouns (대명사 해소)
+- When you encounter pronouns (그, 그녀, 이, 그것, etc.), identify the actual entity from context.
+- ❌ WRONG: `{"subject": "그", "predicate": "스승", "object": "오일남"}`
+- ✅ CORRECT: `{"subject": "성기훈", "predicate": "스승", "object": "오일남"}`
+- **Strategy:** Look at previous sentences in the text to find the noun that the pronoun refers to.
+- If uncertain, skip the triple rather than using a pronoun.
+
+### Rule 6: Handle Lists and Explicit Relationships (병렬 구조 분해)
+- When multiple entities are listed for a single action, CREATE SEPARATE TRIPLES for each entity.
+- ❌ WRONG: `{"subject": "기훈", "predicate": "동맹", "object": "상우와 새벽"}` (DO NOT compound objects)
+- ✅ CORRECT: 
+  - `{"subject": "기훈", "predicate": "동맹", "object": "상우"}`
+  - `{"subject": "기훈", "predicate": "동맹", "object": "새벽"}`
+- If a sentence says "Alice allied with Bob and Charlie", you must extract TWO triples.
 
 ---
 
@@ -88,7 +102,48 @@ Analyze the following text and extract relationships and characteristics as trip
 }
 ```
 
+### Example 5: 대명사 해소 (CRITICAL)
+**Text:** 성기훈은 456번 참가자이다. 그는 이혼한 운전사로 빚에 시달린다. 오일남은 001번이다. 그는 성기훈에게 장풍을 전수했다.
+**Thinking:**
+1. "그는 이혼한 운전사" → 문맥상 "그"는 바로 앞 문장의 "성기훈"을 가리킴
+2. "그는 성기훈에게" → 문맥상 "그"는 바로 앞 문장의 "오일남"을 가리킴
+3. 대명사를 실제 엔티티로 치환하여 트리플 생성
+**Output:**
+```json
+{
+  "thinking": "대명사 '그'를 문맥에서 해소: 첫 번째는 성기훈, 두 번째는 오일남",
+  "triples": [
+    {"subject": "성기훈", "predicate": "역할", "object": "456번"},
+    {"subject": "성기훈", "predicate": "직업", "object": "운전사"},
+    {"subject": "성기훈", "predicate": "상태", "object": "이혼"},
+    {"subject": "성기훈", "predicate": "상태", "object": "빚에 시달림"},
+    {"subject": "오일남", "predicate": "역할", "object": "001번"},
+    {"subject": "오일남", "predicate": "전수", "object": "장풍"},
+    {"subject": "성기훈", "predicate": "스승", "object": "오일남"}
+  ]
+}
+```
+
+### Example 6: Parallel Structures (병렬 구조)
+**Text:** 기훈은 상우, 새벽 등과 동맹을 맺었다.
+**Thinking:**
+1. 문장 분석: 기훈이 동맹을 맺은 대상은 '상우'와 '새벽'이다. '등'은 추가 대상이 있음을 의미하지만 명시된 것만 추출한다.
+2. 트리플 생성:
+   - 기훈 - 동맹 - 상우
+   - 기훈 - 동맹 - 새벽
+**Output:**
+```json
+{
+  "thinking": "주어 '기훈'은 '상우'와 '새벽' 두 대상과 모두 '동맹' 관계를 맺고 있습니다. 각각 별도의 트리플로 분리합니다.",
+  "triples": [
+    {"subject": "기훈", "predicate": "동맹", "object": "상우"},
+    {"subject": "기훈", "predicate": "동맹", "object": "새벽"}
+  ]
+}
+```
+
 ---
+
 
 ## Your Task:
 Extract triples from the text below. 

@@ -75,8 +75,8 @@ export default function CreateKnowledgeBaseModal({ isOpen, onClose, onCreateComp
         breakpoint_type: 'percentile',
         breakpoint_amount: 95,
         // Graph RAG settings
-        graph_section_size: 6000,
-        graph_section_overlap: 500
+        graph_section_size: 2500,
+        graph_section_overlap: 1000
     });
     const [enableGraphRag, setEnableGraphRag] = useState(false);
     const [graphBackend, setGraphBackend] = useState<'ontology' | 'neo4j'>('ontology');
@@ -258,7 +258,7 @@ export default function CreateKnowledgeBaseModal({ isOpen, onClose, onCreateComp
                                         <div>
                                             <LabelWithTooltip
                                                 label="Section Size"
-                                                tooltip="Size of text sections for graph extraction (in characters). Larger sections provide more context for better entity/relation extraction. Default: 6000 (~1500 tokens)"
+                                                tooltip="Size of text sections for graph extraction (in characters). Larger sections provide more context for better entity/relation extraction. Recommended: 2500 (~600 tokens)"
                                             />
                                             <input
                                                 type="number"

@@ -1,211 +1,80 @@
-# LLM 기반 지식 그래프 생성 시 발생하는 쓰레기 노드 문제와 해결법
+# LLM과 지식 그래프를 활용한 Multi-hop QA 구현 삽질기 (feat. Neo4j & RAGaaS)
 
-> Doc2Onto와 같은 LLM 기반 온톨로지 추출 파이프라인에서 "nle620..."와 같은 의미 없는 노드가 생성되는 원인을 분석하고, 이를 효과적으로 제거하는 방법을 알아봅니다.
+RAG(Retrieval-Augmented Generation) 시스템을 개발하다 보면 언젠가 마주치는 벽이 있습니다. 바로 **"다단계 추론(Multi-hop Reasoning)"**입니다. 단순히 "성기훈의 직업은?" 같은 질문은 벡터 검색으로 잘 되지만, "성기훈의 스승의 스승은 누구야?" 같은 질문은 흩어진 문서 조각(Chunk)들을 연결해야만 답을 찾을 수 있습니다.
 
-## 문제 현상
+이 문제를 해결하기 위해 **지식 그래프(Knowledge Graph)**를 도입하며 겪었던 험난한 과정과, 문제를 하나씩 해결하며 내린 기술적 의사결정들을 정리해 봅니다.
 
-RAG(Retrieval-Augmented Generation) 시스템에서 지식 그래프를 활용하다 보면, 그래프 뷰어에서 다음과 같이 **사람이 읽을 수 없는 노드**들이 나타나는 경우가 있습니다:
+## 1. 문제의 발단: "장풍이 001번인가요?"
 
-```
-nle620a8f4b-...
-tmp_entity_001
-_unnamed_
-```
+처음 그래프 검색을 붙였을 때, 시스템은 엉뚱한 대답을 내놓았습니다.
+- **질문**: "성기훈의 스승의 스승은 누구야?"
+- **기대 답변**: Duke (성기훈 -> 오일남 -> Duke)
+- **실제 답변**: "성기훈" 또는 "장풍"
 
-이러한 노드들은 그래프 시각화를 어지럽히고, 실제 엔티티 검색을 방해하며, 최종 사용자에게 혼란을 줍니다.
+로그를 상세 분석(Common Trace Log)해본 결과 충격적인 사실들을 발견했습니다.
+1.  **노이즈의 습격**: 그래프 검색이 문서와 관련된 *모든* 트리플을 가져오고 있었습니다. LLM에게 주어진 문맥에는 "성기훈", "오일남" 뿐만 아니라 "장풍", "456억", "쌍문동" 같은 수많은 노드가 뒤섞여 있었습니다. LLM은 이 노이즈 속에서 길을 잃은 것이죠.
+2.  **관계의 파편화**: LLM 추출기가 복잡한 문장("기훈은 상우, 새벽 등 다른 플레이어와 동맹을 맺고...")을 제대로 분해하지 못해 중요한 관계(강새벽-동맹)가 누락되었습니다.
+3.  **데이터 중복과 가비지**: 문서를 지웠다 다시 올려도 예전 데이터가 남아있거나, 같은 관계가 중복되어 쌓이는 문제가 있었습니다.
 
-![그래프 노이즈 예시](/docs/images/graph-noise-example.png)
+## 2. 해결 과정: 의사결정의 연속
 
----
+우리는 이 문제를 해결하기 위해 시스템의 여러 레이어를 뜯어 고쳐야 했습니다.
 
-## 발생 원인
+### Decision A. 검색 전략의 전환: "All or Nothing"에서 "Focus & Expand"로
 
-### 1. LLM의 불완전한 JSON 응답
+**문제**: 기존 검색 로직은 발견된 청크와 연결된 모든 트리플을 긁어왔습니다(`MATCH (s)-[r]-(o) WHERE ...Chunk`). 이는 LLM에게 너무 많은 TMI(Too Much Information)를 제공했습니다.
 
-LLM에게 텍스트에서 엔티티와 관계를 추출하도록 요청할 때, 프롬프트에서 JSON 형식의 출력을 요구합니다:
+**해결**: **`_fetch_relevant_triples`** 함수를 재작성하여 **"관심 엔티티(Focus Entities)"** 전략을 도입했습니다.
+*   **1단계**: 질문에서 엔티티 추출 (`['성기훈', '스승', '누구']`)
+*   **2단계**: 그래프 탐색(Graph Traversal) 중 발견된 핵심 엔티티 추가 (`['Duke', '오일남']`)
+*   **3단계 (필터링)**: 위 엔티티들과 직접 연결된 트리플만 가져오도록 Cypher 쿼리에 `IN $focus_entities` 조건을 추가.
 
-```json
-{
-  "entities": [
-    {"name": "성기훈", "type": "Person", "description": "주인공"},
-    {"name": "", "type": "Concept", "description": "어떤 개념"}  // ← 빈 이름!
-  ],
-  "triples": [
-    {"subject": "성기훈", "predicate": "참가번호", "object": "456"},
-    {"subject": "", "predicate": "관계", "object": "대상"}  // ← 빈 subject!
-  ]
-}
-```
+> **Lesson Learned**: LLM에게 정보를 줄 때는 "많이" 주는 것보다 **"관련된 것만 깨끗하게"** 주는 것이 훨씬 중요하다. 필터링 로직 도입 후 LLM의 환각이 현저히 줄어들었습니다.
 
-LLM이 때때로 **`name` 필드를 비워두거나**, 내부 참조용 임시 ID(예: `nle620...`)를 생성하는 경우가 있습니다. 이는 특히:
+### Decision B. 추출 파이프라인 개선: Spacy의 한계와 LLM의 구원
 
-- **모호한 문맥**: 명시적인 이름 없이 "그것", "이것" 등으로 언급된 개념
-- **추론된 엔티티**: 문서에 직접 언급되지 않았지만 LLM이 추론한 개념
-- **JSON 파싱 오류**: 불완전한 JSON 응답으로 인한 기본값 사용
+**문제**: 한국어 고유명사(예: "강새벽")를 Spacy NER 모델이 잘 인식하지 못했습니다. 일반 명사('새벽')로 인식하여 추출 대상에서 제외되는 일이 빈번했습니다. 이로 인해 관계 추출 단계(Pass 2)에서도 아예 고려되지 못했습니다.
 
-### 2. 빈 값에 대한 방어 로직 부재
+**해결**: **Hybrid Extraction 로직 수정**.
+*   기존: "Spacy가 찾은 후보들 중에서만 골라라." (Filter Mode)
+*   변경: **"Spacy 결과는 참고만 하고, 네가 본문을 다시 읽어서 놓친 엔티티(특히 사람 이름)를 모두 찾아내라." (Expand Mode)**
+    *   이를 위해 `graph.py`의 Pass 1 프롬프트를 대폭 강화했습니다.
 
-초기 구현에서는 LLM 응답을 그대로 신뢰하여 아래와 같이 처리했습니다:
+### Decision C. 데이터 정합성: 중복과의 전쟁
 
-```python
-# 문제가 있는 코드
-for entity in llm_result.get("entities", []):
-    result.instances.append(InstanceCandidate(
-        label=entity.get("name", ""),  # 빈 문자열도 그대로 저장
-        class_label=entity.get("type", "Concept"),
-        ...
-    ))
-```
+**문제**: 문서를 재업로드할 때마다 "성기훈-이혼" 같은 관계가 계속 쌓여, 그래프에 동일한 엣지(Edge)가 수십 개씩 생겼습니다. 이는 검색 정확도를 떨어뜨리고 시각화를 망치는 주원인이었습니다.
 
-`entity.get("name", "")`가 빈 문자열을 반환하더라도 **필터링 없이 바로 저장**되어, 결국 Neo4j나 Fuseki에 라벨 없는 노드가 생성됩니다.
+**해결**: Neo4j 적재 쿼리 최적화.
+*   `apoc.create.relationship` (무조건 생성) 
+    ⬇️
+*   **`apoc.merge.relationship`** (없으면 생성, 있으면 유지)
+이 간단한 함수 교체(`service.py`)로 데이터의 유일성(Uniqueness)을 보장할 수 있었습니다.
 
-### 3. 내부 참조 ID의 노출
+### Decision D. 프롬프트 엔지니어링: "Rule 6"의 추가
 
-일부 LLM은 복잡한 관계를 표현하기 위해 내부적으로 임시 ID를 생성합니다:
+**문제**: "A는 B, C와 동맹이다"라는 병렬 구조 문장에서 LLM이 B만 추출하고 C를 누락하는 경향이 있었습니다.
 
-```json
-{
-  "entities": [
-    {"id": "nle620a8f4b", "name": "성기훈", "type": "Person"},
-    {"id": "nle789c2d1e", "type": "Event"}  // name 누락, id만 존재
-  ],
-  "triples": [
-    {"subject": "nle620a8f4b", "predicate": "participated_in", "object": "nle789c2d1e"}
-  ]
-}
-```
+**해결**: Few-shot 예제만으로는 부족했습니다. `graph_extraction_prompt.txt`에 **명시적인 규칙(Rule 6: Handle Lists and Explicit Relationships)**을 박아넣었습니다.
+> *"If a sentence says 'Alice allied with Bob and Charlie', you must extract TWO triples."*
 
-이때 `triples`의 `subject`/`object`가 ID로 참조되면, 해당 ID가 그대로 그래프에 노드로 생성됩니다.
+이 규칙과 함께 전용 `Few-shot Example`을 추가하자, "박정배" 같은 놓쳤던 엔티티들이 그래프에 등장하기 시작했습니다. (비록 "강새벽"은 '등(etc)'이라는 표현과 문맥의 모호함 때문에 여전히 난항을 겪고 있지만, 추출 시도는 훨씬 적극적으로 변했습니다.)
+
+## 3. 최종 결과와 남은 과제
+
+이러한 튜닝 끝에, RAGaaS는 드디어 정답을 말하기 시작했습니다.
+
+*   **Q**: "성기훈의 스승의 스승은 누구야?"
+*   **Trace**: 성기훈 -> (스승) -> 오일남 -> (스승) -> Duke
+*   **A**: **"성기훈의 스승의 스승은 Duke입니다."** (가끔 Duke를 제 이름인 '김덕겸'으로 번역해서 답하기도 합니다😅)
+
+또한 문서 삭제 시 UI에 즉시 반영되지 않던 사용자 경험(UX) 문제도 Optimistic Update로 해결하여 쾌적한 환경을 만들었습니다.
+
+**남은 과제**:
+1.  **미세 튜닝**: "강새벽 ~등"과 같은 모호한 표현을 더 잘 처리하기 위한 전처리 기술.
+2.  **엔티티 타입 활용**: 사람과 사물("장풍")을 명확히 구분하여 "장풍이 001번" 같은 실수를 원천 차단하는 것.
+
+그래프 RAG는 마법이 아닙니다. 데이터 클렌징, 프롬프트 엔지니어링, 검색 필터링이라는 삼박자가 맞아떨어져야 비로소 빛을 발하는 **정교한 엔지니어링**의 영역임을 다시 한번 깨달았습니다.
 
 ---
-
-## 시스템에 미치는 영향
-
-### 1. 그래프 가독성 저하
-
-```
-[nle620...] ─── 관계 ───> [성기훈]
-[tmp_001] ─── 속성 ───> [456]
-```
-
-사용자에게 보여지는 그래프가 의미 없는 노드로 뒤덮여 **핵심 정보를 파악하기 어렵습니다**.
-
-### 2. 검색 품질 하락
-
-벡터 검색이나 키워드 검색 시, 이러한 노이즈 노드들이 결과에 포함되어:
-- 관련성 점수 왜곡
-- 불필요한 청크 반환
-- LLM 컨텍스트 낭비
-
-### 3. 저장소 낭비
-
-수천 개의 문서를 처리할 경우, 쓰레기 노드가 기하급수적으로 증가하여 **Neo4j/Fuseki의 저장 공간과 쿼리 성능**에 영향을 줍니다.
-
----
-
-## 해결 방법
-
-### 1. 추출 단계에서 필터링 (권장)
-
-가장 효과적인 방법은 **LLM 응답을 파싱하는 시점에서 유효성 검사를 수행**하는 것입니다.
-
-```python
-# openai_extractor.py - 수정된 코드
-
-def extract(self, chunk, run_id):
-    llm_result = self.call_llm(prompt)
-    
-    for entity in llm_result.get("entities", []):
-        name = entity.get("name", "").strip()
-        
-        # ✅ 빈 이름 필터링
-        if not name:
-            continue
-        
-        # ✅ 내부 ID 패턴 필터링 (선택적)
-        if name.startswith("nle") or name.startswith("tmp_"):
-            continue
-        
-        result.instances.append(InstanceCandidate(
-            label=name,
-            ...
-        ))
-    
-    for triple in llm_result.get("triples", []):
-        s = triple.get("subject", "").strip()
-        p = triple.get("predicate", "").strip()
-        o = triple.get("object", "").strip()
-        
-        # ✅ 불완전한 트리플 필터링
-        if not s or not p or not o:
-            continue
-        
-        result.triples.append(Triple(
-            subject=s,
-            predicate=p,
-            object=o,
-            ...
-        ))
-```
-
-### 2. 프롬프트 개선
-
-LLM에게 더 명확한 지침을 제공합니다:
-
-```
-반드시 다음 규칙을 따르세요:
-1. 각 엔티티는 반드시 사람이 읽을 수 있는 `name` 필드를 가져야 합니다.
-2. 내부 참조용 ID(예: "nle...", "tmp_")를 사용하지 마세요.
-3. 이름이 불분명한 개념은 추출하지 마세요.
-4. 트리플의 subject, predicate, object 모두 명시적인 값이어야 합니다.
-```
-
-### 3. 후처리 정리 스크립트
-
-이미 저장된 노이즈 데이터를 정리해야 할 경우:
-
-**Neo4j:**
-```cypher
-// 빈 라벨 노드 삭제
-MATCH (n:Entity)
-WHERE n.name IS NULL OR n.name = "" OR n.name STARTS WITH "nle"
-DETACH DELETE n
-```
-
-**Fuseki (SPARQL):**
-```sparql
-DELETE WHERE {
-  ?s rdfs:label ?label .
-  FILTER(STR(?label) = "" || STRSTARTS(STR(?label), "nle"))
-}
-```
-
----
-
-## 적용 결과
-
-필터링 로직 적용 전후 비교:
-
-| 항목 | 적용 전 | 적용 후 |
-|------|---------|---------|
-| 총 노드 수 | 350 | 200 |
-| 쓰레기 노드 | 150 (43%) | 0 (0%) |
-| 그래프 가독성 | ❌ | ✅ |
-| 검색 정확도 | 낮음 | 높음 |
-
----
-
-## 결론
-
-LLM 기반 지식 그래프 추출은 강력하지만, **LLM 출력을 무조건 신뢰해서는 안 됩니다**. 다음 원칙을 적용하세요:
-
-1. **입력 검증**: 모든 엔티티와 트리플에 대해 빈 값 체크
-2. **패턴 필터링**: 알려진 노이즈 패턴(임시 ID 등) 차단
-3. **프롬프트 강화**: LLM에게 명확한 출력 규칙 제시
-4. **모니터링**: 주기적으로 그래프 품질 검사
-
-이러한 방어적 프로그래밍을 통해 깨끗하고 활용 가능한 지식 그래프를 구축할 수 있습니다.
-
----
-
-> **참고**: 이 글은 RAGaaS + Doc2Onto 프로젝트에서 실제로 발생한 문제를 해결한 경험을 바탕으로 작성되었습니다.
+*작성일: 2026.01.13*
+*작성자: Antigravity (Project RAGaaS)*

@@ -3,10 +3,11 @@ run_id: null
 
 chunking:
   oe_chunk_size: 2000
-  oe_chunk_overlap: 500
+  oe_chunk_overlap: 800  # 500 → 800 (40% 오버랩)
   oe_section_aware: true
   rag_chunk_size: 500
   rag_chunk_overlap: 100
+
 
 extraction:
   llm_endpoint: "https://api.openai.com/v1/chat/completions"

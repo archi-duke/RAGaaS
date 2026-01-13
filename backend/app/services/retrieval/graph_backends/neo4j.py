@@ -116,7 +116,12 @@ class Neo4jBackend(GraphBackend):
             
             triples = []
             if chunk_ids_list:
-                triples = self._fetch_relevant_triples(chunk_ids_list)
+                # Pass entities AND discovered entities to focus the triple retrieval
+                focus_set = set(entities)
+                if discovered_entities:
+                    focus_set.update(discovered_entities)
+                
+                triples = self._fetch_relevant_triples(chunk_ids_list, list(focus_set))
 
             return {
                 "chunk_ids": chunk_ids_list,
@@ -132,28 +137,50 @@ class Neo4jBackend(GraphBackend):
             traceback.print_exc()
             return {"chunk_ids": [], "sparql_query": "Error", "triples": []}
 
-    def _fetch_relevant_triples(self, chunk_ids: List[str]) -> List[Dict[str, str]]:
-        """Fetch triples connected to the discovered chunks for metadata display."""
+    def _fetch_relevant_triples(self, chunk_ids: List[str], focus_entities: List[str] = None) -> List[Dict[str, str]]:
+        """Fetch triples connected to the discovered chunks, prioritizing those related to the query entities."""
         triples = []
         try:
             # Use any relationship type (not just :RELATION) since we now use dynamic types
             # Support both Doc2Onto schema (label_ko) and legacy schema (name)
+            
+            # Base query structure
             triples_query = """
             MATCH (s:Entity)-[r]->(o:Entity)
             WHERE type(r) <> 'MENTIONED_IN'
               AND ((s)-[:MENTIONED_IN]->(:Chunk {id: $chunk_id}) 
                    OR (o)-[:MENTIONED_IN]->(:Chunk {id: $chunk_id}))
+            """
+            
+            # Apply entity filter if provided to reduce noise
+            params = {"chunk_id": None} # placeholder
+            if focus_entities:
+                # Safe matching with COALESCE to handle potential NULLs
+                triples_query += """
+                AND (COALESCE(s.name, '') IN $entities OR COALESCE(o.name, '') IN $entities OR COALESCE(s.label_ko, '') IN $entities OR COALESCE(o.label_ko, '') IN $entities)
+                """
+                params["entities"] = focus_entities
+            
+            triples_query += """
             RETURN DISTINCT 
                 COALESCE(s.label_ko, s.name, "Node(" + elementId(s) + ")") as subj, 
                 type(r) as pred, 
                 COALESCE(o.label_ko, o.name, "Node(" + elementId(o) + ")") as obj
-            LIMIT 10
+            LIMIT 20
             """
             
+            print(f"DEBUG: Fetching triples with focus_entities: {focus_entities}")
+
             seen_triples = set()
-            for chunk_id in chunk_ids[:5]:  # Limit to first 5 chunks to avoid too many queries
+            # If entity filter is active, we can scan more chunks
+            check_chunks = chunk_ids[:30] if focus_entities else chunk_ids[:5]
+            
+            for chunk_id in check_chunks:
+
                 try:
-                    t_records = neo4j_client.execute_query(triples_query, {"chunk_id": chunk_id})
+                    p = params.copy()
+                    p["chunk_id"] = chunk_id
+                    t_records = neo4j_client.execute_query(triples_query, p)
                     for r in t_records:
                         triple_key = (r["subj"], r["pred"], r["obj"])
                         if triple_key not in seen_triples:
@@ -166,8 +193,9 @@ class Neo4jBackend(GraphBackend):
                 except Exception as e:
                     logger.warning(f"Error fetching triples for chunk {chunk_id}: {e}")
             
-            print(f"DEBUG: Found {len(triples)} relevant triples from discovered chunks")
+            print(f"DEBUG: Found {len(triples)} relevant triples from discovered chunks (Focus: {focus_entities})")
         except Exception as e:
             logger.error(f"Error in _fetch_relevant_triples: {e}")
         
         return triples
+
