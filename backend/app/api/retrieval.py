@@ -39,6 +39,7 @@ class ChatRequest(BaseModel):
     ann_threshold: float = 0.0
     enable_inverse_search: bool = False
     inverse_extraction_mode: str = "auto"
+    use_schema_mode: bool = True  # Schema-aware SPARQL generation for promoted KBs
     use_raw_log: bool = False
     
     class Config:
@@ -233,6 +234,7 @@ async def chat_with_kb(
         use_relation_filter=request.use_relation_filter,
         enable_inverse_search=request.enable_inverse_search,
         inverse_extraction_mode=request.inverse_extraction_mode,
+        use_schema_mode=request.use_schema_mode,
         use_raw_log=request.use_raw_log
     )
     

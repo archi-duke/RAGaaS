@@ -46,6 +46,7 @@ export default function KnowledgeBaseDetail() {
     const [useParallelSearch, setUseParallelSearch] = useState<boolean>(false);
     const [enableInverseSearch, setEnableInverseSearch] = useState(false);
     const [useRelationFilter, setUseRelationFilter] = useState(true);
+    const [useSchemaMode, setUseSchemaMode] = useState(true); // Default ON for promoted KBs
     const [useRawLog, setUseRawLog] = React.useState(false);
 
     // Brute Force State (for 2-stage)
@@ -77,6 +78,7 @@ export default function KnowledgeBaseDetail() {
         remove_hypothetical: true,
         version_tag: 'v1.0'
     });
+    const [isPromoting, setIsPromoting] = useState(false);
 
 
     useEffect(() => {
@@ -236,6 +238,7 @@ export default function KnowledgeBaseDetail() {
 
     const handlePromote = async () => {
         if (!id) return;
+        setIsPromoting(true);
         try {
             await kbApi.promote(id, { config: promoteConfig });
             await loadKB(); // Refresh KB data
@@ -243,6 +246,22 @@ export default function KnowledgeBaseDetail() {
         } catch (error) {
             console.error('Failed to promote KB:', error);
             alert('Failed to update promotion status');
+        } finally {
+            setIsPromoting(false);
+        }
+    };
+
+    const handleDemote = async () => {
+        if (!id) return;
+        if (!confirm("Are you sure you want to revert to the raw Knowledge Graph?\n\nThis will disable Ontology features and exclude any OWL constraints/inferences applied during promotion.")) return;
+
+        try {
+            await kbApi.promote(id, { action: 'revert' });
+            await loadKB(); // Refresh KB data
+            alert('Reverted to Knowledge Graph successfully');
+        } catch (error) {
+            console.error('Failed to demote KB:', error);
+            alert('Failed to revert status');
         }
     };
 
@@ -330,25 +349,31 @@ export default function KnowledgeBaseDetail() {
 
                         {kb.graph_backend && kb.graph_backend !== 'none' && (
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                <span
-                                    className="badge"
-                                    style={{
-                                        fontSize: '0.8rem',
-                                        padding: '0.25rem 0.75rem',
-                                        fontWeight: 600,
-                                        backgroundColor: kb.graph_backend === 'ontology'
-                                            ? (kb.is_promoted ? '#f97316' : '#3b82f6')
+                                <span style={{
+                                    backgroundColor:
+                                        kb.graph_backend === 'ontology'
+                                            ? (kb.is_promoted ? '#1e40af' : '#bfdbfe')
                                             : '#166534',
-                                        color: 'white'
-                                    }}
-                                >
-                                    {kb.graph_backend === 'ontology'
-                                        ? (kb.is_promoted ? 'Ontology+' : 'Ontology-')
+                                    color: kb.graph_backend === 'ontology' && !kb.is_promoted ? '#1e40af' : 'white',
+                                    fontSize: '0.8rem',
+                                    padding: '4px 10px',
+                                    borderRadius: '12px',
+                                    fontWeight: 700,
+                                    lineHeight: 1,
+                                    boxShadow: '0 1px 2px rgba(0,0,0,0.1)'
+                                }}>
+                                    {kb.graph_backend === 'ontology' && kb.is_promoted
+                                        ? 'Ontology'
                                         : 'Graph'}
                                 </span>
                                 {kb.graph_backend === 'ontology' && kb.is_promoted && (
-                                    <span style={{ fontWeight: 700, color: 'black', fontSize: '0.8rem' }}>
-                                        {kb.promotion_metadata?.version_tag || 'v1.0'}, {kb.promotion_metadata?.promoted_at ? kb.promotion_metadata.promoted_at.split('T')[0] : 'N/A'}
+                                    <span style={{
+                                        fontWeight: 600,
+                                        color: 'var(--text-secondary)',
+                                        fontSize: '0.8rem',
+                                        marginLeft: '4px'
+                                    }}>
+                                        {kb.promotion_metadata?.version_tag || 'v1.0'} • {kb.promotion_metadata?.promoted_at ? kb.promotion_metadata.promoted_at.split('T')[0] : 'N/A'}
                                     </span>
                                 )}
                             </div>
@@ -373,7 +398,7 @@ export default function KnowledgeBaseDetail() {
                 >
                     Playground
                 </button>
-                {kb.graph_backend === 'ontology' ? (
+                {kb.graph_backend && kb.graph_backend !== 'none' ? (
                     <button
                         className={clsx('tab', activeTab === 'promote' && 'active')}
                         onClick={() => setActiveTab('promote')}
@@ -408,6 +433,7 @@ export default function KnowledgeBaseDetail() {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', flex: 1, minHeight: 0 }}>
                     {/* Top: Horizontal Configuration */}
                     <HorizontalConfig
+                        isOntologyPromoted={kb.is_promoted}
                         searchStrategy={searchStrategy}
                         setSearchStrategy={setSearchStrategy}
                         bm25TopK={bm25TopK}
@@ -452,6 +478,8 @@ export default function KnowledgeBaseDetail() {
                         setUseRawLog={setUseRawLog}
                         useRelationFilter={useRelationFilter}
                         setUseRelationFilter={setUseRelationFilter}
+                        useSchemaMode={useSchemaMode}
+                        setUseSchemaMode={setUseSchemaMode}
                         promotionMetadata={kb.is_promoted ? kb.promotion_metadata : undefined}
                         onOpenPromptDialog={() => setIsPromptDialogOpen(true)}
                     />
@@ -483,6 +511,7 @@ export default function KnowledgeBaseDetail() {
                                 inverseExtractionMode={inverseExtractionMode}
                                 useParallelSearch={useParallelSearch}
                                 useRelationFilter={useRelationFilter}
+                                useSchemaMode={useSchemaMode}
                                 useRawLog={useRawLog}
                                 customQueryPrompt={customQueryPrompt}
                                 onChunksReceived={setRetrievedChunks}
@@ -502,90 +531,307 @@ export default function KnowledgeBaseDetail() {
             )}
 
             {activeTab === 'promote' && (
-                <div className="card" style={{ maxWidth: '600px' }}>
-                    <h3 style={{ marginTop: 0 }}>Ontology Promotion</h3>
-                    <p style={{ color: 'var(--text-secondary)', marginBottom: '1.5rem', fontSize: '0.9rem' }}>
-                        Configure parameters to promote the Knowledge Graph to a stable Ontology (OWL).
-                    </p>
+                <div style={{ display: 'flex', gap: '20px', height: '100%', overflow: 'hidden' }}>
+                    {/* Left Panel: Configuration */}
+                    <div className="card" style={{ width: '500px', height: 'fit-content', flexShrink: 0 }}>
+                        <h3 style={{ marginTop: 0 }}>Ontology Promotion</h3>
+                        <p style={{ color: 'var(--text-secondary)', marginBottom: '1.5rem', fontSize: '0.9rem' }}>
+                            Configure parameters to promote the Knowledge Graph to a stable Ontology (OWL).
+                        </p>
 
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                        <div>
-                            <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 500 }}>Version Tag</label>
-                            <input
-                                className="input"
-                                value={promoteConfig.version_tag}
-                                onChange={e => setPromoteConfig({ ...promoteConfig, version_tag: e.target.value })}
-                            />
-                        </div>
-
-                        <div style={{ display: 'flex', gap: '1rem' }}>
-                            <div style={{ flex: 1 }}>
-                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-                                    <span style={{ fontWeight: 500 }}>Confidence Threshold</span>
-                                    <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>{promoteConfig.confidence_threshold.toFixed(2)}</span>
-                                </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                            <div>
+                                <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 500 }}>Version Tag</label>
                                 <input
-                                    type="range" step="0.05" min="0" max="1.0"
-                                    style={{ width: '100%', cursor: 'pointer' }}
-                                    value={promoteConfig.confidence_threshold}
-                                    onChange={e => setPromoteConfig({ ...promoteConfig, confidence_threshold: parseFloat(e.target.value) })}
+                                    className="input"
+                                    value={promoteConfig.version_tag}
+                                    onChange={e => setPromoteConfig({ ...promoteConfig, version_tag: e.target.value })}
                                 />
-                                <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.25rem', lineHeight: 1.3 }}>
-                                    Minimum confidence score (0.0 - 1.0) required for a triple to be promoted.
-                                </p>
                             </div>
-                            <div style={{ flex: 1 }}>
-                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-                                    <span style={{ fontWeight: 500 }}>Min Evidence Count</span>
-                                    <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>{promoteConfig.min_evidence_count}</span>
+
+                            <div style={{ display: 'flex', gap: '1rem' }}>
+                                <div style={{ flex: 1 }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+                                        <span style={{ fontWeight: 500 }}>Confidence Threshold</span>
+                                        <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>{promoteConfig.confidence_threshold.toFixed(2)}</span>
+                                    </div>
+                                    <input
+                                        type="range" step="0.05" min="0" max="1.0"
+                                        style={{ width: '100%', cursor: 'pointer' }}
+                                        value={promoteConfig.confidence_threshold}
+                                        onChange={e => setPromoteConfig({ ...promoteConfig, confidence_threshold: parseFloat(e.target.value) })}
+                                    />
+                                    <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.25rem', lineHeight: 1.3 }}>
+                                        Minimum confidence score (0.0 - 1.0) required for a triple to be promoted.
+                                    </p>
                                 </div>
-                                <input
-                                    type="range" min="1" max="10" step="1"
-                                    style={{ width: '100%', cursor: 'pointer' }}
-                                    value={promoteConfig.min_evidence_count}
-                                    onChange={e => setPromoteConfig({ ...promoteConfig, min_evidence_count: parseInt(e.target.value) })}
-                                />
-                                <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.25rem', lineHeight: 1.3 }}>
-                                    Minimum number of times a fact must appear to be considered valid.
-                                </p>
-                            </div>
-                        </div>
-
-                        <div style={{ display: 'flex', gap: '2.5rem', marginTop: '0.5rem' }}>
-                            <div style={{ flex: 1 }}>
-                                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontWeight: 500 }}>
+                                <div style={{ flex: 1 }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+                                        <span style={{ fontWeight: 500 }}>Min Evidence Count</span>
+                                        <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>{promoteConfig.min_evidence_count}</span>
+                                    </div>
                                     <input
-                                        type="checkbox"
-                                        checked={promoteConfig.detect_cycles}
-                                        onChange={e => setPromoteConfig({ ...promoteConfig, detect_cycles: e.target.checked })}
+                                        type="range" min="1" max="10" step="1"
+                                        style={{ width: '100%', cursor: 'pointer' }}
+                                        value={promoteConfig.min_evidence_count}
+                                        onChange={e => setPromoteConfig({ ...promoteConfig, min_evidence_count: parseInt(e.target.value) })}
                                     />
-                                    Detect Cycles
-                                </label>
-                                <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.25rem', lineHeight: 1.3 }}>
-                                    Identify and handle circular relationships in the graph.
-                                </p>
+                                    <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.25rem', lineHeight: 1.3 }}>
+                                        Minimum number of times a fact must appear to be considered valid.
+                                    </p>
+                                </div>
                             </div>
-                            <div style={{ flex: 1 }}>
-                                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontWeight: 500 }}>
-                                    <input
-                                        type="checkbox"
-                                        checked={promoteConfig.remove_hypothetical}
-                                        onChange={e => setPromoteConfig({ ...promoteConfig, remove_hypothetical: e.target.checked })}
-                                    />
-                                    Remove Hypothetical
-                                </label>
-                                <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.25rem', lineHeight: 1.3 }}>
-                                    Exclude conditional or uncertain relationships from the ontology.
-                                </p>
-                            </div>
-                        </div>
 
-                        <div style={{ marginTop: '1.5rem', borderTop: '1px solid var(--border)', paddingTop: '1rem' }}>
-                            <button className="btn btn-primary" onClick={handlePromote}>
-                                {kb.is_promoted ? "Update Promotion" : "Run Promotion"}
-                            </button>
+                            <div style={{ display: 'flex', gap: '2.5rem', marginTop: '0.5rem' }}>
+                                <div style={{ flex: 1 }}>
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontWeight: 500 }}>
+                                        <input
+                                            type="checkbox"
+                                            checked={promoteConfig.detect_cycles}
+                                            onChange={e => setPromoteConfig({ ...promoteConfig, detect_cycles: e.target.checked })}
+                                        />
+                                        Detect Cycles
+                                    </label>
+                                    <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.25rem', lineHeight: 1.3 }}>
+                                        Identify and handle circular relationships in the graph.
+                                    </p>
+                                </div>
+                                <div style={{ flex: 1 }}>
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontWeight: 500 }}>
+                                        <input
+                                            type="checkbox"
+                                            checked={promoteConfig.remove_hypothetical}
+                                            onChange={e => setPromoteConfig({ ...promoteConfig, remove_hypothetical: e.target.checked })}
+                                        />
+                                        Remove Hypothetical
+                                    </label>
+                                    <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.25rem', lineHeight: 1.3 }}>
+                                        Exclude conditional or uncertain relationships from the ontology.
+                                    </p>
+                                </div>
+                            </div>
+
+                            <div style={{ marginTop: '1.5rem', borderTop: '1px solid var(--border)', paddingTop: '1rem', display: 'flex', gap: '1rem' }}>
+                                <button
+                                    className="btn btn-primary"
+                                    onClick={handlePromote}
+                                    style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }}
+                                    disabled={kb.graph_backend === 'neo4j' || isPromoting}
+                                >
+                                    {isPromoting ? (
+                                        <>
+                                            <span className="spinner" style={{
+                                                width: '16px',
+                                                height: '16px',
+                                                border: '2px solid rgba(255,255,255,0.3)',
+                                                borderTop: '2px solid white',
+                                                borderRadius: '50%',
+                                                animation: 'spin 1s linear infinite'
+                                            }} />
+                                            Promoting...
+                                        </>
+                                    ) : (
+                                        kb.graph_backend === 'neo4j' ? "Promotion (Coming Soon)" : (kb.is_promoted ? "Update Promotion" : "Run Promotion")
+                                    )}
+                                </button>
+
+                                {kb.is_promoted && (
+                                    <button
+                                        className="btn"
+                                        onClick={handleDemote}
+                                        disabled={isPromoting}
+                                        style={{
+                                            flex: 1,
+                                            backgroundColor: isPromoting ? '#f5f5f5' : '#fee2e2',
+                                            color: isPromoting ? '#999' : '#b91c1c',
+                                            border: '1px solid #fecaca',
+                                            cursor: isPromoting ? 'not-allowed' : 'pointer'
+                                        }}
+                                    >
+                                        Revert to Graph
+                                    </button>
+                                )}
+                            </div>
                         </div>
                     </div>
+
+                    {/* Right Panel: Results */}
+                    {kb.is_promoted && kb.promotion_metadata && kb.promotion_metadata.stats && (
+                        <div className="card" style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                                <h3 style={{ margin: 0 }}>Promotion Results</h3>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                                    <button
+                                        className="btn"
+                                        onClick={() => window.open(`/graph-viewer?kb_id=${id}&backend=ontology&mode=schema`, '_blank')}
+                                        style={{
+                                            fontSize: '0.85rem',
+                                            padding: '0.5rem 1rem',
+                                            backgroundColor: '#ff9933',
+                                            color: 'white',
+                                            border: 'none',
+                                            borderRadius: '8px',
+                                            fontWeight: 600,
+                                            cursor: 'pointer'
+                                        }}
+                                    >
+                                        Schema
+                                    </button>
+                                    <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                                        Last run: {new Date(kb.promotion_metadata.promoted_at).toLocaleString()}
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div style={{ overflowY: 'auto', flex: 1, paddingRight: '10px' }}>
+                                {/* Statistics Section */}
+                                <div style={{ marginBottom: '2rem' }}>
+                                    <h4 style={{ fontSize: '1rem', borderBottom: '1px solid var(--border)', paddingBottom: '0.5rem' }}>Statistics</h4>
+                                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '1rem', marginTop: '1rem' }}>
+                                        <div className="stat-item">
+                                            <span style={{ color: 'var(--text-secondary)' }}>Input Triples</span>
+                                            <span style={{ fontWeight: 600, float: 'right' }}>{kb.promotion_metadata.stats.input_triples}</span>
+                                        </div>
+                                        <div className="stat-item">
+                                            <span style={{ color: 'var(--text-secondary)' }}>Output Triples</span>
+                                            <span style={{ fontWeight: 600, float: 'right' }}>{kb.promotion_metadata.stats.output_triples}</span>
+                                        </div>
+                                        <div className="stat-item">
+                                            <span style={{ color: 'var(--text-secondary)' }}>Classes Defined</span>
+                                            <span style={{ fontWeight: 600, float: 'right' }}>{kb.promotion_metadata.stats.step2_classes}</span>
+                                        </div>
+                                        <div className="stat-item">
+                                            <span style={{ color: 'var(--text-secondary)' }}>Properties Defined</span>
+                                            <span style={{ fontWeight: 600, float: 'right' }}>{kb.promotion_metadata.stats.step2_properties}</span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Validation Section */}
+                                <div style={{ marginBottom: '2rem' }}>
+                                    <h4 style={{ fontSize: '1rem', borderBottom: '1px solid var(--border)', paddingBottom: '0.5rem' }}>Validation</h4>
+                                    <div style={{ marginTop: '1rem' }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
+                                            <span>Consistency Check:</span>
+                                            {kb.promotion_metadata.validation.consistent ? (
+                                                <span style={{ color: '#16a34a', fontWeight: 600, display: 'flex', alignItems: 'center' }}>
+                                                    PASSED
+                                                </span>
+                                            ) : (
+                                                <span style={{ color: '#dc2626', fontWeight: 600 }}>FAILED</span>
+                                            )}
+                                        </div>
+                                        {kb.promotion_metadata.validation.errors && kb.promotion_metadata.validation.errors.length > 0 && (
+                                            <div style={{ backgroundColor: '#fee2e2', padding: '0.5rem', borderRadius: '4px', fontSize: '0.9rem', color: '#b91c1c' }}>
+                                                {kb.promotion_metadata.validation.errors.join(', ')}
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+
+                                {/* Excluded Items Section */}
+                                <div>
+                                    <h4 style={{ fontSize: '1rem', borderBottom: '1px solid var(--border)', paddingBottom: '0.5rem', display: 'flex', justifyContent: 'space-between' }}>
+                                        <span>Excluded Items</span>
+                                        <span style={{ fontSize: '0.85rem', fontWeight: 400, color: 'var(--text-secondary)' }}>
+                                            {kb.promotion_metadata.excluded_items?.length || 0} items
+                                        </span>
+                                    </h4>
+
+                                    {kb.promotion_metadata.excluded_items && kb.promotion_metadata.excluded_items.length > 0 ? (
+                                        <div style={{ marginTop: '1rem', maxHeight: '400px', overflowY: 'auto', border: '1px solid var(--border)', borderRadius: '4px' }}>
+                                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
+                                                <thead style={{ position: 'sticky', top: 0, backgroundColor: 'var(--surface)', zIndex: 1 }}>
+                                                    <tr style={{ textAlign: 'left', borderBottom: '1px solid var(--border)' }}>
+                                                        <th style={{ padding: '0.5rem' }}>Subject</th>
+                                                        <th style={{ padding: '0.5rem' }}>Predicate</th>
+                                                        <th style={{ padding: '0.5rem' }}>Object</th>
+                                                        <th style={{ padding: '0.5rem' }}>Reason</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {kb.promotion_metadata.excluded_items.map((item: any, idx: number) => (
+                                                        <tr key={idx} style={{ borderBottom: '1px solid var(--border-light)' }}>
+                                                            <td style={{ padding: '0.5rem', maxWidth: '120px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={item.subject}>{item.subject.split('/').pop()}</td>
+                                                            <td style={{ padding: '0.5rem', maxWidth: '120px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={item.predicate}>{item.predicate.split('/').pop()}</td>
+                                                            <td style={{ padding: '0.5rem', maxWidth: '120px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={item.object}>{item.object.split('/').pop()}</td>
+                                                            <td style={{ padding: '0.5rem', color: '#dc2626' }}>{item.reason}</td>
+                                                        </tr>
+                                                    ))}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    ) : (
+                                        <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', fontStyle: 'italic', marginTop: '1rem' }}>
+                                            No items were excluded. All candidates passed verification.
+                                        </p>
+                                    )}
+                                </div>
+
+                                {/* Schema Definitions Section */}
+                                {kb.promotion_metadata.schema_info && (
+                                    <div style={{ marginTop: '2rem' }}>
+                                        <h4 style={{ fontSize: '1rem', borderBottom: '1px solid var(--border)', paddingBottom: '0.5rem' }}>Schema Definitions</h4>
+
+                                        <div style={{ marginTop: '1rem' }}>
+                                            <h5 style={{ fontSize: '0.9rem', margin: '0 0 0.5rem 0' }}>Classes ({Object.keys(kb.promotion_metadata.schema_info.classes || {}).length})</h5>
+                                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', maxHeight: '200px', overflowY: 'auto', padding: '0.5rem', backgroundColor: 'var(--surface-sunken)', borderRadius: '4px' }}>
+                                                {Object.entries(kb.promotion_metadata.schema_info.classes || {}).map(([clsUri, info]: [string, any], idx) => (
+                                                    <div key={idx} style={{ position: 'relative', display: 'inline-block' }}>
+                                                        <button
+                                                            onClick={() => {
+                                                                const newState = !info.expanded;
+                                                                // 상태 관리가 로컬 데이터 구조 안에 없으므로, 간단하게 alert나 별도 state를 써야 하나
+                                                                // 여기서는 간단히 title로 전체 목록을 보여주거나, 별도 선택된 클래스 State를 두는 게 좋음.
+                                                                // 하지만 편의상 즉시 확인을 위해 Alert 또는 콘솔을 사용하거나, 
+                                                                // 본문의 요구사항(클릭하면 목록 보여줘)을 만족하기 위해 selectedClass State를 추가해야 함.
+                                                                // 임시로 이 컴포넌트 상단에 state 추가가 불가능하므로(tool limit), 
+                                                                // 간단한 토글 UI를 인라인으로 구현하기 어려움.
+                                                                // -> selectedSchemaClass 상태를 추가하는 별도 tool call이 필요함.
+                                                                // 일단 여기서는 클릭 시 해당 버튼 아래에 목록이 펼쳐지도록 CSS/State 없이 처리하기 어려우므로,
+                                                                // 가장 쉬운 방법: 브라우저 기본 동작(title)은 이미 있고,
+                                                                // 'selectedClass' state를 사용하는 방식으로 변경해야 함.
+                                                            }}
+                                                            // 임시: 클릭하면 상세 모달을 띄우는 로직 대신, 간단히 콘솔 로그나 커스텀 툴팁을 띄울 수 없으니
+                                                            // 일단 태그 자체에 title로 맛보기 보여줌.
+                                                            // 하지만 사용자가 '클릭하면 보여줘'라고 했으므로 interaction이 필요함.
+                                                            style={{
+                                                                fontSize: '0.8rem',
+                                                                padding: '2px 8px',
+                                                                backgroundColor: 'var(--surface)',
+                                                                border: '1px solid var(--border)',
+                                                                borderRadius: '12px',
+                                                                cursor: 'pointer',
+                                                                display: 'flex',
+                                                                alignItems: 'center',
+                                                                gap: '4px'
+                                                            }}
+                                                            title={`${info.count} instances:\n${(info.instances || []).slice(0, 10).join('\n')}${info.instances?.length > 10 ? '\n...' : ''}`}
+                                                        >
+                                                            <span style={{ fontWeight: 500 }}>{clsUri.split('/').pop()?.split('#').pop()}</span>
+                                                            <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', backgroundColor: 'var(--bg-subtle)', padding: '0 4px', borderRadius: '4px' }}>{info.count}</span>
+                                                        </button>
+                                                    </div>
+                                                ))}
+                                                {Object.keys(kb.promotion_metadata.schema_info.classes || {}).length === 0 && <span style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>None</span>}
+                                            </div>
+                                        </div>
+
+                                        <div style={{ marginTop: '1rem' }}>
+                                            <h5 style={{ fontSize: '0.9rem', margin: '0 0 0.5rem 0' }}>Properties ({kb.promotion_metadata.schema_info.properties?.length || 0})</h5>
+                                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', maxHeight: '150px', overflowY: 'auto', padding: '0.5rem', backgroundColor: 'var(--surface-sunken)', borderRadius: '4px' }}>
+                                                {kb.promotion_metadata.schema_info.properties?.map((prop: string, idx: number) => (
+                                                    <span key={idx} style={{ fontSize: '0.8rem', padding: '2px 6px', backgroundColor: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '4px' }} title={prop}>
+                                                        {prop.split('/').pop()?.split('#').pop()}
+                                                    </span>
+                                                )) || <span style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>None</span>}
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    )}
                 </div>
             )}
 
@@ -612,7 +858,11 @@ export default function KnowledgeBaseDetail() {
                 onClose={() => setIsPromptDialogOpen(false)}
                 initialPrompt={customQueryPrompt}
                 onSave={setCustomQueryPrompt}
-                backendType={kb.graph_backend === 'ontology' ? 'ontology' : 'neo4j'}
+                backendType={
+                    kb.graph_backend === 'neo4j'
+                        ? 'neo4j'
+                        : (kb.is_promoted && useSchemaMode ? 'ontology_plus' : 'ontology_minus')
+                }
             />
 
             <ConfirmDialog

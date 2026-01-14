@@ -53,11 +53,34 @@ class FusekiBackend(GraphBackend):
                 
                 print(f"DEBUG: [Fuseki] Generating SPARQL for: {query_text} (inverse_relation='{inv_mode}', enable_inverse_search={enable_inverse})")
                 
+                # [NEW] Fetch Schema Info from DB (Moved up)
+                # Only fetch schema if use_schema_mode is True (default ON)
+                use_schema_mode = kwargs.get("use_schema_mode", True)
+                schema_info = None
+                
+                if use_schema_mode:
+                    try:
+                        from app.models.knowledge_base import KnowledgeBase
+                        from app.core.database import SessionLocal
+                        from sqlalchemy.future import select
+                        
+                        async with SessionLocal() as db:
+                             result = await db.execute(select(KnowledgeBase).filter(KnowledgeBase.id == kb_id))
+                             kb = result.scalars().first()
+                             if kb and kb.is_promoted and kb.promotion_metadata:
+                                 schema_info = kb.promotion_metadata.get("schema_info")
+                                 print(f"DEBUG: [Fuseki] Schema Mode ON. Found schema info for promoted KB. Classes: {len(schema_info.get('classes', {}))}")
+                    except Exception as e_schema:
+                        print(f"WARNING: [Fuseki] Failed to fetch schema info: {e_schema}")
+                else:
+                    print("DEBUG: [Fuseki] Schema Mode OFF. Using basic graph search (no ontology inference).")
+
                 # Build custom prompt with inverse relation instruction
                 custom_prompt = kwargs.get("custom_query_prompt") or ""
                 
-                # Add strict instruction when inverse search is disabled
-                if inv_mode == "none":
+                # Add strict instruction when inverse search is disabled ONLY for non-promoted KBs
+                # If Promoted (schema_info exists), we want Active Inference regardless of UI toggle
+                if inv_mode == "none" and not schema_info:
                     no_inverse_instruction = """
 [중요 제약사항 - 반드시 준수]
 - 역방향 관계(^) 연산자를 절대 사용하지 마세요.
@@ -67,22 +90,27 @@ class FusekiBackend(GraphBackend):
 - DB에 저장된 정확한 방향의 관계만 검색하세요.
 """
                     custom_prompt = no_inverse_instruction + custom_prompt
-                    
+
                 gen_result = self.generator.generate(
                     question=query_text,
                     context=f"Entities: {', '.join(entities)}",
                     mode="ontology",
                     inverse_relation=inv_mode,
-                    custom_prompt=custom_prompt if custom_prompt else None
+                    custom_prompt=custom_prompt if custom_prompt else None,
+                    schema_info=schema_info
                 )
                 
                 generated_sparql = gen_result.get("sparql")
                 if generated_sparql:
+                    # Prepend schema usage comment for Debug Log
+                    if schema_info:
+                         generated_sparql = f"# [Used Promoted Ontology Schema]\n{generated_sparql}"
+
                     print(f"DEBUG: [Fuseki] Generated SPARQL:\n{generated_sparql}")
                     
                     # Remove any existing PREFIX declarations from LLM-generated query
                     # to avoid conflicts with our correct prefixes
-                    import re
+                    # to avoid conflicts with our correct prefixes
                     sparql_body = re.sub(r'PREFIX\s+\w+:\s*<[^>]+>\s*', '', generated_sparql, flags=re.IGNORECASE)
                     sparql_body = sparql_body.strip()
                     
@@ -145,7 +173,7 @@ class FusekiBackend(GraphBackend):
 
                         return {
                             "chunk_ids": discovered_chunk_ids, # 오프셋에서 발견된 청크 ID
-                            "sparql_query": sparql_query,
+                            "sparql_query": generated_sparql.strip(),
                             "triples": triples_with_offset,
                             "found_entities": list(found_entities) # Pass this back!
                         }
@@ -154,11 +182,12 @@ class FusekiBackend(GraphBackend):
                         
                         # If inverse search is disabled and LLM query returned no results,
                         # don't fall back to generic search - return empty results
-                        if inv_mode == "none":
+                        # UNLESS it is a promoted KB (schema_info exists), then we want fallback to capture anything.
+                        if inv_mode == "none" and not schema_info:
                             print("DEBUG: [Fuseki] Inverse search disabled. Skipping fallback to preserve strict directional search.")
                             return {
                                 "chunk_ids": [],
-                                "sparql_query": sparql_query,
+                                "sparql_query": generated_sparql.strip(),
                                 "triples": [],
                                 "found_entities": []
                             }

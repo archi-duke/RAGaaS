@@ -468,135 +468,132 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                             </div>
 
                             <div style={{ display: 'grid', gridTemplateColumns: 'minmax(140px, 1fr) minmax(140px, 1fr) minmax(180px, 1.2fr)', gap: '1.5rem' }}>
-                                {/* Column 1: Summary Info */}
-                                <div style={{ fontSize: '0.85rem', color: '#334155' }}>
-                                    <div style={{ fontWeight: 'bold', marginBottom: '6px', color: '#000' }}>Chunk</div>
-                                    <div style={{ display: 'flex', gap: '1rem', paddingLeft: '0.5rem', marginBottom: '0.75rem' }}>
-                                        <div style={{ color: '#64748b' }}>
-                                            <div>Size : </div>
-                                            <div>Overlap : </div>
-                                        </div>
-                                        <div style={{ fontWeight: 500 }}>
-                                            <div>{kbConfig?.chunking_config?.chunk_size || '500'}</div>
-                                            <div>{kbConfig?.chunking_config?.overlap || '100'}</div>
-                                        </div>
+                                <div style={{ fontWeight: 'bold', marginBottom: '6px', color: '#000' }}>문서 청크 설정</div>
+                                <div style={{ display: 'flex', gap: '1rem', paddingLeft: '0.5rem', marginBottom: '0.75rem' }}>
+                                    <div style={{ color: '#64748b' }}>
+                                        <div>크기 : </div>
+                                        <div>중첩 : </div>
                                     </div>
-
-                                    <div style={{ marginBottom: '0.75rem' }}>
-                                        <span style={{ fontWeight: 'bold', color: '#000' }}>LLM Model : </span>
-                                        <div style={{ color: '#64748b', paddingLeft: '0.5rem', marginTop: '0.2rem' }}>gpt-4o-mini</div>
-                                    </div>
-
-                                    <div>
-                                        <span style={{ fontWeight: 'bold', color: '#000' }}>RAG Strategy : </span>
-                                        <div style={{ color: '#64748b', paddingLeft: '0.5rem', marginTop: '0.2rem' }}>{chunkingStrategy === 'size' ? 'Fixed Size' : chunkingStrategy}</div>
+                                    <div style={{ fontWeight: 500 }}>
+                                        <div>{kbConfig?.chunking_config?.chunk_size || '500'}</div>
+                                        <div>{kbConfig?.chunking_config?.overlap || '100'}</div>
                                     </div>
                                 </div>
 
-                                {/* Column 2: Graph Section Controls */}
-                                <div style={{ fontSize: '0.85rem' }}>
-                                    <div style={{ fontWeight: 'bold', marginBottom: '6px', color: '#000' }}>Graph Section</div>
-                                    <div style={{ marginBottom: '0.75rem' }}>
-                                        <div style={{ color: '#334155', marginBottom: '0.25rem' }}>Size</div>
-                                        <input
-                                            type="number"
-                                            className="input"
-                                            value={graphParams.graph_section_size}
-                                            onChange={(e) => setGraphParams({ ...graphParams, graph_section_size: parseInt(e.target.value) || 0 })}
-                                            style={{ padding: '0.4rem 0.6rem', fontSize: '0.85rem' }}
-                                        />
-                                    </div>
-                                    <div style={{ marginBottom: '0.75rem' }}>
-                                        <div style={{ color: '#334155', marginBottom: '0.25rem' }}>Overlap</div>
-                                        <input
-                                            type="number"
-                                            className="input"
-                                            value={graphParams.graph_section_overlap}
-                                            onChange={(e) => setGraphParams({ ...graphParams, graph_section_overlap: parseInt(e.target.value) || 0 })}
-                                            style={{ padding: '0.4rem 0.6rem', fontSize: '0.85rem' }}
-                                        />
-                                    </div>
-                                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', marginTop: '0.5rem' }}>
-                                        <input
-                                            type="checkbox"
-                                            checked={graphParams.oe_section_aware}
-                                            onChange={(e) => setGraphParams({ ...graphParams, oe_section_aware: e.target.checked })}
-                                            style={{ width: '0.9rem', height: '0.9rem' }}
-                                        />
-                                        <span style={{ color: '#334155', fontWeight: 500 }}>Section Aware</span>
-                                    </label>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.5rem' }}>
-                                        <input
-                                            type="checkbox"
-                                            checked={graphParams.extract_inverse_relations}
-                                            onChange={(e) => setGraphParams({ ...graphParams, extract_inverse_relations: e.target.checked })}
-                                            style={{ width: '0.9rem', height: '0.9rem', cursor: 'pointer' }}
-                                        />
-                                        <LabelWithTooltip
-                                            label="Inverse Relations"
-                                            tooltip="스승-제자, 학생-선생 등 역관계를 자동으로 생성합니다. 예: (A, 스승, B) → (B, 제자, A)"
-                                        />
-                                    </div>
+                                <div style={{ marginBottom: '0.75rem' }}>
+                                    <span style={{ fontWeight: 'bold', color: '#000' }}>LLM 모델 : </span>
+                                    <div style={{ color: '#64748b', paddingLeft: '0.5rem', marginTop: '0.2rem' }}>gpt-4o-mini</div>
                                 </div>
 
-                                {/* Column 3: Sliders */}
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-                                    <div>
-                                        <LabelWithTooltip
-                                            label={`Confidence: ${graphParams.confidence_threshold}`}
-                                            tooltip="추출된 트리플의 최소 신뢰도 점수입니다."
-                                        />
-                                        <input
-                                            type="range"
-                                            min="0"
-                                            max="1"
-                                            step="0.1"
-                                            value={graphParams.confidence_threshold}
-                                            onChange={(e) => setGraphParams({ ...graphParams, confidence_threshold: parseFloat(e.target.value) })}
-                                            style={{ width: '100%', cursor: 'pointer', accentColor: '#3b82f6' }}
-                                        />
-                                    </div>
-                                    <div>
-                                        <LabelWithTooltip
-                                            label={`Max Candidates: ${graphParams.max_candidates_per_chunk}`}
-                                            tooltip="청크당 추출할 최대 트리플 수입니다."
-                                        />
-                                        <input
-                                            type="range"
-                                            min="10"
-                                            max="100"
-                                            step="10"
-                                            value={graphParams.max_candidates_per_chunk}
-                                            onChange={(e) => setGraphParams({ ...graphParams, max_candidates_per_chunk: parseInt(e.target.value) })}
-                                            style={{ width: '100%', cursor: 'pointer', accentColor: '#3b82f6' }}
-                                        />
-                                        <button
-                                            className="btn"
-                                            style={{
-                                                display: 'flex', alignItems: 'center', gap: '0.4rem',
-                                                fontSize: '0.75rem', color: '#64748b', background: '#f1f5f9',
-                                                border: '1px solid #e2e8f0', borderRadius: '4px', padding: '0.4rem',
-                                                width: '100%', justifyContent: 'center', marginTop: '0.5rem'
-                                            }}
-                                            onClick={() => setShowRuleModal(true)}
-                                        >
-                                            <Settings size={12} />
-                                            Extraction Rule
-                                        </button>
-                                        <button
-                                            className="btn"
-                                            style={{
-                                                display: 'flex', alignItems: 'center', gap: '0.4rem',
-                                                fontSize: '0.75rem', color: '#64748b', background: '#f1f5f9',
-                                                border: '1px solid #e2e8f0', borderRadius: '4px', padding: '0.4rem',
-                                                width: '100%', justifyContent: 'center', marginTop: '0.5rem'
-                                            }}
-                                            onClick={() => setShowPromptModal(true)}
-                                        >
-                                            <FileCode size={12} />
-                                            Extraction Prompt
-                                        </button>
-                                    </div>
+                                <div>
+                                    <span style={{ fontWeight: 'bold', color: '#000' }}>RAG 전략 : </span>
+                                    <div style={{ color: '#64748b', paddingLeft: '0.5rem', marginTop: '0.2rem' }}>{chunkingStrategy === 'size' ? '고정 크기 (Fixed Size)' : chunkingStrategy}</div>
+                                </div>
+                            </div>
+
+                            {/* Column 2: Graph Section Controls */}
+                            <div style={{ fontSize: '0.85rem' }}>
+                                <div style={{ fontWeight: 'bold', marginBottom: '6px', color: '#000' }}>그래프 추출 범위</div>
+                                <div style={{ marginBottom: '0.75rem' }}>
+                                    <div style={{ color: '#334155', marginBottom: '0.25rem' }}>크기 (Size)</div>
+                                    <input
+                                        type="number"
+                                        className="input"
+                                        value={graphParams.graph_section_size}
+                                        onChange={(e) => setGraphParams({ ...graphParams, graph_section_size: parseInt(e.target.value) || 0 })}
+                                        style={{ padding: '0.4rem 0.6rem', fontSize: '0.85rem' }}
+                                    />
+                                </div>
+                                <div style={{ marginBottom: '0.75rem' }}>
+                                    <div style={{ color: '#334155', marginBottom: '0.25rem' }}>중첩 (Overlap)</div>
+                                    <input
+                                        type="number"
+                                        className="input"
+                                        value={graphParams.graph_section_overlap}
+                                        onChange={(e) => setGraphParams({ ...graphParams, graph_section_overlap: parseInt(e.target.value) || 0 })}
+                                        style={{ padding: '0.4rem 0.6rem', fontSize: '0.85rem' }}
+                                    />
+                                </div>
+                                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', marginTop: '0.5rem' }}>
+                                    <input
+                                        type="checkbox"
+                                        checked={graphParams.oe_section_aware}
+                                        onChange={(e) => setGraphParams({ ...graphParams, oe_section_aware: e.target.checked })}
+                                        style={{ width: '0.9rem', height: '0.9rem' }}
+                                    />
+                                    <span style={{ color: '#334155', fontWeight: 500 }}>문단 인식 (Section Aware)</span>
+                                </label>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.5rem' }}>
+                                    <input
+                                        type="checkbox"
+                                        checked={graphParams.extract_inverse_relations}
+                                        onChange={(e) => setGraphParams({ ...graphParams, extract_inverse_relations: e.target.checked })}
+                                        style={{ width: '0.9rem', height: '0.9rem', cursor: 'pointer' }}
+                                    />
+                                    <LabelWithTooltip
+                                        label="역관계 추출 (Inverse Rel.)"
+                                        tooltip="스승-제자, 학생-선생 등 역관계를 자동으로 생성합니다. 예: (A, 스승, B) → (B, 제자, A)"
+                                    />
+                                </div>
+                            </div>
+
+                            {/* Column 3: Sliders */}
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+                                <div>
+                                    <LabelWithTooltip
+                                        label={`신뢰도: ${graphParams.confidence_threshold}`}
+                                        tooltip="추출된 트리플의 최소 신뢰도 점수입니다."
+                                    />
+                                    <input
+                                        type="range"
+                                        min="0"
+                                        max="1"
+                                        step="0.1"
+                                        value={graphParams.confidence_threshold}
+                                        onChange={(e) => setGraphParams({ ...graphParams, confidence_threshold: parseFloat(e.target.value) })}
+                                        style={{ width: '100%', cursor: 'pointer', accentColor: '#3b82f6' }}
+                                    />
+                                </div>
+                                <div>
+                                    <LabelWithTooltip
+                                        label={`최대 추출 수: ${graphParams.max_candidates_per_chunk}`}
+                                        tooltip="청크당 추출할 최대 트리플 수입니다."
+                                    />
+                                    <input
+                                        type="range"
+                                        min="10"
+                                        max="100"
+                                        step="10"
+                                        value={graphParams.max_candidates_per_chunk}
+                                        onChange={(e) => setGraphParams({ ...graphParams, max_candidates_per_chunk: parseInt(e.target.value) })}
+                                        style={{ width: '100%', cursor: 'pointer', accentColor: '#3b82f6' }}
+                                    />
+                                    <button
+                                        className="btn"
+                                        style={{
+                                            display: 'flex', alignItems: 'center', gap: '0.4rem',
+                                            fontSize: '0.75rem', color: '#64748b', background: '#f1f5f9',
+                                            border: '1px solid #e2e8f0', borderRadius: '4px', padding: '0.4rem',
+                                            width: '100%', justifyContent: 'center', marginTop: '0.5rem'
+                                        }}
+                                        onClick={() => setShowRuleModal(true)}
+                                    >
+                                        <Settings size={12} />
+                                        추출 규칙 설정 (Rules)
+                                    </button>
+                                    <button
+                                        className="btn"
+                                        style={{
+                                            display: 'flex', alignItems: 'center', gap: '0.4rem',
+                                            fontSize: '0.75rem', color: '#64748b', background: '#f1f5f9',
+                                            border: '1px solid #e2e8f0', borderRadius: '4px', padding: '0.4rem',
+                                            width: '100%', justifyContent: 'center', marginTop: '0.5rem'
+                                        }}
+                                        onClick={() => setShowPromptModal(true)}
+                                    >
+                                        <FileCode size={12} />
+                                        프롬프트 설정 (Prompt)
+                                    </button>
                                 </div>
                             </div>
                         </div>
@@ -613,7 +610,7 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                         </button>
                     </div>
                 </div>
-            </div>
+            </div >
 
             <MessageDialog
                 isOpen={messageDialog.isOpen}

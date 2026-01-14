@@ -27,7 +27,7 @@ export const kbApi = {
     saveExtractionRules: (content: string) => api.post('/knowledge-bases/extraction-rules/save', { content }),
     getExtractionPrompt: () => api.get('/knowledge-bases/extraction-prompt/content'),
     saveExtractionPrompt: (content: string) => api.post('/knowledge-bases/extraction-prompt/save', { content }),
-    getQueryPrompt: (type: 'ontology' | 'neo4j' = 'ontology') => api.get('/knowledge-bases/query-prompt/content', { params: { type } }),
+    getQueryPrompt: (type: 'ontology_plus' | 'ontology_minus' | 'neo4j' = 'ontology_minus') => api.get('/knowledge-bases/query-prompt/content', { params: { type } }),
 };
 
 export const docApi = {
@@ -109,6 +109,8 @@ export const retrievalApi = {
         inverse_extraction_mode?: 'always' | 'auto';
         // Graph Relation Filter
         use_relation_filter?: boolean;
+        // Schema Mode (for Promoted Ontology)
+        use_schema_mode?: boolean;
         use_raw_log?: boolean;
         custom_query_prompt?: string;
     }) => api.post(`/knowledge-bases/${kbId}/chat`, data),

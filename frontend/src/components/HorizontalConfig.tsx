@@ -61,6 +61,11 @@ interface HorizontalConfigProps {
     chunkingStrategy?: string;
     graphBackend?: string;
     promotionMetadata?: any;
+    isOntologyPromoted?: boolean;
+
+    // Schema Mode (for Promoted Ontology)
+    useSchemaMode?: boolean;
+    setUseSchemaMode?: (value: boolean) => void;
 
     // Debug
     useRawLog?: boolean;
@@ -138,6 +143,9 @@ export default function HorizontalConfig({
     graphBackend,
     promotionMetadata,
     useRawLog,
+    isOntologyPromoted,
+    useSchemaMode,
+    setUseSchemaMode,
     setUseRawLog,
     onOpenPromptDialog
 }: HorizontalConfigProps) {
@@ -225,7 +233,7 @@ export default function HorizontalConfig({
                                     onChange={() => handleStrategyChange('hybrid_graph')}
                                     style={{ accentColor: 'var(--primary)' }}
                                 />
-                                Hybrid ({graphBackend === 'neo4j' ? 'Graph' : 'Ontology'}→ANN)
+                                Hybrid ({(graphBackend === 'neo4j' || !isOntologyPromoted) ? 'Graph' : 'Ontology'}→ANN)
                             </label>
                         )}
                         {/* Fallback for non-graph or other modes */}
@@ -250,24 +258,47 @@ export default function HorizontalConfig({
                 {/* Column 2: Ontology Settings */}
                 {isGraphRAG && (
                     <div style={{ minWidth: '300px' }}>
-                        <label style={{ ...labelStyle, marginBottom: '0.8rem' }}>{graphBackend === 'neo4j' ? 'Graph Settings' : 'Ontology Settings'}</label>
+                        <label style={{ ...labelStyle, marginBottom: '0.8rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            {(graphBackend === 'neo4j' || !isOntologyPromoted) ? 'Graph Settings' : 'Ontology Settings'}
+                            {graphBackend === 'ontology' && isOntologyPromoted && (
+                                <button
+                                    onClick={() => setUseSchemaMode?.(!useSchemaMode)}
+                                    style={{
+                                        fontSize: '0.7em',
+                                        color: useSchemaMode ? '#fff' : '#1e40af', // Dark Royal Blue
+                                        backgroundColor: useSchemaMode ? '#1e40af' : '#eff6ff', // Blue 800 / 50
+                                        border: '1px solid #1e40af',
+                                        padding: '2px 10px',
+                                        borderRadius: '12px',
+                                        fontWeight: 600,
+                                        lineHeight: '1.2',
+                                        cursor: 'pointer',
+                                        transition: 'all 0.2s ease',
+                                        marginLeft: '8px'
+                                    }}
+                                >
+                                    {useSchemaMode ? 'Schema On' : 'Schema Off'}
+                                </button>
+                            )}
+                        </label>
 
                         <div style={{ display: 'flex', gap: '2rem' }}>
                             {/* Sub-col 1: Hops */}
-                            <div style={{ width: '140px' }}>
+                            <div style={{ width: '140px', opacity: useSchemaMode ? 0.5 : 1 }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
                                     <span style={{ fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Graph Hops</span>
                                 </div>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-                                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.9rem', cursor: 'pointer' }}>
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.9rem', cursor: useSchemaMode ? 'not-allowed' : 'pointer' }}>
                                         <input
                                             type="checkbox"
-                                            checked={isAutoHops}
+                                            checked={useSchemaMode ? true : isAutoHops}
                                             onChange={(e) => handleAutoToggle(e.target.checked)}
+                                            disabled={useSchemaMode}
                                         />
                                         Auto
                                     </label>
-                                    <span style={{ fontWeight: 600, fontSize: '1rem', color: graphHops >= 4 ? '#f97316' : 'var(--primary)' }}>{graphHops}</span>
+                                    <span style={{ fontWeight: 600, fontSize: '1rem', color: graphHops >= 4 ? '#f97316' : 'var(--primary)' }}>{useSchemaMode ? 'Auto' : graphHops}</span>
                                 </div>
 
                                 <div style={{ position: 'relative', height: '24px', display: 'flex', alignItems: 'center' }}>
@@ -277,24 +308,16 @@ export default function HorizontalConfig({
                                         max="5"
                                         value={graphHops}
                                         onChange={(e) => setGraphHops(Number(e.target.value))}
-                                        disabled={isAutoHops}
+                                        disabled={isAutoHops || useSchemaMode}
                                         className="custom-range"
                                         style={{
                                             width: '100%',
-                                            cursor: isAutoHops ? 'not-allowed' : 'pointer',
+                                            cursor: (isAutoHops || useSchemaMode) ? 'not-allowed' : 'pointer',
                                             height: '6px',
                                             borderRadius: '3px',
                                             appearance: 'none',
                                             outline: 'none',
-                                            opacity: isAutoHops ? 0.5 : 1,
-                                            // Dynamic background logic:
-                                            // 1. Blue progress bar up to current value (val - min) / (max - min)
-                                            // 2. Gray track for safe zone (up to 3)
-                                            // 3. Orange track for danger zone (4 to 5)
-                                            // Range 1-5: 0% at 1, 25% at 2, 50% at 3, 75% at 4, 100% at 5.
-                                            // Danger zone starts at 3.5 (62.5%) visually? Or just simple segments.
-                                            // Let's implement simpler: Blue (progress) | Gray (remaining safe) | Orange (danger)
-                                            // Percentage for progress: ((val - 1) / 4) * 100
+                                            opacity: (isAutoHops || useSchemaMode) ? 0.5 : 1,
                                             background: `linear-gradient(to right,
                                                 #3b82f6 0%,
                                                 #3b82f6 ${((graphHops - 1) / 4) * 100}%,
@@ -305,7 +328,7 @@ export default function HorizontalConfig({
                                         }}
                                     />
                                 </div>
-                                {graphHops >= 4 && (
+                                {graphHops >= 4 && !useSchemaMode && (
                                     <div style={{
                                         position: 'absolute',
                                         marginTop: '0rem',
@@ -322,20 +345,32 @@ export default function HorizontalConfig({
 
                             {/* Sub-col 2: Filters */}
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-                                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.9rem', fontWeight: 500 }}>
+                                <label style={{
+                                    display: 'flex', alignItems: 'center', gap: '0.5rem',
+                                    cursor: useSchemaMode ? 'not-allowed' : 'pointer',
+                                    fontSize: '0.9rem', fontWeight: 500,
+                                    opacity: useSchemaMode ? 0.5 : 1
+                                }}>
                                     <input
                                         type="checkbox"
                                         checked={useRelationFilter ?? true}
                                         onChange={(e) => setUseRelationFilter?.(e.target.checked)}
+                                        disabled={useSchemaMode}
                                     />
                                     Relation Filter
                                 </label>
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.9rem', fontWeight: 500 }}>
+                                    <label style={{
+                                        display: 'flex', alignItems: 'center', gap: '0.5rem',
+                                        cursor: useSchemaMode ? 'not-allowed' : 'pointer',
+                                        fontSize: '0.9rem', fontWeight: 500,
+                                        opacity: useSchemaMode ? 0.5 : 1
+                                    }}>
                                         <input
                                             type="checkbox"
                                             checked={enableInverseSearch || false}
                                             onChange={(e) => setEnableInverseSearch?.(e.target.checked)}
+                                            disabled={useSchemaMode}
                                         />
                                         Inverse Relations
                                     </label>

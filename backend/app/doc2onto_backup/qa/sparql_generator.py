@@ -69,11 +69,23 @@ SELECT DISTINCT ?teacherLabel WHERE {
         self.llm_model = llm_model
         self.api_key = api_key or os.environ.get("OPENAI_API_KEY", "")
 
-    def generate(self, question: str, context: Optional[str] = None, mode: str = "ontology", inverse_relation: str = "auto", custom_prompt: Optional[str] = None) -> Dict:
-        """자연어 질문을 SPARQL로 변환 (custom_prompt 지원)"""
+    def generate(self, question: str, context: Optional[str] = None, mode: str = "ontology", inverse_relation: str = "auto", custom_prompt: Optional[str] = None, schema_info: Optional[Dict] = None) -> Dict:
+        """자연어 질문을 SPARQL로 변환 (custom_prompt, schema_info 지원)"""
         
         system_prompt = self.SYSTEM_PROMPT
-        
+
+        # [NEW] Schema Injection
+        if schema_info:
+            classes_part = schema_info.get("classes", {})
+            c_list = list(classes_part.keys()) if isinstance(classes_part, dict) else classes_part
+            p_list = schema_info.get("properties", [])
+            
+            # Format nicely
+            c_str = "\n".join([f"- {c.split('/')[-1].split('#')[-1]} (<{c}>)" for c in sorted(c_list)[:100]])
+            p_str = "\n".join([f"- {p.split('/')[-1].split('#')[-1]} (<{p}>)" for p in sorted(p_list)[:100]])
+            
+            system_prompt += f"\n\n[DEFINED ONTOLOGY SCHEMA]\nRefer to these Classes and Properties when generating SPARQL:\n\n**Classes**:\n{c_str}\n\n**Properties**:\n{p_str}\n"
+
         # Add instruction for inverse relation
         if inverse_relation == "auto" or inverse_relation == "always":
             system_prompt += "\n[추가 지침]\n- 관계 탐색 시 Property Path `|` 와 역방향 `^` 연산자를 적극 활용하여 방향성 문제를 해결하세요 (예: `rel:스승|^rel:제자`)."

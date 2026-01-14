@@ -125,18 +125,19 @@ export default function Dashboard() {
                                                     <span style={{
                                                         backgroundColor:
                                                             kb.graph_backend === 'ontology'
-                                                                ? (kb.is_promoted ? '#f97316' : '#3b82f6')
+                                                                ? (kb.is_promoted ? '#1e40af' : '#bfdbfe') // #bfdbfe is ~30% brighter than #2563eb
                                                                 : '#166534',
-                                                        color: 'white',
+                                                        color: kb.graph_backend === 'ontology' && !kb.is_promoted ? '#1e40af' : 'white', // Darker text for light background
                                                         fontSize: '0.7rem',
                                                         padding: '2px 8px',
-                                                        borderRadius: '10px',
-                                                        fontWeight: 600,
+                                                        borderRadius: '12px',
+                                                        fontWeight: 700,
                                                         lineHeight: 1,
-                                                        marginLeft: '4px'
+                                                        marginLeft: '4px',
+                                                        boxShadow: '0 1px 2px rgba(0,0,0,0.1)'
                                                     }}>
-                                                        {kb.graph_backend === 'ontology'
-                                                            ? (kb.is_promoted ? 'Ontology+' : 'Ontology-')
+                                                        {kb.graph_backend === 'ontology' && kb.is_promoted
+                                                            ? 'Ontology'
                                                             : 'Graph'}
                                                     </span>
                                                 )}
