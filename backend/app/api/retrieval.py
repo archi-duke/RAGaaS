@@ -84,7 +84,7 @@ async def retrieve_chunks(
         use_multi_pos=request.use_multi_pos,
         bm25_top_k=request.bm25_top_k,
         use_parallel_search=request.use_parallel_search,
-        # Graph specific
+        # Graph specific - 사용자 설정 그대로 전달
         enable_inverse_search=request.enable_inverse_search,
         inverse_extraction_mode=request.inverse_extraction_mode,
         use_relation_filter=request.use_relation_filter
@@ -172,6 +172,25 @@ async def chat_with_kb(
     db: AsyncSession = Depends(get_db)
 ):
     start_time = time.time()
+    
+    # 파라미터 로깅 (프론트엔드 → 백엔드 전달 확인)
+    print("=" * 80)
+    print("📥 [Backend] Received Chat Request")
+    print("=" * 80)
+    print(f"[KB ID] {kb_id}")
+    print(f"[Query] {request.query[:50]}..." if len(request.query) > 50 else f"[Query] {request.query}")
+    print(f"[Strategy] {request.strategy}")
+    print(f"[Graph Settings]")
+    print(f"  - enable_graph_search: {request.enable_graph_search}")
+    print(f"  - graph_hops: {request.graph_hops}")
+    print(f"[Inverse Relation Settings] ⚠️")
+    print(f"  - enable_inverse_search: {request.enable_inverse_search}")
+    print(f"  - inverse_extraction_mode: {request.inverse_extraction_mode}")
+    print(f"[Other]")
+    print(f"  - top_k: {request.top_k}")
+    print(f"  - use_reranker: {request.use_reranker}")
+    print("=" * 80)
+    
     print(f"[DEBUG] Chat Request: brute={request.use_brute_force} bf_top_k={request.brute_force_top_k} bf_thresh={request.brute_force_threshold}")
     """
     Chat endpoint that retrieves relevant chunks and generates an LLM response
@@ -187,12 +206,17 @@ async def chat_with_kb(
     
     # Auto-enable graph search if KB has Graph RAG enabled
     use_graph_search = request.enable_graph_search
+    target_strategy = request.strategy
+    
     if kb.enable_graph_rag and kb.graph_backend:
         use_graph_search = True
-        print(f"[DEBUG] Auto-enabled graph search for KB with graph_backend={kb.graph_backend}")
+        # If strategy is purely vector-based, switch to hybrid to utilize graph
+        if target_strategy == 'ann' or target_strategy == 'vector':
+            target_strategy = 'hybrid'
+        print(f"[DEBUG] Auto-enabled graph search for KB with graph_backend={kb.graph_backend}. Strategy switched to '{target_strategy}'")
 
     # 1. Retrieve chunks
-    strategy = retrieval_factory.get_strategy(request.strategy)
+    strategy = retrieval_factory.get_strategy(target_strategy)
     results = await strategy.search(
         kb_id, 
         request.query, 

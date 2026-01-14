@@ -11,18 +11,14 @@ class CypherGenerator:
 
 [지식 그래프 스키마 특징]
 1. 노드 라벨:
-   - :Entity : 지식 그래프의 엔티티 (인스턴스, 클래스 등)
-   - :Chunk : 텍스트 청크 (근거 데이터)
+   - :Entity : 지식 그래프의 엔티티 (인물, 개념, 사물 등)
+   - 그래프에는 엔티티와 관계만 존재합니다. (청크 정보는 별도 시스템에서 관리)
 2. 노드 속성 (:Entity):
-   - iri : 엔티티의 고유 식별자 (URI)
    - name : 엔티티의 이름 (예: "성기훈", "오일남", "Duke")
-   - entity_type : 엔티티 유형 (Entity, Class, Instance 등)
    - kb_id : Knowledge Base ID
-3. 노드 속성 (:Chunk):
-   - chunk_id, doc_id, text, section_path 등
-4. 관계 (Relationships):
+3. 관계 (Relationships):
    - 관계 유형은 한국어로 된 경우가 많으며 반드시 백틱(`)으로 감싸야 합니다. (예: -[:`스승`]-, -[:`제자`]-)
-   - 엔티티 노드와 청크 노드는 -[:`MENTIONED_IN`]-> 관계로 연결될 수 있습니다. (엔티티 -[:`MENTIONED_IN`]-> 청크)
+   - 관계는 엔티티 간의 의미적 연결을 나타냅니다.
 
 [쿼리 작성 원칙]
 1. 엔티티 검색: 질문에 언급된 개체는 `name` 속성을 사용하여 매칭하세요.
@@ -32,12 +28,9 @@ class CypherGenerator:
 3. 관계 방향 고려: 관계 방향이 불확실하므로, 기본적으로는 방향 없이 검색(`(n)-[:`관계`]-(m)`)하되, 논리적 순서가 명확한 경우(`스승의 스승`, `A의 자식의 자식` 등)에는 방향성을 고려한 패턴(`(n)<-[:`제자`]-(m)`)도 함께 시도하세요.
 4. 다단계(Multi-hop) 연결 및 순환 방지: 질문이 여러 단계를 거치는 경우, 시작 노드와 끝 노드가 같지 않도록 조건을 추가하세요.
    (예: `MATCH (n:Entity {name: "성기훈"})-[:`제자`|`스승`]-(m)-[:`제자`|`스승`]-(o) WHERE n <> o RETURN o.name`)
-5. 근거(Evidence) 탐색: 만약 질문이 "근거"나 "텍스트"를 요구하면 :Chunk 노드와 연결하세요.
-   (예: `MATCH (n:Entity {name: "성기훈"})-[:`MENTIONED_IN`]->(c:Chunk) RETURN c.text`)
-6. 결과 형식: `RETURN` 구문을 사용하며, 반환 값은 **노드 객체(Nodes)와 관계(Relationships)를 모두 포함**하여 그래프 구조를 파악할 수 있게 하세요.
+5. 결과 형식: `RETURN` 구문을 사용하며, 반환 값은 **노드 객체(Nodes)와 관계(Relationships)를 모두 포함**하여 그래프 구조를 파악할 수 있게 하세요.
    (예: `RETURN n, m, o`)
-
-7. 결과 정제: 가능한 중복을 제거하기 위해 `DISTINCT`를 사용하거나 리스트로 수집(`collect`)하세요.
+6. 결과 정제: 가능한 중복을 제거하기 위해 `DISTINCT`를 사용하거나 리스트로 수집(`collect`)하세요.
 
 반드시 아래 JSON 형식으로만 응답하세요:
 ```json
@@ -103,10 +96,11 @@ class CypherGenerator:
 """
             if inverse_search_mode in ["auto", "always"]:
                 graph_instruction += "- 관계 방향이 데이터 적재 방식에 따라 반대일 수 있으니, 무방향성 검색 `(n)-[:REL]-(m)` 또는 양방향 패턴을 적극 활용하세요.\n"
+                graph_instruction += "- **핵심**: 사용자가 묻는 관계(예: '스승')가 DB에는 반대 관계(예: '제자')로 저장될 수 있습니다. 반드시 `|`를 사용하여 두 관계를 함께 검색하세요. (예: `-[:스승|제자]-`)\n"
             else:
                 graph_instruction += "- 관계 방향을 엄격히 준수하세요. 역방향 검색은 수행하지 마세요.\n"
+                graph_instruction += "- 역관계 추적이 비활성화되었습니다. 사용자가 묻는 관계가 DB에 정확히 저장된 방향대로만 검색하세요. (예: '스승'을 물었다면 `-[:스승]-`만 사용)\n"
 
-            graph_instruction += "- **핵심**: 사용자가 묻는 관계(예: '스승')가 DB에는 반대 관계(예: '제자')로 저장될 수 있습니다. 반드시 `|`를 사용하여 두 관계를 함께 검색하세요. (예: `-[:스승|제자]-`)\n"
             graph_instruction += "- 결과값은 가능한 명확한 이름(name)이나 설명이 포함되도록 하세요.\n"
             
             system_prompt += graph_instruction

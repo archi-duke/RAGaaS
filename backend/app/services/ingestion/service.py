@@ -381,9 +381,13 @@ class IngestionService:
             )
             print(f"[Fallback] After filtering: {len(filtered_triples)}")
             
-            # 2. 역관계 자동 생성 (원본의 오프셋 상속)
-            final_triples = add_inverse_relations(filtered_triples)
-            print(f"[Fallback] With inverse relations: {len(final_triples)}")
+            # 2. 역관계 자동 생성 (config 옵션에 따라)
+            if config.get("extract_inverse_relations", True):
+                final_triples = add_inverse_relations(filtered_triples)
+                print(f"[Fallback] With inverse relations: {len(final_triples)}")
+            else:
+                final_triples = filtered_triples
+                print(f"[Fallback] Inverse relations disabled, using {len(final_triples)} triples")
             
             # 3. 트리플-오프셋 매핑 저장 (SQLite)
             await self._save_triple_mappings(kb_id, doc_id, final_triples, chunks)

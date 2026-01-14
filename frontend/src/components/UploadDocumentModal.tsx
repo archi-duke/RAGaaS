@@ -338,6 +338,7 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
     // Graph Params
     const [graphParams, setGraphParams] = useState({
         oe_section_aware: true,
+        extract_inverse_relations: true,
         confidence_threshold: 0.6,
         max_candidates_per_chunk: 20,
         graph_section_size: 2500,
@@ -524,6 +525,18 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                                         />
                                         <span style={{ color: '#334155', fontWeight: 500 }}>Section Aware</span>
                                     </label>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.5rem' }}>
+                                        <input
+                                            type="checkbox"
+                                            checked={graphParams.extract_inverse_relations}
+                                            onChange={(e) => setGraphParams({ ...graphParams, extract_inverse_relations: e.target.checked })}
+                                            style={{ width: '0.9rem', height: '0.9rem', cursor: 'pointer' }}
+                                        />
+                                        <LabelWithTooltip
+                                            label="Inverse Relations"
+                                            tooltip="스승-제자, 학생-선생 등 역관계를 자동으로 생성합니다. 예: (A, 스승, B) → (B, 제자, A)"
+                                        />
+                                    </div>
                                 </div>
 
                                 {/* Column 3: Sliders */}
