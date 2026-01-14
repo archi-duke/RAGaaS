@@ -114,21 +114,33 @@ export default function ChatInterface({
                 effectiveStrategy = 'ann';
             }
 
-            console.log('[ChatInterface] Sending request with:', {
-                original_strategy: strategy,
-                effective_strategy: effectiveStrategy,
-                enable_graph_search: enableGraphSearch,
-                graph_hops: graphHops,
-                enable_inverse_search: enableInverseSearch,
-                inverse_extraction_mode: inverseExtractionMode,
-                custom_query_prompt: customQueryPrompt // Log this
-            });
+            console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+            console.log('🚀 [Frontend] Sending Chat Request to Backend');
+            console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
             // Determine top_k based on strategy
-            // For Hybrid (BM25 -> ANN), final top_k is annTopK
-            const effectiveTopK = (strategy === 'hybrid' || strategy === 'ann' || strategy === '2-stage') ? annTopK : bm25TopK;
-
+            const effectiveTopK = (strategy === 'hybrid' || strategy === 'hybrid_graph' || strategy === 'hybrid_ontology' || strategy === 'ann' || strategy === '2-stage') ? annTopK : bm25TopK;
             const is2Stage = strategy === '2-stage';
+
+            console.log('[Strategy]', {
+                original_strategy: strategy,
+                effective_strategy: effectiveStrategy,
+            });
+            console.log('[Graph Settings]', {
+                enable_graph_search: enableGraphSearch,
+                graph_hops: graphHops,
+                graph_backend: 'auto-detected by backend'
+            });
+            console.log('[Inverse Relation Settings] ⚠️', {
+                enable_inverse_search: enableInverseSearch,
+                inverse_extraction_mode: inverseExtractionMode,
+            });
+            console.log('[Other]', {
+                top_k: effectiveTopK,
+                use_reranker: useReranker,
+                custom_query_prompt: customQueryPrompt ? 'SET' : 'NOT SET'
+            });
+            console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
             const response = await retrievalApi.chat(kbId, {
                 query: input,

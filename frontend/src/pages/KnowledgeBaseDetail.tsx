@@ -123,9 +123,12 @@ export default function KnowledgeBaseDetail() {
 
     const loadSettings = () => {
         try {
-            const saved = localStorage.getItem('retrievalSettings');
+            // KB별 설정 저장을 위해 KB ID를 키에 포함
+            const settingsKey = `retrievalSettings_${id}`;
+            const saved = localStorage.getItem(settingsKey);
             if (saved) {
                 const settings = JSON.parse(saved);
+                console.log(`[KB ${id}] Loading saved settings:`, settings);
                 setSearchStrategy(settings.searchStrategy ?? 'ann');
                 // BM25 Settings
                 setBm25TopK(settings.bm25TopK ?? 10);
@@ -149,6 +152,8 @@ export default function KnowledgeBaseDetail() {
                 setEnableInverseSearch(settings.enableInverseSearch ?? false);
                 setInverseExtractionMode(settings.inverseExtractionMode ?? 'auto');
                 setUseRelationFilter(settings.useRelationFilter ?? true);
+            } else {
+                console.log(`[KB ${id}] No saved settings found, using defaults`);
             }
         } catch (e) {
             console.error('Failed to load settings:', e);
@@ -178,7 +183,10 @@ export default function KnowledgeBaseDetail() {
             useParallelSearch,
             useRelationFilter
         };
-        localStorage.setItem('retrievalSettings', JSON.stringify(settings));
+        // KB별 설정 저장
+        const settingsKey = `retrievalSettings_${id}`;
+        localStorage.setItem(settingsKey, JSON.stringify(settings));
+        console.log(`[KB ${id}] Settings saved:`, { enableInverseSearch, inverseExtractionMode });
     };
 
     useEffect(() => {
@@ -209,7 +217,18 @@ export default function KnowledgeBaseDetail() {
     const loadKB = async () => {
         try {
             const response = await kbApi.get(id!);
-            setKb(response.data);
+            const kbData = response.data;
+            setKb(kbData);
+
+            // KB에 graph_backend가 설정되어 있으면 그래프 검색 자동 활성화
+            // (단, 사용자가 저장한 설정이 없을 때만)
+            const settingsKey = `retrievalSettings_${id}`;
+            const saved = localStorage.getItem(settingsKey);
+
+            if (!saved && kbData.graph_backend && kbData.graph_backend !== 'none') {
+                console.log(`[KB ${id}] Auto-enabling graph search (graph_backend: ${kbData.graph_backend})`);
+                setEnableGraphSearch(true);
+            }
         } catch (error) {
             console.error('Failed to load KB:', error);
         }

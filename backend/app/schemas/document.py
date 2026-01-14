@@ -8,6 +8,8 @@ class DocumentStatus(str, Enum):
     PROCESSING = "processing"
     COMPLETED = "completed"
     ERROR = "error"
+    DELETING = "deleting"
+
 
 class DocumentBase(BaseModel):
     filename: str

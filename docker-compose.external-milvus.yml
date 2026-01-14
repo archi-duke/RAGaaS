@@ -23,6 +23,7 @@ services:
       - ./backend:/app
       - ./backend/data:/app/data
       - ./models:/app/models:ro
+      - /Users/dukekimm/Works/Doc2Onto:/Doc2Onto:ro
     ports:
       - "8000:8000"
     networks:

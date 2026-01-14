@@ -235,7 +235,10 @@ def add_inverse_relations(
                 "object": triple["subject"],
                 "confidence": triple.get("confidence", 1.0),
                 "source_chunk_id": triple.get("source_chunk_id"),
-                "auto_generated": True  # 자동 생성 표시
+                "source_start": triple.get("source_start"),   # 오프셋 복사
+                "source_end": triple.get("source_end"),       # 오프셋 복사
+                "auto_generated": True,
+                "is_inverse": True                            # 역관계 플래그
             }
             result.append(inverse_triple)
     

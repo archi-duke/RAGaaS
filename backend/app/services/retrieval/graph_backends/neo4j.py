@@ -36,17 +36,36 @@ class Neo4jBackend(GraphBackend):
             generator = CypherGenerator(api_key=settings.OPENAI_API_KEY)
             context = f"관련 엔티티 후보: {', '.join(entities)}" if entities else None
             
-            custom_prompt = kwargs.get("custom_query_prompt")
-            
-            # Inverse/Bidirectional Logic
+            # Determine inverse relation mode
             inv_mode = kwargs.get("inverse_extraction_mode", "auto")
-            if not kwargs.get("enable_inverse_search", True):
+            enable_inverse = kwargs.get("enable_inverse_search", False)  # 기본값 False로 변경
+            
+            # If user explicitly disabled inverse search, override mode
+            if not enable_inverse:
                 inv_mode = "none"
+            
+            print(f"DEBUG: [Neo4j] Inverse settings: mode='{inv_mode}', enable_inverse_search={enable_inverse}")
+            
+            # Build custom prompt with inverse relation instruction
+            custom_prompt = kwargs.get("custom_query_prompt") or ""
+            
+            # Add strict instruction when inverse search is disabled
+            if inv_mode == "none":
+                no_inverse_instruction = """
+[중요 제약사항 - 반드시 준수]
+- 역방향 관계 패턴을 절대 사용하지 마세요.
+- | 연산자로 정방향/역방향 관계를 조합하지 마세요.
+- 예시: `-[:스승|제자]-` 형태 사용 금지!
+- 관계 방향을 명시하세요: `-[:스승]->` (반드시 화살표 포함!)
+- 무방향 패턴 `-[:스승]-` 금지! (이는 양방향 검색이 됨)
+- 오직 DB에 저장된 방향으로만 검색하세요.
+"""
+                custom_prompt = no_inverse_instruction + custom_prompt
 
             gen_result = generator.generate(
                 query_text, 
                 context=context, 
-                custom_prompt=custom_prompt,
+                custom_prompt=custom_prompt if custom_prompt else None,
                 inverse_search_mode=inv_mode
             )
             cypher_query = gen_result.get("cypher")
@@ -81,6 +100,17 @@ class Neo4jBackend(GraphBackend):
                             discovered_entities.add(value)
                             
             print(f"DEBUG: [Neo4j] Discovered entities from query result: {len(discovered_entities)}")
+            
+            # If inverse search is disabled and no entities were found, skip fallback
+            if inv_mode == "none" and len(discovered_entities) == 0:
+                print("DEBUG: [Neo4j] Inverse search disabled. No results found. Skipping fallback to preserve strict directional search.")
+                return {
+                    "chunk_ids": [],
+                    "sparql_query": cypher_query,
+                    "triples": [],
+                    "thought": thought,
+                    "found_entities": []
+                }
             
             # 순수 그래프에서 트리플 조회 (MENTIONED_IN 없음)
             triples = self._fetch_triples_from_graph(kb_id, entities, list(discovered_entities))

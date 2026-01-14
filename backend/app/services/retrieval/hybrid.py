@@ -134,6 +134,7 @@ class HybridRetrievalStrategy(RetrievalStrategy):
             # Let's rely on chunk_id_to_doc for now, or fallback to ANN result content.
             
             ann_result_map = {r["chunk_id"]: r for r in ann_results}
+            graph_result_map = {r["chunk_id"]: r for r in real_graph_results} if enable_graph else {}
             
             for cid in top_ids:
                 content = ""
@@ -145,6 +146,9 @@ class HybridRetrievalStrategy(RetrievalStrategy):
                 elif cid in ann_result_map:
                     content = ann_result_map[cid]["content"]
                     doc_id = ann_result_map[cid].get("doc_id", "")
+                elif cid in graph_result_map:
+                    content = graph_result_map[cid].get("content", "")
+                    doc_id = graph_result_map[cid].get("metadata", {}).get("doc_id", "")
                 
                 if not content: continue
                 
@@ -198,14 +202,26 @@ class HybridRetrievalStrategy(RetrievalStrategy):
 
                     cid = res["chunk_id"]
                     # Find doc content for graph result
-                    # Note: all_docs only has top 10000. If graph result is outside, we might miss content.
-                    # But for now assuming small KB.
                     doc_entry = next((d for d in all_docs if d["chunk_id"] == cid), None)
                     
                     if doc_entry:
                         if cid not in candidate_map:
                              candidate_map[cid] = {
                                 "doc": doc_entry,
+                                "bm25_score": 0.0,
+                                "graph_metadata": res.get("graph_metadata"),
+                                "vector_score": 0.0,
+                                "original_metadata": res.get("metadata", {})
+                            }
+                    elif "content" in res:
+                        # Fallback: Use content from graph result itself
+                        if cid not in candidate_map:
+                             candidate_map[cid] = {
+                                "doc": {
+                                    "content": res["content"],
+                                    "doc_id": res.get("metadata", {}).get("doc_id", ""),
+                                    "vector": res.get("vector") # Might be missing, handle below
+                                },
                                 "bm25_score": 0.0,
                                 "graph_metadata": res.get("graph_metadata"),
                                 "vector_score": 0.0,

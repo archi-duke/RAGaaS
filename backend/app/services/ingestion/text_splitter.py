@@ -90,4 +90,101 @@ class ChunkingService:
         )
         return splitter.split_text(text)
 
+    def chunk_by_size_with_offset(self, text: str, chunk_size: int = 1000, overlap: int = 200, separators: List[str] = None) -> List[Dict]:
+        """
+        청크 생성 시 원문 오프셋을 포함하여 반환.
+        
+        Args:
+            text: 원본 텍스트
+            chunk_size: 청크 크기
+            overlap: 오버랩 크기
+            separators: 분할 구분자
+        
+        Returns:
+            List of {"content": str, "start_offset": int, "end_offset": int}
+        """
+        # Use langchain splitter to get chunks
+        splitter = RecursiveCharacterTextSplitter(
+            chunk_size=chunk_size,
+            chunk_overlap=overlap,
+            separators=separators or ["\n\n", "\n", " ", ""]
+        )
+        chunk_texts = splitter.split_text(text)
+        
+        # Calculate offsets by finding each chunk in the original text
+        chunks_with_offset = []
+        search_start = 0
+        
+        for chunk_text in chunk_texts:
+            # Find the chunk in the original text starting from last position
+            start_idx = text.find(chunk_text, search_start)
+            if start_idx == -1:
+                # Fallback: search from beginning (shouldn't happen normally)
+                start_idx = text.find(chunk_text)
+            
+            if start_idx != -1:
+                end_idx = start_idx + len(chunk_text)
+                chunks_with_offset.append({
+                    "content": chunk_text,
+                    "start_offset": start_idx,
+                    "end_offset": end_idx
+                })
+                # Move search start, accounting for overlap
+                search_start = max(search_start, start_idx + 1)
+            else:
+                # If not found, use approximate position
+                chunks_with_offset.append({
+                    "content": chunk_text,
+                    "start_offset": search_start,
+                    "end_offset": search_start + len(chunk_text)
+                })
+                search_start += len(chunk_text) - overlap
+        
+        return chunks_with_offset
+
+    def split_into_sections_with_offset(self, text: str, section_size: int = 6000, overlap: int = 500) -> List[Dict]:
+        """
+        섹션 분할 시 원문 오프셋을 포함하여 반환.
+        
+        Args:
+            text: 원본 텍스트
+            section_size: 섹션 크기
+            overlap: 오버랩 크기
+        
+        Returns:
+            List of {"text": str, "start_offset": int, "end_offset": int}
+        """
+        splitter = RecursiveCharacterTextSplitter(
+            chunk_size=section_size,
+            chunk_overlap=overlap,
+            separators=["\n\n", "\n", ". ", " ", ""]
+        )
+        section_texts = splitter.split_text(text)
+        
+        sections_with_offset = []
+        search_start = 0
+        
+        for section_text in section_texts:
+            start_idx = text.find(section_text, search_start)
+            if start_idx == -1:
+                start_idx = text.find(section_text)
+            
+            if start_idx != -1:
+                end_idx = start_idx + len(section_text)
+                sections_with_offset.append({
+                    "text": section_text,
+                    "start_offset": start_idx,
+                    "end_offset": end_idx
+                })
+                search_start = max(search_start, start_idx + 1)
+            else:
+                sections_with_offset.append({
+                    "text": section_text,
+                    "start_offset": search_start,
+                    "end_offset": search_start + len(section_text)
+                })
+                search_start += len(section_text) - overlap
+        
+        return sections_with_offset
+
 chunking_service = ChunkingService()

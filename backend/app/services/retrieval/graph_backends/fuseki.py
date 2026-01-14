@@ -41,26 +41,52 @@ class FusekiBackend(GraphBackend):
 
         # 1. Try using SPARQLGenerator (LLM-based)
         if self.generator and query_text:
-            print(f"DEBUG: [Fuseki] Generating SPARQL for: {query_text} (inverse_relation='auto')")
             try:
-                # Use the new 'inverse_relation' parameter
+                # Determine inverse relation mode
+                # Default: if not explicitly set, use 'auto'
                 inv_mode = kwargs.get("inverse_extraction_mode", "auto")
-                if not kwargs.get("enable_inverse_search", True):
+                enable_inverse = kwargs.get("enable_inverse_search", False)  # 기본값 False로 변경
+                
+                # If user explicitly disabled inverse search, override mode
+                if not enable_inverse:
                     inv_mode = "none"
+                
+                print(f"DEBUG: [Fuseki] Generating SPARQL for: {query_text} (inverse_relation='{inv_mode}', enable_inverse_search={enable_inverse})")
+                
+                # Build custom prompt with inverse relation instruction
+                custom_prompt = kwargs.get("custom_query_prompt") or ""
+                
+                # Add strict instruction when inverse search is disabled
+                if inv_mode == "none":
+                    no_inverse_instruction = """
+[중요 제약사항 - 반드시 준수]
+- 역방향 관계(^) 연산자를 절대 사용하지 마세요.
+- Property Path에서 | 연산자로 역관계를 조합하지 마세요.
+- 예시: `(rel:스승|^rel:제자)` 형태 사용 금지!
+- 오직 직접 관계만 사용하세요: `rel:스승` (역방향 없이)
+- DB에 저장된 정확한 방향의 관계만 검색하세요.
+"""
+                    custom_prompt = no_inverse_instruction + custom_prompt
                     
                 gen_result = self.generator.generate(
                     question=query_text,
                     context=f"Entities: {', '.join(entities)}",
                     mode="ontology",
                     inverse_relation=inv_mode,
-                    custom_prompt=kwargs.get("custom_query_prompt")
+                    custom_prompt=custom_prompt if custom_prompt else None
                 )
                 
                 generated_sparql = gen_result.get("sparql")
                 if generated_sparql:
                     print(f"DEBUG: [Fuseki] Generated SPARQL:\n{generated_sparql}")
                     
-                    # Ensure standard prefixes are present
+                    # Remove any existing PREFIX declarations from LLM-generated query
+                    # to avoid conflicts with our correct prefixes
+                    import re
+                    sparql_body = re.sub(r'PREFIX\s+\w+:\s*<[^>]+>\s*', '', generated_sparql, flags=re.IGNORECASE)
+                    sparql_body = sparql_body.strip()
+                    
+                    # Ensure standard prefixes with correct namespaces
                     prefixes = """
                     PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
                     PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
@@ -75,12 +101,12 @@ class FusekiBackend(GraphBackend):
                     
                     # Inject FROM <urn:x-arq:UnionGraph> to search across all named graphs
                     # This is crucial because Doc2Onto loads data (base.trig) into named graphs
-                    if "WHERE" in generated_sparql:
+                    if "WHERE" in sparql_body:
                         # Simple injection: replace the first 'WHERE' with 'FROM <urn:x-arq:UnionGraph> WHERE'
                         # This ensures we search across all named graphs where Doc2Onto puts the data
-                        sparql_query_content = generated_sparql.replace("WHERE", "FROM <urn:x-arq:UnionGraph>\nWHERE", 1)
+                        sparql_query_content = sparql_body.replace("WHERE", "FROM <urn:x-arq:UnionGraph>\nWHERE", 1)
                     else:
-                        sparql_query_content = generated_sparql
+                        sparql_query_content = sparql_body
 
                     full_query = prefixes + sparql_query_content
                     
@@ -125,6 +151,17 @@ class FusekiBackend(GraphBackend):
                         }
                     else:
                         print("DEBUG: [Fuseki] Generator query returned no results. Falling back to default logic.")
+                        
+                        # If inverse search is disabled and LLM query returned no results,
+                        # don't fall back to generic search - return empty results
+                        if inv_mode == "none":
+                            print("DEBUG: [Fuseki] Inverse search disabled. Skipping fallback to preserve strict directional search.")
+                            return {
+                                "chunk_ids": [],
+                                "sparql_query": sparql_query,
+                                "triples": [],
+                                "found_entities": []
+                            }
                         
             except Exception as e:
                 print(f"WARNING: [Fuseki] Error during SPARQL generation/execution: {e}")
