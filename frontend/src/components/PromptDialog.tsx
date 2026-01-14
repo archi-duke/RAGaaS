@@ -7,7 +7,7 @@ interface PromptDialogProps {
     onClose: () => void;
     initialPrompt: string;
     onSave: (prompt: string) => void;
-    backendType: 'ontology' | 'neo4j';
+    backendType: 'ontology_plus' | 'ontology_minus' | 'neo4j';
 }
 
 export default function PromptDialog({

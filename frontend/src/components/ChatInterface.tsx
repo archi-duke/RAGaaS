@@ -40,6 +40,8 @@ interface ChatInterfaceProps {
     inverseExtractionMode?: 'always' | 'auto';
     // Graph Relation Filter (Neo4j)
     useRelationFilter?: boolean;
+    // Schema Mode (for Promoted Ontology)
+    useSchemaMode?: boolean;
     useRawLog?: boolean;
     customQueryPrompt?: string; // Add this
     onChunksReceived: (chunks: any[]) => void;
@@ -68,6 +70,7 @@ export default function ChatInterface({
     enableInverseSearch,
     inverseExtractionMode,
     useRelationFilter,
+    useSchemaMode,
     useRawLog,
     customQueryPrompt, // Add Destructuring
     onChunksReceived,
@@ -171,6 +174,7 @@ export default function ChatInterface({
                 enable_inverse_search: enableInverseSearch,
                 inverse_extraction_mode: inverseExtractionMode,
                 use_relation_filter: useRelationFilter,
+                use_schema_mode: useSchemaMode,
                 use_raw_log: useRawLog,
                 custom_query_prompt: customQueryPrompt // Pass to API
             });

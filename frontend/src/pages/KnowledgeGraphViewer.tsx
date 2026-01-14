@@ -30,8 +30,10 @@ const GraphViewer: React.FC = () => {
     const entity = params.get('entity');
     const kbId = params.get('kb_id');
     const backend = params.get('backend') || 'neo4j';
+    const mode = params.get('mode') || 'entity'; // 'entity' | 'schema'
 
     const [showLabels, setShowLabels] = useState(false);
+    const [isSchemaMode, setIsSchemaMode] = useState(mode === 'schema');
     const [showEntityRelationsOnly, setShowEntityRelationsOnly] = useState(false);
     const [repulsion, setRepulsion] = useState(400); // Default repulsion strength
 
@@ -58,8 +60,16 @@ const GraphViewer: React.FC = () => {
         let color = '#44ff88'; // Vibrant Green for Entities
         let val = 12;
         const isChunk = isChunkNode(node);
+        const isClass = node.group === 'Class';
+        const isInstance = node.group === 'Instance';
 
-        if (isRoot) {
+        if (isClass) {
+            color = '#ff9933'; // Orange for Class nodes (schema view)
+            val = 15;
+        } else if (isInstance) {
+            color = '#88cc88'; // Light Green for Instance nodes (schema view expansion)
+            val = 10;
+        } else if (isRoot) {
             color = '#ff4444'; // Vibrant Red for Root
             val = 100; // Increased even more (approx 2x radius of Focus nodes)
         } else if (isFocus) {
@@ -74,7 +84,9 @@ const GraphViewer: React.FC = () => {
             label: isChunk ? '[chunk]' : node.label,
             val: val,
             color: color,
-            isChunk: isChunk // Mark for filtering
+            isChunk: isChunk, // Mark for filtering
+            isClass: isClass,
+            isInstance: isInstance
         };
     }, [isChunkNode]);
     // Helper to calculate curvature for links sharing the same node pair
@@ -130,10 +142,23 @@ const GraphViewer: React.FC = () => {
 
 
     useEffect(() => {
-        if (!entity || !kbId) {
-            setError("Missing required parameters: entity, kb_id");
-            setLoading(false);
-            return;
+        // For schema mode, we don't need entity parameter
+        if (mode === 'schema') {
+            if (!kbId) {
+                setError("Missing required parameter: kb_id");
+                setLoading(false);
+                return;
+            }
+            setIsSchemaMode(true);
+            setShowLabels(true); // Auto-enable labels in schema mode
+            setRepulsion(600); // Wider spacing for class hierarchy
+        } else {
+            if (!entity || !kbId) {
+                setError("Missing required parameters: entity, kb_id");
+                setLoading(false);
+                return;
+            }
+            setIsSchemaMode(false);
         }
 
         const fetchData = async () => {
@@ -160,13 +185,33 @@ const GraphViewer: React.FC = () => {
                 setBackendType(resolvedBackend);
 
                 // 2. Fetch Graph Data
-                const response = await fetch(`/api/retrieval/graph/expand?kb_id=${kbId}&entity=${encodeURIComponent(entity)}&backend=${resolvedBackend}`);
-                if (!response.ok) {
-                    throw new Error(`API Error: ${response.statusText}`);
+                let response;
+                // Use mode directly as isSchemaMode state might not be updated yet
+                if (mode === 'schema') {
+                    // Fetch schema data
+                    response = await fetch(`/api/retrieval/graph/schema?kb_id=${kbId}&backend=${resolvedBackend}`);
+                } else {
+                    // Fetch entity expansion data
+                    response = await fetch(`/api/retrieval/graph/expand?kb_id=${kbId}&entity=${encodeURIComponent(entity || '')}&backend=${resolvedBackend}`);
                 }
+
+                if (!response.ok) {
+                    const text = await response.text();
+                    throw new Error(`API Error (${response.status}): ${text}`);
+                }
+
+                const contentType = response.headers.get("content-type");
+                if (!contentType || !contentType.includes("application/json")) {
+                    const text = await response.text();
+                    throw new Error(`Received non-JSON response from server: ${text.substring(0, 100)}...`);
+                }
+
                 const data = await response.json();
 
                 const processedNodes = data.nodes.map((n: any) => {
+                    if (mode === 'schema') {
+                        return processNodeStyle(n, false, false);
+                    }
                     const isTarget = n.id === entity || n.label === entity ||
                         (n.id.includes('/') && decodeURIComponent(n.id.split('/').pop() || '') === entity);
 
@@ -191,7 +236,7 @@ const GraphViewer: React.FC = () => {
         };
 
         fetchData();
-    }, [entity, kbId, backend, processNodeStyle, processLinksCurvature]);
+    }, [entity, kbId, backend, mode, processNodeStyle, processLinksCurvature]);
 
     // Compute visible data based on filters
     const visibleGraphData = React.useMemo(() => {
@@ -331,8 +376,30 @@ const GraphViewer: React.FC = () => {
 
         // EXPAND LOGIC (If not already expanded)
         try {
-            const response = await fetch(`/api/retrieval/graph/expand?kb_id=${kbId}&entity=${encodeURIComponent(node.label)}&backend=${backendType}`);
-            if (!response.ok) return;
+            let apiUrl: string;
+
+            // In schema mode, clicking a class node fetches its instances
+            if (isSchemaMode && node.isClass) {
+                apiUrl = `/api/retrieval/graph/schema/instances?kb_id=${kbId}&class_uri=${encodeURIComponent(node.id)}&limit=20`;
+            } else {
+                // Normal entity expansion
+                apiUrl = `/api/retrieval/graph/expand?kb_id=${kbId}&entity=${encodeURIComponent(node.label)}&backend=${backendType}`;
+            }
+
+            const response = await fetch(apiUrl);
+
+            if (!response.ok) {
+                const text = await response.text();
+                console.error("Expansion API Error:", text);
+                return;
+            }
+
+            const contentType = response.headers.get("content-type");
+            if (!contentType || !contentType.includes("application/json")) {
+                const text = await response.text();
+                console.error("Received non-JSON response:", text);
+                return;
+            }
 
             const data = await response.json();
 
@@ -400,7 +467,7 @@ const GraphViewer: React.FC = () => {
                 }
             `}</style>
             <div style={{ position: 'absolute', top: 20, left: 20, zIndex: 100, color: '#fff', background: 'rgba(0,0,0,0.7)', padding: '10px', borderRadius: '5px' }}>
-                <h2 style={{ margin: 0 }}>{entity}</h2>
+                <h2 style={{ margin: 0 }}>{isSchemaMode ? 'Schema View' : entity}</h2>
                 <small>Source: {backendType}</small>
             </div>
 
@@ -477,7 +544,7 @@ const GraphViewer: React.FC = () => {
                 nodeCanvasObjectMode={() => 'replace'} // We draw everything ourselves
 
                 linkLabel={link => (link as any).label}
-                linkDirectionalArrowLength={Math.max(3, repulsion / 100)}
+                linkDirectionalArrowLength={Math.max(6, repulsion / 50)}
                 linkDirectionalArrowRelPos={0.85}
                 linkWidth={2}
 

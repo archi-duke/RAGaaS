@@ -115,7 +115,7 @@ async def promote_knowledge_base(
     payload: dict = Body(default={}), 
     db: AsyncSession = Depends(get_db)
 ):
-    result = await db.execute(select(KnowledgeBase).filter(KnowledgeBase.id == kb_id))
+    result = await db.execute(select(KBModel).filter(KBModel.id == kb_id))
     kb = result.scalars().first()
     if not kb:
         raise HTTPException(status_code=404, detail="Knowledge Base not found")
@@ -123,21 +123,148 @@ async def promote_knowledge_base(
     # If payload has 'action' == 'revert', demote
     if payload.get("action") == "revert":
         kb.is_promoted = False
+        # Clear metadata to reflect demoted state (or keep history if preferred, but clearing avoids confusion)
+        kb.promotion_metadata = {}
     else:
-        kb.is_promoted = True
+        # 1. Prepare Config
+        config = payload.get("config", payload)
         
-        # Update metadata
-        # Support flat params or {config: ...}
-        params = payload.get("config", payload)
-        
-        # Add timestamp
-        from datetime import datetime
-        params["promoted_at"] = datetime.now().isoformat()
-        
-        # Store in DB
-        # Note: SQLAlchemy JSON type change detection can be tricky.
-        # Assigning a new dict works best.
-        kb.promotion_metadata = params
+        # 2. Run OntologyPromoter
+        try:
+            # Dynamic import to avoid circular issues if any
+            from app.doc2onto_backup.promoters.ontology_promoter import OntologyPromoter
+            import glob
+            
+            # Locate input files
+            # Assuming CWD is backend root
+            base_pattern = f"doc2onto_out/{kb_id}/**/base.trig"
+            evidence_pattern = f"doc2onto_out/{kb_id}/**/evidence.trig"
+            
+            base_files = glob.glob(base_pattern, recursive=True)
+            evidence_files = glob.glob(evidence_pattern, recursive=True)
+            
+            if not base_files:
+                raise HTTPException(status_code=400, detail=f"No base.trig files found for KB {kb_id}. Please suggest running ingestion first.")
+                
+            print(f"Found {len(base_files)} base files and {len(evidence_files)} evidence files for promotion.")
+
+            # Create temp dir for merged input and output
+            import tempfile
+            import shutil
+            
+            with tempfile.TemporaryDirectory() as temp_dir:
+                temp_path = Path(temp_dir)
+                merged_base = temp_path / "base_merged.trig"
+                merged_evidence = temp_path / "evidence_merged.trig"
+                output_dir = Path(f"doc2onto_out/{kb_id}/promotion")
+                
+                # Merge Base Files
+                with open(merged_base, 'wb') as outfile:
+                    for filename in base_files:
+                        with open(filename, 'rb') as readfile:
+                            shutil.copyfileobj(readfile, outfile)
+                            outfile.write(b'\n') # Separation
+                            
+                # Merge Evidence Files
+                if evidence_files:
+                    with open(merged_evidence, 'wb') as outfile:
+                        for filename in evidence_files:
+                            with open(filename, 'rb') as readfile:
+                                shutil.copyfileobj(readfile, outfile)
+                                outfile.write(b'\n')
+                
+                # Initialize Promoter
+                promoter = OntologyPromoter(
+                    confidence_threshold=config.get("confidence_threshold", 0.6), # Default lowered for testing
+                    min_evidence_count=config.get("min_evidence_count", 1),
+                    detect_cycles=config.get("detect_cycles", True),
+                    remove_hypothetical=config.get("remove_hypothetical", True)
+                )
+                
+                # Run Promotion
+                promo_result = promoter.promote(
+                    base_trig=merged_base,
+                    evidence_trig=merged_evidence if evidence_files else None,
+                    output_dir=output_dir,
+                    version=config.get("version_tag", "v1.0"),
+                    dry_run=False
+                )
+                
+                # 3. Update DB
+                kb.is_promoted = True
+                
+                # Add timestamp
+                from datetime import datetime
+                promo_result["promoted_at"] = datetime.now().isoformat()
+                
+                # Store full result (stats, logs, excluded items)
+                # Ensure it's JSON serializable
+                # Excluded items might need cleaning if they contain non-serializable objects (they are dicts of strings/floats so ok)
+                kb.promotion_metadata = promo_result
+                
+                # 4. Upload to Fuseki (Auto-load)
+                try:
+                    from app.core.fuseki import fuseki_client
+                    # Construct Ontology URI (Named Graph)
+                    ontology_graph_uri = f"urn:ontology:{kb_id}"
+                    
+                    # Clean up existing schema first (DROP GRAPH)
+                    print(f"[Promotion] Cleaning up existing schema in: {ontology_graph_uri}")
+                    drop_success = fuseki_client.drop_graph(kb_id, ontology_graph_uri)
+                    if drop_success:
+                        print(f"[Promotion] Existing schema cleared.")
+                    else:
+                        print(f"[Promotion] No existing schema to clear or drop failed.")
+                    
+                    # Find generated schema snapshot (TBox only, no instances)
+                    owl_path = promo_result.get("ontology_path")  # relative path
+                    if owl_path:
+                        # Use schema_snapshot.ttl instead of full OWL file
+                        schema_dir = os.path.dirname(os.path.abspath(owl_path))
+                        schema_ttl = os.path.join(schema_dir, "schema_snapshot.ttl")
+                        
+                        if os.path.exists(schema_ttl):
+                            print(f"[Promotion] Uploading schema snapshot to Fuseki graph: {ontology_graph_uri}")
+                            # Use text/turtle for TTL files. Replaces graph content (PUT).
+                            success = fuseki_client.upload_file(kb_id, schema_ttl, ontology_graph_uri, content_type="text/turtle")
+                            if success:
+                                print(f"[Promotion] Successfully loaded schema to Fuseki.")
+                                
+                                # Now APPEND instance types (POST)
+                                instance_ttl = os.path.join(schema_dir, "instance_types.ttl")
+                                if os.path.exists(instance_ttl):
+                                    print(f"[Promotion] Appending instance types to Fuseki graph...")
+                                    # We need to append, so we can't use upload_file (which does PUT)
+                                    # Use update_sparql or direct POST
+                                    dataset_url = fuseki_client._get_dataset_url(kb_id)
+                                    url = f"{dataset_url}/data?graph={ontology_graph_uri}"
+                                    
+                                    with open(instance_ttl, "rb") as f:
+                                        data = f.read()
+                                    
+                                    import requests
+                                    resp = requests.post(
+                                        url,
+                                        data=data,
+                                        headers={"Content-Type": "text/turtle"},
+                                        auth=fuseki_client.auth,
+                                        timeout=60
+                                    )
+                                    if resp.status_code in [200, 201, 204]:
+                                        print(f"[Promotion] Successfully appended instance types.")
+                                    else:
+                                        print(f"[Promotion] Failed to append instances: {resp.status_code} {resp.text}")
+                            else:
+                                print(f"[Promotion] Failed to load schema to Fuseki.")
+                        else:
+                             print(f"[Promotion] Schema snapshot not found at {schema_ttl}")
+                except Exception as e_upload:
+                     print(f"[Promotion] Error loading to Fuseki: {e_upload}")  # Non-blocking error
+                
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            raise HTTPException(status_code=500, detail=f"Promotion failed: {str(e)}")
 
     await db.commit()
     await db.refresh(kb)
@@ -266,7 +393,7 @@ async def save_extraction_rules(data: dict = Body(...)):
         raise HTTPException(status_code=400, detail=f"Failed to save: {str(e)}")
 
 @router.get("/query-prompt/content")
-async def get_query_prompt_content(type: str = "ontology"):
+async def get_query_prompt_content(type: str = "ontology_minus"):
     try:
         if type == "neo4j":
             file_path = Path("data/prompts/cypher_generation_prompt.txt")
@@ -274,12 +401,21 @@ async def get_query_prompt_content(type: str = "ontology"):
                 return {"content": file_path.read_text(encoding="utf-8")}
             from app.services.retrieval.cypher_generator import CypherGenerator
             return {"content": CypherGenerator.DEFAULT_SYSTEM_PROMPT}
-        else:
+        elif type == "ontology_plus":
+            file_path = Path("data/prompts/sparql_ontology_prompt.txt")
+            if file_path.exists():
+                return {"content": file_path.read_text(encoding="utf-8")}
+            # Fallback to general ontology if plus is missing
+            type = "ontology_minus"
+        
+        if type == "ontology_minus":
             file_path = Path("data/prompts/sparql_generation_prompt.txt")
             if file_path.exists():
                 return {"content": file_path.read_text(encoding="utf-8")}
             from app.doc2onto.qa.sparql_generator import SPARQLGenerator
-            return {"content": SPARQLGenerator.DEFAULT_SYSTEM_PROMPT} 
+            return {"content": SPARQLGenerator.DEFAULT_SYSTEM_PROMPT}
+        
+        return {"content": "Unknown prompt type"}
     except Exception as e:
          return {"content": f"Error: {e}"}
 
@@ -293,6 +429,8 @@ async def save_query_prompt(data: dict = Body(...)):
         
     if p_type == "neo4j":
         file_path = Path("data/prompts/cypher_generation_prompt.txt")
+    elif p_type == "ontology_plus":
+        file_path = Path("data/prompts/sparql_ontology_prompt.txt")
     else:
         file_path = Path("data/prompts/sparql_generation_prompt.txt")
         

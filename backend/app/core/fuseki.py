@@ -123,6 +123,35 @@ class FusekiClient:
             logger.error(f"Error executing SPARQL query on {kb_id}: {e}")
             return {}
 
+    def upload_file(self, kb_id: str, file_path: str, graph_uri: str, content_type: str = "text/turtle") -> bool:
+        """Upload an RDF file to a specific named graph (replaces existing data)."""
+        dataset_url = self._get_dataset_url(kb_id)
+        # Use GSP endpoint with PUT to replace existing graph
+        url = f"{dataset_url}/data?graph={graph_uri}"
+        
+        try:
+            with open(file_path, "rb") as f:
+                data = f.read()
+            
+            # Use PUT to replace existing graph data (not POST which appends)
+            response = requests.put(
+                url, 
+                data=data, 
+                headers={"Content-Type": content_type},
+                auth=self.auth,
+                timeout=60
+            )
+            
+            if response.status_code in [200, 201, 204]:
+                logger.info(f"Replaced {graph_uri} with {file_path}")
+                return True
+            else:
+                logger.error(f"Failed to upload file: {response.status_code} {response.text}")
+                return False
+        except Exception as e:
+            logger.error(f"Error uploading file: {e}")
+            return False
+
     def update_sparql(self, kb_id: str, update_query: str) -> bool:
         """Execute a SPARQL UPDATE query (INSERT/DELETE)."""
         dataset_url = self._get_dataset_url(kb_id)
@@ -137,6 +166,30 @@ class FusekiClient:
             return True
         except Exception as e:
             logger.error(f"Error executing SPARQL update on {kb_id}: {e}")
+            return False
+
+    def drop_graph(self, kb_id: str, graph_uri: str) -> bool:
+        """Drop a named graph (DELETE all triples in it)."""
+        dataset_url = self._get_dataset_url(kb_id)
+        update_url = f"{dataset_url}/update"
+        
+        try:
+            drop_query = f"DROP SILENT GRAPH <{graph_uri}>"
+            response = requests.post(
+                update_url,
+                data={'update': drop_query},
+                auth=self.auth,
+                timeout=30
+            )
+            
+            if response.status_code == 200:
+                logger.info(f"Dropped graph: {graph_uri}")
+                return True
+            else:
+                logger.warning(f"Drop graph returned {response.status_code}: {response.text}")
+                return False
+        except Exception as e:
+            logger.error(f"Error dropping graph {graph_uri}: {e}")
             return False
 
 fuseki_client = FusekiClient()

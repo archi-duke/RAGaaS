@@ -213,9 +213,9 @@ export default function CreateKnowledgeBaseModal({ isOpen, onClose, onCreateComp
                                                 style={{ marginTop: '0.25rem' }}
                                             />
                                             <div>
-                                                <div style={{ fontSize: '0.9rem', fontWeight: 600, color: graphBackend === 'ontology' ? 'var(--primary)' : 'var(--text-primary)' }}>Using Ontology</div>
+                                                <div style={{ fontSize: '0.9rem', fontWeight: 600, color: graphBackend === 'ontology' ? 'var(--primary)' : 'var(--text-primary)' }}>Using Jena+Fuseki</div>
                                                 <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-                                                    (Jena+Fuseki) Best for structured data & inference.
+                                                    Standard RDF-based storage. Reliable for entity-relation management and ontology features.
                                                 </div>
                                             </div>
                                         </div>
@@ -242,9 +242,9 @@ export default function CreateKnowledgeBaseModal({ isOpen, onClose, onCreateComp
                                                 style={{ marginTop: '0.25rem' }}
                                             />
                                             <div>
-                                                <div style={{ fontSize: '0.9rem', fontWeight: 600, color: graphBackend === 'neo4j' ? 'var(--primary)' : 'var(--text-primary)' }}>Using Knowledge Graph</div>
+                                                <div style={{ fontSize: '0.9rem', fontWeight: 600, color: graphBackend === 'neo4j' ? 'var(--primary)' : 'var(--text-primary)' }}>Using Neo4j</div>
                                                 <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-                                                    (Neo4j) Best for complex connection analysis.
+                                                    Native property graph database. Excellent for complex path analysis and link discovery.
                                                 </div>
                                             </div>
                                         </div>

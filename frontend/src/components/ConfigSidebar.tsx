@@ -24,6 +24,7 @@ interface ConfigSidebarProps {
     graphHops: number;
     setGraphHops: (value: number) => void;
     enableGraphRag: boolean;
+    isOntologyPromoted?: boolean;
 }
 
 export default function ConfigSidebar({
@@ -49,7 +50,8 @@ export default function ConfigSidebar({
     setEnableGraphSearch,
     graphHops,
     setGraphHops,
-    enableGraphRag
+    enableGraphRag,
+    isOntologyPromoted
 }: ConfigSidebarProps) {
     return (
         <div className="card" style={{ position: 'sticky', top: '2rem', maxHeight: 'calc(100vh - 4rem)', overflowY: 'auto' }}>
@@ -209,7 +211,23 @@ export default function ConfigSidebar({
                             }}
                             style={{ cursor: 'pointer' }}
                         />
-                        <span style={{ fontSize: '0.875rem', fontWeight: 500 }}>Use Graph Search (Beta)</span>
+                        <span style={{ fontSize: '0.875rem', fontWeight: 500 }}>
+                            Use Graph Search (Beta)
+                            {isOntologyPromoted && (
+                                <span style={{
+                                    fontSize: '0.7em',
+                                    color: '#4CAF50',
+                                    marginLeft: '6px',
+                                    border: '1px solid #4CAF50',
+                                    padding: '1px 6px',
+                                    borderRadius: '10px',
+                                    fontWeight: 'normal',
+                                    verticalAlign: 'middle'
+                                }}>
+                                    Schema Available
+                                </span>
+                            )}
+                        </span>
                     </label>
                     <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '0.25rem', marginLeft: '1.5rem' }}>
                         Augments retrieval with relationships from the knowledge graph
