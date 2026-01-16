@@ -94,6 +94,7 @@ async def list_knowledge_bases(skip: int = 0, limit: int = 100, db: AsyncSession
             "graph_backend": kb.graph_backend,
             "is_promoted": kb.is_promoted,
             "promotion_metadata": kb.promotion_metadata,
+            "pipeline_config": kb.pipeline_config or {"stages": []},
             "document_count": row[1],
             "total_size": collection_size
         }
@@ -108,6 +109,32 @@ async def get_knowledge_base(kb_id: str, db: AsyncSession = Depends(get_db)):
     if kb is None:
         raise HTTPException(status_code=404, detail="Knowledge Base not found")
     return kb
+
+@router.get("/{kb_id}/pipeline")
+async def get_pipeline_config(kb_id: str, db: AsyncSession = Depends(get_db)):
+    """Get pipeline configuration for a knowledge base"""
+    result = await db.execute(select(KBModel).filter(KBModel.id == kb_id))
+    kb = result.scalars().first()
+    if kb is None:
+        raise HTTPException(status_code=404, detail="Knowledge Base not found")
+    return kb.pipeline_config or {"stages": []}
+
+@router.put("/{kb_id}/pipeline")
+async def save_pipeline_config(kb_id: str, config: dict = Body(...), db: AsyncSession = Depends(get_db)):
+    """Save pipeline configuration for a knowledge base"""
+    result = await db.execute(select(KBModel).filter(KBModel.id == kb_id))
+    kb = result.scalars().first()
+    if kb is None:
+        raise HTTPException(status_code=404, detail="Knowledge Base not found")
+    
+    # Validate config structure
+    if "stages" not in config:
+        raise HTTPException(status_code=400, detail="Invalid config: missing 'stages' array")
+    
+    kb.pipeline_config = config
+    await db.commit()
+    await db.refresh(kb)
+    return {"ok": True, "pipeline_config": kb.pipeline_config}
 
 @router.post("/{kb_id}/promote")
 async def promote_knowledge_base(

@@ -44,7 +44,9 @@ interface ChatInterfaceProps {
     useSchemaMode?: boolean;
     useRawLog?: boolean;
     customQueryPrompt?: string; // Add this
-    onChunksReceived: (chunks: any[]) => void;
+    // Pipeline Configuration
+    pipeline?: { stages: any[] };
+    onChunksReceived: (chunks: any[], logs?: string[], pipeline?: any) => void;
     graphBackend?: string;
 }
 
@@ -73,6 +75,7 @@ export default function ChatInterface({
     useSchemaMode,
     useRawLog,
     customQueryPrompt, // Add Destructuring
+    pipeline, // Pipeline configuration
     onChunksReceived,
     graphBackend
 }: ChatInterfaceProps) {
@@ -176,7 +179,9 @@ export default function ChatInterface({
                 use_relation_filter: useRelationFilter,
                 use_schema_mode: useSchemaMode,
                 use_raw_log: useRawLog,
-                custom_query_prompt: customQueryPrompt // Pass to API
+                custom_query_prompt: customQueryPrompt, // Pass to API
+                // Pipeline Configuration (if set, backend will use pipeline executor)
+                pipeline: pipeline && pipeline.stages.length > 0 ? pipeline : undefined
             });
 
             // Debug: Log the raw API response to verify data integrity
@@ -196,7 +201,12 @@ export default function ChatInterface({
 
             setMessages(prev => [...prev, assistantMessage]);
             if (response.data.chunks) {
-                onChunksReceived(response.data.chunks);
+                // Pass logs and pipeline config if available
+                onChunksReceived(
+                    response.data.chunks,
+                    response.data.execution_log,
+                    response.data.pipeline_config
+                );
             }
         } catch (error) {
             console.error('Chat error:', error);

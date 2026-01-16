@@ -24,6 +24,7 @@ class KnowledgeBase(KnowledgeBaseBase):
     total_size: Optional[int] = 0
     is_promoted: bool = False
     promotion_metadata: Optional[dict] = {}
+    pipeline_config: Optional[dict] = {"stages": []}
 
     class Config:
         from_attributes = True

@@ -16,10 +16,11 @@ class HybridRetrievalStrategy(RetrievalStrategy):
 
     async def search(self, kb_id: str, query: str, top_k: int, **kwargs) -> List[Dict[str, Any]]:
         metric_type = kwargs.get("metric_type", "COSINE")
+        index_type = kwargs.get("index_type", "IVF_FLAT")
         score_threshold = kwargs.get("score_threshold", 0.0)
         enable_graph = kwargs.get("enable_graph_search", False)
         
-        collection = create_collection(kb_id)
+        collection = create_collection(kb_id, metric_type=metric_type, index_type=index_type)
         collection.load()
         
         # 1. Embed query
@@ -89,7 +90,14 @@ class HybridRetrievalStrategy(RetrievalStrategy):
                 chunk_scores[cid] += 1.0 / (rrf_k + rank + 1)
                 
             # 2. Rank Vector Results (Independent Search)
-            ann_results = await self.vector_strategy.search(kb_id, query, top_k=top_k * 3, metric_type=metric_type, score_threshold=score_threshold)
+            ann_results = await self.vector_strategy.search(
+                kb_id, 
+                query, 
+                top_k=top_k * 3, 
+                metric_type=metric_type, 
+                score_threshold=score_threshold,
+                index_type=index_type
+            )
             
             for rank, res in enumerate(ann_results):
                 cid = res["chunk_id"]

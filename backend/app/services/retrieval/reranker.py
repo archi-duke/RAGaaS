@@ -10,7 +10,8 @@ class RerankingService:
     
     def _get_reranker(self):
         if not self.reranker:
-            self.reranker = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
+            # Multilingual Cross-Encoder for Korean and other languages
+            self.reranker = CrossEncoder('cross-encoder/mmarco-mMiniLMv2-L12-H384-v1')
         return self.reranker
         
     def _cosine_similarity(self, vec1, vec2) -> float:
@@ -37,26 +38,29 @@ class RerankingService:
         pairs = [[query, result['content']] for result in results]
         reranker_scores = reranker.predict(pairs)
         
-        # Sigmoid normalization
-        normalized_scores = [1 / (1 + math.exp(-score)) for score in reranker_scores]
+        # Min-Max normalization for better score discrimination
+        min_score = min(reranker_scores)
+        max_score = max(reranker_scores)
+        if max_score - min_score > 0:
+            normalized_scores = [(s - min_score) / (max_score - min_score) for s in reranker_scores]
+        else:
+            # All scores are identical
+            normalized_scores = [0.5] * len(reranker_scores)
+        
+        # Add small floor to avoid exact 0.0
+        normalized_scores = [max(0.01, s) for s in normalized_scores]
         
         for result, score in zip(results, normalized_scores):
-            result['_reranker_score'] = float(score)
+            # Use Cross-Encoder normalized score as the main score
+            result['score'] = float(score)
+            if 'metadata' not in result: result['metadata'] = {}
+            result['metadata']['_reranker_raw_score'] = float(score)
             
-        filtered = [r for r in results if r['_reranker_score'] >= threshold]
-        filtered.sort(key=lambda x: x['_reranker_score'], reverse=True)
+        filtered = [r for r in results if r['score'] >= threshold]
+        filtered.sort(key=lambda x: x['score'], reverse=True)
         top_results = filtered[:top_k]
         
-        # Reset score to Cosine for uniformity
-        # Need embeddings for cosine
-        query_vec = (await embedding_service.get_embeddings([query]))[0]
-        
-        for result in top_results:
-            content_vec = (await embedding_service.get_embeddings([result['content']]))[0]
-            result['score'] = self._cosine_similarity(query_vec, content_vec)
-            
-            if 'metadata' not in result: result['metadata'] = {}
-            result['metadata']['_reranker_score'] = result.pop('_reranker_score')
+        return top_results
             
         return top_results
 
@@ -75,26 +79,51 @@ class RerankingService:
         from openai import AsyncOpenAI
         from app.core.config import settings
         import asyncio
+        import os
         
         client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+        
+        # Load prompt template from file
+        prompt_path = "/app/data/prompts/rerank_llm_prompt.txt"
+        try:
+            with open(prompt_path, 'r', encoding='utf-8') as f:
+                prompt_template = f.read()
+        except FileNotFoundError:
+            print(f"[Rerank] Prompt file not found at {prompt_path}, using fallback.")
+            prompt_template = "Query: {query}\n\nChunk: {chunk_content}\n\nRate relevance 0.0 to 1.0. Output ONLY the number."
         
         async def evaluate(result: Dict) -> tuple[Dict, float]:
             chunk_content = result['content']
             
-            # Simple truncation for brevity in prompt (implement 'smart' logic if needed from original)
+            # Simple truncation for brevity in prompt
             if strategy == 'limited':
                 chunk_content = chunk_content[:1500]
             
-            prompt = f"""Query: {query}\n\nChunk: {chunk_content}\n\nRate relevance from 0.0 to 1.0 (float). Output ONLY the number."""
-            
+            prompt = prompt_template.format(query=query, chunk_content=chunk_content)
+
             try:
                 resp = await client.chat.completions.create(
                     model="gpt-3.5-turbo",
                     messages=[{"role": "user", "content": prompt}],
                     temperature=0, max_tokens=10
                 )
-                score = float(resp.choices[0].message.content.strip())
+                content = resp.choices[0].message.content.strip()
+                print(f"[Rerank DEBUG] Chunk snippet: {chunk_content[:30]}... | LLM Response: {content}")
+                
+                import re
+                match = re.search(r"(\d+(\.\d+)?)", content)
+                if match:
+                    score = float(match.group(1))
+                    print(f"[Rerank DEBUG] Parsed Score: {score}")
+                else:
+                    print(f"[Rerank DEBUG] Failed to parse score from content: {content}")
+                    score = 0.0
                 return (result, max(0.0, min(1.0, score)))
+            except Exception as e:
+                print(f"[Rerank DEBUG] Error evaluating chunk: {e}")
+                import traceback
+                traceback.print_exc()
+                return (result, 0.0)
             except:
                 return (result, 0.0)
                 
@@ -102,17 +131,14 @@ class RerankingService:
         evaluated = await asyncio.gather(*tasks)
         
         for result, score in evaluated:
-            result['_llm_score'] = score
+            # Use LLM score directly as the main score
+            result['score'] = float(score)
             if 'metadata' not in result: result['metadata'] = {}
-            result['metadata']['_llm_reranker_score'] = score
+            result['metadata']['_llm_reranker_raw_score'] = float(score)
             
-        filtered = [r for r in results if r.get('_llm_score', 0) >= threshold]
-        filtered.sort(key=lambda x: x.get('_llm_score', 0), reverse=True)
+        filtered = [r for r in results if r['score'] >= threshold]
+        filtered.sort(key=lambda x: x['score'], reverse=True)
         
-        # Cleanup
-        for r in filtered:
-            r.pop('_llm_score', None)
-            
         return filtered[:top_k]
 
 reranking_service = RerankingService()

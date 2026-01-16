@@ -72,6 +72,21 @@ export default function ConfigSidebar({
                     <option value="keyword">Keyword Search (BM25)</option>
                     <option value="hybrid">Hybrid Search</option>
                 </select>
+                {['keyword', 'hybrid', '2-stage'].includes(searchStrategy) && (
+                    <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '0.5rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <span>BM25 Tokenizer:</span>
+                        <span style={{
+                            background: '#f1f5f9',
+                            padding: '1px 6px',
+                            borderRadius: '4px',
+                            border: '1px solid #e2e8f0',
+                            color: '#475569',
+                            fontWeight: 500
+                        }}>
+                            Kiwi (Korean)
+                        </span>
+                    </div>
+                )}
             </div>
 
             {/* Top K */}

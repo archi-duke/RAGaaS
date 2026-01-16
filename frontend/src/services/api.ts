@@ -113,6 +113,8 @@ export const retrievalApi = {
         use_schema_mode?: boolean;
         use_raw_log?: boolean;
         custom_query_prompt?: string;
+        // Pipeline Configuration
+        pipeline?: { stages: any[] };
     }) => api.post(`/knowledge-bases/${kbId}/chat`, data),
 };
 

@@ -40,32 +40,82 @@ def _get_kiwi():
             _kiwi = False  # Use False to indicate unavailable
     return _kiwi
 
+# Global spaCy instance (lazy initialization)
+_spacy_nlp = None
+
+def _get_spacy():
+    """Lazy initialization of spaCy to avoid repeated imports and loading."""
+    global _spacy_nlp
+    if _spacy_nlp is None:
+        try:
+            import spacy
+            try:
+                _spacy_nlp = spacy.load("ko_core_news_lg")
+                print("[Tokenizer] Loaded spaCy model: ko_core_news_lg")
+            except OSError:
+                print("Warning: spaCy model 'ko_core_news_lg' not found. Using 'ko_core_news_sm' or fallback.")
+                try:
+                    _spacy_nlp = spacy.load("ko_core_news_sm")
+                except OSError:
+                    _spacy_nlp = False
+        except ImportError:
+            print("Warning: spaCy not found.")
+            _spacy_nlp = False
+    return _spacy_nlp
+
 
 def korean_tokenize(
     text: str,
     mode: Literal['strict', 'extended'] = 'strict',
     include_original_words: bool = False,
-    min_length: int = 1
+    min_length: int = 1,
+    engine: Literal['kiwi', 'spacy'] = 'kiwi'
 ) -> List[str]:
     """
-    Tokenize Korean text using Kiwi morphological analyzer.
+    Tokenize Korean text using Kiwi or spaCy.
     
     Args:
         text: Input text to tokenize
         mode: Tokenization mode
-            - 'strict': Nouns only (NNG, NNP, NR, NP, SL)
-            - 'extended': Nouns + Verbs + Adjectives (NNG, NNP, NR, NP, SL, VV, VA)
-        include_original_words: If True, also include original words with particles stripped
-                                (useful for proper nouns that Kiwi may not recognize)
-        min_length: Minimum token length to include (default 1)
+            - 'strict': Nouns only
+            - 'extended': Nouns + Verbs + Adjectives
+        include_original_words: If True, also include original words
+        min_length: Minimum token length to include
+        engine: 'kiwi' (default) or 'spacy'
     
     Returns:
         List of extracted tokens
     """
+    if engine.lower() == 'spacy':
+        nlp = _get_spacy()
+        if not nlp:
+            # Fallback to Kiwi if spaCy unavailable
+            return korean_tokenize(text, mode, include_original_words, min_length, engine='kiwi')
+            
+        doc = nlp(text)
+        tokens = []
+        
+        # Define POS tags for spaCy (Universal POS tags)
+        if mode == 'strict':
+            # Nouns (PROPN=Proper Noun, NOUN=Noun)
+            allowed_pos = {'NOUN', 'PROPN'}
+        else:
+            # Nouns + Verbs + Adjectives
+            allowed_pos = {'NOUN', 'PROPN', 'VERB', 'ADJ'}
+            
+        for token in doc:
+            if token.pos_ in allowed_pos:
+                # Use lemma (root form)
+                lemma = token.lemma_
+                if len(lemma) >= min_length:
+                    tokens.append(lemma)
+                    
+        return tokens
+
+    # Default: Kiwi
     kiwi = _get_kiwi()
     
     if not kiwi:
-        # Fallback to simple whitespace split
         return text.lower().split()
     
     tokens = []
@@ -80,7 +130,6 @@ def korean_tokenize(
         allowed_tags = {'NNG', 'NNP', 'NR', 'NP', 'SL'}
     else:  # 'extended'
         # Nouns + Verbs + Adjectives - for broader matching (Hybrid)
-        # Nouns + Verbs + Adjectives (reverted based on feedback)
         allowed_tags = {'NNG', 'NNP', 'NR', 'NP', 'SL', 'VV', 'VA'}
     
     # Extract tokens from morphological analysis
@@ -90,7 +139,7 @@ def korean_tokenize(
             if len(token.form) >= min_length:
                 tokens.append(token.form)
     
-    # Optionally include original words with particles stripped
+    # Optionally include original words with particles stripped (only for Kiwi mode for now)
     if include_original_words:
         # Common Korean particles (조사) to strip
         particles = '은는이가을를의에서로와과도만'
@@ -113,32 +162,24 @@ def tokenize_for_bm25(text: str, is_query: bool = False) -> List[str]:
     """
     Tokenizer optimized for BM25 standalone search.
     Uses strict mode (nouns only) for precise keyword matching.
-    Does NOT include original words - keeps it clean.
-    
-    Args:
-        text: Input text to tokenize
-        is_query: Unused for BM25, kept for API compatibility
     """
     return korean_tokenize(
         text,
         mode='strict',
-        include_original_words=False,  # BM25 uses clean nouns only
-        min_length=2
+        include_original_words=False,
+        min_length=2,
+        engine='kiwi'
     )
 
 
 def tokenize_for_hybrid(text: str, is_query: bool = False) -> List[str]:
     """
     Tokenizer optimized for Hybrid (ANN + BM25) search.
-    Uses extended mode (nouns + verbs + adjectives) for broader matching.
-    
-    Args:
-        text: Input text to tokenize
-        is_query: If True, also includes original words for better proper noun handling
     """
     return korean_tokenize(
         text,
         mode='extended',
         include_original_words=is_query,
-        min_length=2
+        min_length=2,
+        engine='kiwi'
     )

@@ -1,5 +1,5 @@
 from typing import List, Dict, Any
-import numpy as np
+
 from app.core.milvus import create_collection
 from app.services.embedding import embedding_service
 from .base import RetrievalStrategy
@@ -8,8 +8,9 @@ class VectorRetrievalStrategy(RetrievalStrategy):
     async def search(self, kb_id: str, query: str, top_k: int, **kwargs) -> List[Dict[str, Any]]:
         score_threshold = kwargs.get("score_threshold", 0.0)
         metric_type = kwargs.get("metric_type", "COSINE")
+        index_type = kwargs.get("index_type", "IVF_FLAT")
         
-        collection = create_collection(kb_id)
+        collection = create_collection(kb_id, metric_type=metric_type, index_type=index_type)
         collection.load()
 
         # 1. Embed query
@@ -19,44 +20,60 @@ class VectorRetrievalStrategy(RetrievalStrategy):
         # 2. Search
         search_params = {
             "metric_type": metric_type,
-            "params": {"nprobe": 10},
+            "params": {},
         }
         
+        if index_type == "IVF_FLAT":
+            search_params["params"] = {"nprobe": 10}
+        elif index_type == "HNSW":
+            search_params["params"] = {"ef": 64}
+        # FLAT and LSH typically don't need complex search-time params in simple cases
+        
+        # Don't need vector field anymore if we trust Milvus score
+        output_fields = ["content", "doc_id", "chunk_id"]
+
         results = collection.search(
             data=query_vectors, 
             anns_field="vector", 
             param=search_params, 
             limit=top_k * 3,  # Fetch more for filtering
-            output_fields=["content", "doc_id", "chunk_id", "vector"]
+            output_fields=output_fields
         )
         
         retrieved = []
         for hits in results:
             for hit in hits:
-                # Always compute cosine similarity for unified scoring
-                chunk_vector = hit.entity.get("vector")
-                cosine_score = 0.0
-                if chunk_vector:
-                    cosine_score = self._cosine_similarity(query_vec, chunk_vector)
-                
-                if cosine_score < score_threshold:
+                # Use Milvus returned score
+                # Note: For L2, lower is better (distance). For IP/Cosine, higher is better.
+                milvus_score = hit.score
+                final_score = milvus_score
+
+                # If Metric is L2, typically we want to return a similarity score (higher is better)
+                # or just return distance if that's what user expects.
+                # Here we stick to the convention: score is "similarity" or "relevance".
+                # If metric is L2, convert distance to similarity: 1 / (1 + distance)
+                if metric_type == "L2":
+                    try:
+                        final_score = 1.0 / (1.0 + milvus_score)
+                    except ZeroDivisionError:
+                        final_score = 1.0
+
+                if final_score < score_threshold:
                     continue
                 
                 retrieved.append({
                     "chunk_id": hit.entity.get("chunk_id"),
                     "content": hit.entity.get("content"),
-                    "score": cosine_score,
-                    "metadata": {"doc_id": hit.entity.get("doc_id")}
+                    "score": final_score,
+                    "metadata": {
+                        "doc_id": hit.entity.get("doc_id"),
+                        "milvus_raw_score": milvus_score,
+                        "metric_type": metric_type 
+                    }
                 })
         
         retrieved.sort(key=lambda x: x["score"], reverse=True)
         return retrieved[:top_k]
 
-    def _cosine_similarity(self, vec1, vec2) -> float:
-        v1 = np.array(vec1)
-        v2 = np.array(vec2)
-        norm1 = np.linalg.norm(v1)
-        norm2 = np.linalg.norm(v2)
-        if norm1 == 0 or norm2 == 0:
-            return 0.0
-        return float(np.dot(v1, v2) / (norm1 * norm2))
+
+    # _cosine_similarity is no longer needed as we use Milvus scores directly

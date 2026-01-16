@@ -8,6 +8,8 @@ import DocumentsTab from '../components/DocumentsTab';
 import ChatInterface from '../components/ChatInterface';
 import ChunksModal from '../components/ChunksModal';
 import HorizontalConfig from '../components/HorizontalConfig';
+import PipelineBuilder from '../components/PipelineBuilder';
+import type { PipelineConfig } from '../components/PipelineBuilder';
 import SearchResults from '../components/SearchResults';
 import ConfirmDialog from '../components/ConfirmDialog';
 import PromptDialog from '../components/PromptDialog';
@@ -55,10 +57,21 @@ export default function KnowledgeBaseDetail() {
 
     // Chat results state
     const [retrievedChunks, setRetrievedChunks] = useState<any[]>([]);
+    const [executionLogs, setExecutionLogs] = useState<string[]>([]);
+    const [executedPipeline, setExecutedPipeline] = useState<any>(null);
+
+    const handleSearchResults = (chunks: any[], logs?: string[], pipeline?: any) => {
+        setRetrievedChunks(chunks);
+        if (logs) setExecutionLogs(logs);
+        if (pipeline) setExecutedPipeline(pipeline);
+    };
 
     // Custom Prompt State
     const [customQueryPrompt, setCustomQueryPrompt] = useState<string>('');
     const [isPromptDialogOpen, setIsPromptDialogOpen] = useState(false);
+
+    // Pipeline Configuration State
+    const [pipelineConfig, setPipelineConfig] = useState<PipelineConfig>({ stages: [] });
 
     // Chunk viewer state
     const [selectedDoc, setSelectedDoc] = useState<any>(null);
@@ -154,6 +167,7 @@ export default function KnowledgeBaseDetail() {
                 setEnableInverseSearch(settings.enableInverseSearch ?? false);
                 setInverseExtractionMode(settings.inverseExtractionMode ?? 'auto');
                 setUseRelationFilter(settings.useRelationFilter ?? true);
+                setUseSchemaMode(settings.useSchemaMode ?? true);
             } else {
                 console.log(`[KB ${id}] No saved settings found, using defaults`);
             }
@@ -183,7 +197,8 @@ export default function KnowledgeBaseDetail() {
             enableInverseSearch,
             inverseExtractionMode,
             useParallelSearch,
-            useRelationFilter
+            useRelationFilter,
+            useSchemaMode
         };
         // KB별 설정 저장
         const settingsKey = `retrievalSettings_${id}`;
@@ -213,7 +228,8 @@ export default function KnowledgeBaseDetail() {
         enableInverseSearch,
         inverseExtractionMode,
         useParallelSearch,
-        useRelationFilter
+        useRelationFilter,
+        useSchemaMode
     ]);
 
     const loadKB = async () => {
@@ -226,10 +242,31 @@ export default function KnowledgeBaseDetail() {
             // (단, 사용자가 저장한 설정이 없을 때만)
             const settingsKey = `retrievalSettings_${id}`;
             const saved = localStorage.getItem(settingsKey);
+            const isGraphRAG = kbData.graph_backend === 'neo4j' || kbData.graph_backend === 'ontology';
 
-            if (!saved && kbData.graph_backend && kbData.graph_backend !== 'none') {
-                console.log(`[KB ${id}] Auto-enabling graph search (graph_backend: ${kbData.graph_backend})`);
-                setEnableGraphSearch(true);
+            if (!saved) {
+                // 저장된 설정이 없으면 KB의 graph_backend에 맞게 기본값 설정
+                if (isGraphRAG) {
+                    console.log(`[KB ${id}] Auto-enabling graph search (graph_backend: ${kbData.graph_backend})`);
+                    setEnableGraphSearch(true);
+                    setSearchStrategy('hybrid_graph');
+                } else {
+                    setEnableGraphSearch(false);
+                    setSearchStrategy('ann');
+                }
+            } else {
+                // 저장된 설정이 있어도 현재 KB의 graph_backend와 호환되지 않으면 조정
+                const savedSettings = JSON.parse(saved);
+                if (savedSettings.searchStrategy === 'hybrid_graph' && !isGraphRAG) {
+                    // Graph가 없는 KB인데 hybrid_graph가 설정되어 있으면 ann으로 변경
+                    console.log(`[KB ${id}] Resetting searchStrategy from hybrid_graph to ann (no graph backend)`);
+                    setSearchStrategy('ann');
+                    setEnableGraphSearch(false);
+                } else if (isGraphRAG && !savedSettings.enableGraphSearch) {
+                    // Graph KB인데 그래프 검색이 비활성화되어 있으면 활성화
+                    console.log(`[KB ${id}] Graph KB detected, enabling graph search`);
+                    setEnableGraphSearch(true);
+                }
             }
         } catch (error) {
             console.error('Failed to load KB:', error);
@@ -430,59 +467,17 @@ export default function KnowledgeBaseDetail() {
             )}
 
             {activeTab === 'chat' && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', flex: 1, minHeight: 0 }}>
-                    {/* Top: Horizontal Configuration */}
-                    <HorizontalConfig
-                        isOntologyPromoted={kb.is_promoted}
-                        searchStrategy={searchStrategy}
-                        setSearchStrategy={setSearchStrategy}
-                        bm25TopK={bm25TopK}
-                        setBm25TopK={setBm25TopK}
-                        bm25Tokenizer={bm25Tokenizer}
-                        setBm25Tokenizer={setBm25Tokenizer}
-                        useMultiPOS={useMultiPOS}
-                        setUseMultiPOS={setUseMultiPOS}
-                        annTopK={annTopK}
-                        setAnnTopK={setAnnTopK}
-                        annThreshold={annThreshold}
-                        setAnnThreshold={setAnnThreshold}
-                        useParallelSearch={useParallelSearch}
-                        setUseParallelSearch={setUseParallelSearch}
-                        useReranker={useReranker}
-                        setUseReranker={setUseReranker}
-                        rerankerTopK={rerankerTopK}
-                        setRerankerTopK={setRerankerTopK}
-                        rerankerThreshold={rerankerThreshold}
-                        setRerankerThreshold={setRerankerThreshold}
-                        useLLMReranker={useLLMReranker}
-                        setUseLLMReranker={setUseLLMReranker}
-                        llmChunkStrategy={llmChunkStrategy}
-                        setLlmChunkStrategy={setLlmChunkStrategy}
-                        useNER={useNER}
-                        setUseNER={setUseNER}
-                        enableGraphSearch={enableGraphSearch}
-                        setEnableGraphSearch={setEnableGraphSearch}
-                        graphHops={graphHops}
-                        setGraphHops={setGraphHops}
-                        bruteForceTopK={bruteForceTopK}
-                        setBruteForceTopK={setBruteForceTopK}
-                        bruteForceThreshold={bruteForceThreshold}
-                        setBruteForceThreshold={setBruteForceThreshold}
-                        enableInverseSearch={enableInverseSearch}
-                        setEnableInverseSearch={setEnableInverseSearch}
-                        inverseExtractionMode={inverseExtractionMode}
-                        setInverseExtractionMode={setInverseExtractionMode}
-                        chunkingStrategy={kb.chunking_strategy}
-                        graphBackend={kb.graph_backend}
-                        useRawLog={useRawLog}
-                        setUseRawLog={setUseRawLog}
-                        useRelationFilter={useRelationFilter}
-                        setUseRelationFilter={setUseRelationFilter}
-                        useSchemaMode={useSchemaMode}
-                        setUseSchemaMode={setUseSchemaMode}
-                        promotionMetadata={kb.is_promoted ? kb.promotion_metadata : undefined}
-                        onOpenPromptDialog={() => setIsPromptDialogOpen(true)}
-                    />
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', flex: 1, minHeight: 0, overflow: 'visible' }}>
+                    {/* Top: Pipeline Builder */}
+                    <div style={{ position: 'relative', zIndex: 1000 }}>
+                        <PipelineBuilder
+                            kbId={id!}
+                            graphBackend={kb.graph_backend}
+                            isOntologyPromoted={kb.is_promoted}
+                            initialConfig={pipelineConfig}
+                            onPipelineChange={setPipelineConfig}
+                        />
+                    </div>
 
                     {/* Bottom: Split View */}
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '5px', flex: 1, minHeight: 0 }}>
@@ -514,7 +509,8 @@ export default function KnowledgeBaseDetail() {
                                 useSchemaMode={useSchemaMode}
                                 useRawLog={useRawLog}
                                 customQueryPrompt={customQueryPrompt}
-                                onChunksReceived={setRetrievedChunks}
+                                pipeline={pipelineConfig}
+                                onChunksReceived={handleSearchResults}
                             />
                         </div>
 
@@ -524,6 +520,8 @@ export default function KnowledgeBaseDetail() {
                                 chunks={retrievedChunks}
                                 kbId={id!}
                                 graphBackend={kb.graph_backend}
+                                logs={executionLogs}
+                                pipeline={executedPipeline}
                             />
                         </div>
                     </div>

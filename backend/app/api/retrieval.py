@@ -4,7 +4,7 @@ from app.services.retrieval import retrieval_factory, reranking_service
 from app.core.database import get_db
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from typing import List
+from typing import List, Optional, Dict
 from pydantic import BaseModel
 import openai
 import os
@@ -42,6 +42,9 @@ class ChatRequest(BaseModel):
     use_schema_mode: bool = True  # Schema-aware SPARQL generation for promoted KBs
     use_raw_log: bool = False
     
+    # Pipeline configuration (optional - if provided, uses pipeline executor)
+    pipeline: Optional[dict] = None
+    
     class Config:
         extra = "ignore"
 
@@ -50,6 +53,36 @@ class ChatResponse(BaseModel):
     chunks: List[RetrievalResult]
     execution_time: float = 0.0
     strategy: str = "unknown"
+    execution_log: Optional[List[str]] = None
+    pipeline_config: Optional[Dict] = None
+
+
+RERANK_PROMPT_PATH = "/app/data/prompts/rerank_llm_prompt.txt"
+
+
+class PromptUpdateRequest(BaseModel):
+    content: str
+
+
+@router.get("/settings/rerank-prompt")
+async def get_rerank_prompt():
+    """Get the current LLM Rerank prompt"""
+    try:
+        with open(RERANK_PROMPT_PATH, 'r', encoding='utf-8') as f:
+            return {"content": f.read()}
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Prompt file not found")
+
+
+@router.put("/settings/rerank-prompt")
+async def update_rerank_prompt(request: PromptUpdateRequest):
+    """Update the LLM Rerank prompt"""
+    try:
+        with open(RERANK_PROMPT_PATH, 'w', encoding='utf-8') as f:
+            f.write(request.content)
+        return {"message": "Prompt updated successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/{kb_id}/retrieve", response_model=List[RetrievalResult])
 async def retrieve_chunks(
@@ -58,7 +91,8 @@ async def retrieve_chunks(
     db: AsyncSession = Depends(get_db)
 ):
     print(f"[DEBUG] Retrieve Request: brute={request.use_brute_force} bf_top_k={request.brute_force_top_k} bf_thresh={request.brute_force_threshold}")
-    # Fetch KB to get metric_type
+    # ... (rest of retrieve_chunks mostly unchanged, but we can't easily attach logs here since return type is List[RetrievalResult])
+    # For now, focus on chat API which returns ChatResponse
     from app.models.knowledge_base import KnowledgeBase
     result = await db.execute(select(KnowledgeBase).filter(KnowledgeBase.id == kb_id))
     kb = result.scalars().first()
@@ -92,8 +126,6 @@ async def retrieve_chunks(
     )
     
     # 2. Reranking (Cross-Encoder)
-    # Different logic for 2-stage as it's built-in, but separate reranker can still apply if requested explicitly
-    # adhering to original logic: if use_reranker and NOT 2-stage (which has it built in)
     if request.use_reranker and request.strategy != "2-stage" and results:
         print(f"[DEBUG] Applying reranker: top_k={request.reranker_top_k}, threshold={request.reranker_threshold}")
         
@@ -119,48 +151,39 @@ async def retrieve_chunks(
         print(f"[DEBUG] Applying NER filter")
         results = ner_service.filter_by_entities(request.query, results, penalty=0.3)
         
-    # 3.5. Flat Index (L2) Re-ranking (Exact L2 Distance on Candidates)
+    # 3.5. Flat Index (L2) Re-ranking
     if request.use_brute_force and results:
         from app.services.embedding import embedding_service
         import numpy as np
         
         print(f"[DEBUG] Applying Flat Index L2 Re-ranking (Top K: {request.brute_force_top_k}, Threshold (Max Dist): {request.brute_force_threshold})")
         
-        # 1. Embed query
         query_embedding = (await embedding_service.get_embeddings([request.query]))[0]
-        
-        # 2. Embed content of candidates
         candidate_contents = [r['content'] for r in results]
         candidate_embeddings = await embedding_service.get_embeddings(candidate_contents)
         
-        # 3. Compute L2 Distance
         reranked = []
         for i, doc_embedding in enumerate(candidate_embeddings):
-            # L2 Metric
             vec1 = np.array(query_embedding)
             vec2 = np.array(doc_embedding)
             dist = float(np.linalg.norm(vec1 - vec2))
             
-            # Apply threshold (LOWER is better for L2)
             if dist <= request.brute_force_threshold:
-                # Update score to Similarity Score (Higher is better)
                 try:
                     sim_score = 1.0 / (1.0 + dist)
                 except:
                     sim_score = 0.0
                 
-                # Safety check for NaN
                 if np.isnan(sim_score) or np.isinf(sim_score):
                     sim_score = 0.0
                 if np.isnan(dist) or np.isinf(dist):
-                    pass # Allow NaN dist if score is handled
+                    pass
                 
                 chunk = results[i].copy()
                 chunk['score'] = float(sim_score)
                 chunk['l2_score'] = float(dist) if not np.isnan(dist) else None
                 reranked.append(chunk)
         
-        # 4. Sort and Top K (DESCENDING for Similarity)
         reranked.sort(key=lambda x: x['score'], reverse=True)
         results = reranked[:request.brute_force_top_k]
         
@@ -177,26 +200,12 @@ async def chat_with_kb(
     # 파라미터 로깅 (프론트엔드 → 백엔드 전달 확인)
     print("=" * 80)
     print("📥 [Backend] Received Chat Request")
-    print("=" * 80)
-    print(f"[KB ID] {kb_id}")
-    print(f"[Query] {request.query[:50]}..." if len(request.query) > 50 else f"[Query] {request.query}")
-    print(f"[Strategy] {request.strategy}")
-    print(f"[Graph Settings]")
-    print(f"  - enable_graph_search: {request.enable_graph_search}")
-    print(f"  - graph_hops: {request.graph_hops}")
-    print(f"[Inverse Relation Settings] ⚠️")
-    print(f"  - enable_inverse_search: {request.enable_inverse_search}")
-    print(f"  - inverse_extraction_mode: {request.inverse_extraction_mode}")
-    print(f"[Other]")
-    print(f"  - top_k: {request.top_k}")
-    print(f"  - use_reranker: {request.use_reranker}")
-    print("=" * 80)
+    # ... (skipping prints for brevity in replacement args if they are identical, but must include them if I replace the whole block)
+    # Actually I should replace specifically the block that handles the response construction.
     
-    print(f"[DEBUG] Chat Request: brute={request.use_brute_force} bf_top_k={request.brute_force_top_k} bf_thresh={request.brute_force_threshold}")
-    """
-    Chat endpoint that retrieves relevant chunks and generates an LLM response
-    """
-    # First, retrieve relevant chunks using the same logic as retrieve_chunks
+    # ... (prints)
+    
+    # ... (DB fetch code)
     from app.models.knowledge_base import KnowledgeBase
     result = await db.execute(select(KnowledgeBase).filter(KnowledgeBase.id == kb_id))
     kb = result.scalars().first()
@@ -205,133 +214,143 @@ async def chat_with_kb(
         
     metric_type = kb.metric_type or "COSINE"
     
-    # Auto-enable graph search if KB has Graph RAG enabled
-    use_graph_search = request.enable_graph_search
-    target_strategy = request.strategy
+    # Check if pipeline mode is enabled
+    pipeline_config = None
+    if request.pipeline:
+        # Use provided pipeline
+        pipeline_config = request.pipeline
+        print(f"[Pipeline] Using request-provided pipeline with {len(pipeline_config.get('stages', []))} stages")
+    elif kb.pipeline_config and kb.pipeline_config.get("stages"):
+        # Use KB's saved pipeline
+        pipeline_config = kb.pipeline_config
+        print(f"[Pipeline] Using KB saved pipeline with {len(pipeline_config.get('stages', []))} stages")
     
-    if kb.enable_graph_rag and kb.graph_backend:
-        use_graph_search = True
-        # If strategy is purely vector-based, switch to hybrid to utilize graph
-        if target_strategy == 'ann' or target_strategy == 'vector':
-            target_strategy = 'hybrid'
-        print(f"[DEBUG] Auto-enabled graph search for KB with graph_backend={kb.graph_backend}. Strategy switched to '{target_strategy}'")
+    execution_logs = []
+    
+    # Pipeline mode execution
+    if pipeline_config and pipeline_config.get("stages"):
+        from app.services.retrieval.pipeline_executor import pipeline_executor
+        from app.schemas.pipeline import PipelineConfig, PipelineStage
+        
+        # Convert dict to PipelineConfig
+        stages = [PipelineStage(**s) for s in pipeline_config["stages"]]
+        config = PipelineConfig(stages=stages)
+        
+        exec_ctx = await pipeline_executor.execute(
+            kb_id=kb_id,
+            query=request.query,
+            config=config,
+            graph_backend=kb.graph_backend or "ontology",
+            metric_type=metric_type
+        )
+        
+        results = exec_ctx.results
+        execution_logs = exec_ctx.logs
+        graph_metadata = exec_ctx.metadata.get("graph_metadata")
+        
+        # Attach graph metadata to first result if present
+        if graph_metadata and results:
+            results[0]["graph_metadata"] = graph_metadata
+    else:
+        # Legacy mode (backward compatibility)
+        # Auto-enable graph search if KB has Graph RAG enabled
+        use_graph_search = request.enable_graph_search
+        target_strategy = request.strategy
+        
+        execution_logs.append("[Legacy] No pipeline config. Using legacy strategy execution.")
+        execution_logs.append(f"[Legacy] Strategy: {target_strategy}")
+        
+        if kb.enable_graph_rag and kb.graph_backend:
+            use_graph_search = True
+            if target_strategy == 'ann' or target_strategy == 'vector':
+                target_strategy = 'hybrid'
+            print(f"[DEBUG] Auto-enabled graph search for KB with graph_backend={kb.graph_backend}. Strategy switched to '{target_strategy}'")
+            execution_logs.append(f"[Legacy] Auto-enabled graph search (Backend: {kb.graph_backend}). Strategy switched to '{target_strategy}'")
 
-    # 1. Retrieve chunks
-    strategy = retrieval_factory.get_strategy(target_strategy)
-    results = await strategy.search(
-        kb_id, 
-        request.query, 
-        request.top_k, 
-        metric_type=metric_type, 
-        score_threshold=request.score_threshold,
-        enable_graph_search=use_graph_search,
-        graph_hops=request.graph_hops,
-        graph_backend=kb.graph_backend or "ontology",
-        use_llm_keyword_extraction=request.use_llm_keyword_extraction,
-        use_multi_pos=request.use_multi_pos,
-        bm25_top_k=request.bm25_top_k,
-        use_parallel_search=request.use_parallel_search,
-        use_relation_filter=request.use_relation_filter,
-        enable_inverse_search=request.enable_inverse_search,
-        inverse_extraction_mode=request.inverse_extraction_mode,
-        use_schema_mode=request.use_schema_mode,
-        use_raw_log=request.use_raw_log
-    )
+        # 1. Retrieve chunks
+        strategy = retrieval_factory.get_strategy(target_strategy)
+        results = await strategy.search(
+            kb_id, 
+            request.query, 
+            request.top_k, 
+            metric_type=metric_type, 
+            score_threshold=request.score_threshold,
+            enable_graph_search=use_graph_search,
+            graph_hops=request.graph_hops,
+            graph_backend=kb.graph_backend or "ontology",
+            use_llm_keyword_extraction=request.use_llm_keyword_extraction,
+            use_multi_pos=request.use_multi_pos,
+            bm25_top_k=request.bm25_top_k,
+            use_parallel_search=request.use_parallel_search,
+            use_relation_filter=request.use_relation_filter,
+            enable_inverse_search=request.enable_inverse_search,
+            inverse_extraction_mode=request.inverse_extraction_mode,
+            use_schema_mode=request.use_schema_mode,
+            use_raw_log=request.use_raw_log
+        )
+        execution_logs.append(f"[Legacy] Search complete. Found {len(results)} chunks.")
+        
+        # 2. Reranking (legacy)
+        if request.use_reranker and request.strategy != "2-stage" and results:
+            execution_logs.append(f"[Legacy] Applying Reranker (Top K: {request.reranker_top_k})")
+            if request.use_llm_reranker:
+                results = await reranking_service.llm_rerank_results(
+                    query=request.query,
+                    results=results,
+                    top_k=request.reranker_top_k,
+                    threshold=request.reranker_threshold,
+                    strategy=request.llm_chunk_strategy
+                )
+            else:
+                results = await reranking_service.rerank_results(
+                    query=request.query,
+                    results=results,
+                    top_k=request.reranker_top_k,
+                    threshold=request.reranker_threshold
+                )
+
+        # 3. NER Filter (legacy)
+        if request.use_ner and results:
+            from app.services.ner import ner_service
+            execution_logs.append("[Legacy] Applying NER Filter")
+            results = ner_service.filter_by_entities(request.query, results, penalty=0.3)
+            
+        # 3.5. Brute Force (legacy)
+        if request.use_brute_force and results:
+            from app.services.embedding import embedding_service
+            import numpy as np
+            
+            execution_logs.append(f"[Legacy] Applying Brute Force L2 (Top K: {request.brute_force_top_k})")
+            
+            query_embedding = (await embedding_service.get_embeddings([request.query]))[0]
+            candidate_contents = [r['content'] for r in results]
+            candidate_embeddings = await embedding_service.get_embeddings(candidate_contents)
+            
+            reranked = []
+            for i, doc_embedding in enumerate(candidate_embeddings):
+                vec1 = np.array(query_embedding)
+                vec2 = np.array(doc_embedding)
+                dist = float(np.linalg.norm(vec1 - vec2))
+                
+                if dist <= request.brute_force_threshold:
+                    chunk = results[i].copy()
+                    chunk['score'] = 1.0 / (1.0 + dist)
+                    chunk['l2_score'] = dist
+                    reranked.append(chunk)
+            
+            reranked.sort(key=lambda x: x['score'], reverse=True)
+            results = reranked[:request.brute_force_top_k]
     
     with open("backend_debug.log", "a") as f:
-        f.write(f"Strategy: {request.strategy}, Initial Results: {len(results) if results else 0}\n")
-
-    # 2. Reranking
-    if request.use_reranker and request.strategy != "2-stage" and results:
-        if request.use_llm_reranker:
-            results = await reranking_service.llm_rerank_results(
-                query=request.query,
-                results=results,
-                top_k=request.reranker_top_k,
-                threshold=request.reranker_threshold,
-                strategy=request.llm_chunk_strategy
-            )
-        else:
-            results = await reranking_service.rerank_results(
-                query=request.query,
-                results=results,
-                top_k=request.reranker_top_k,
-                threshold=request.reranker_threshold
-            )
-
-    if request.use_ner and results:
-        from app.services.ner import ner_service
-        results = ner_service.filter_by_entities(request.query, results, penalty=0.3)
-        
-    # 3.5. Flat Index (L2) Re-ranking (Exact L2 Distance on Candidates)
-    if request.use_brute_force and results:
-        with open("backend_debug.log", "a") as f:
-            f.write(f"Entering BF Block. Results: {len(results)}\n")
-            
-        from app.services.embedding import embedding_service
-        import numpy as np
-        
-        print(f"[DEBUG] Applying Flat Index L2 Re-ranking (Top K: {request.brute_force_top_k}, Threshold (Max Dist): {request.brute_force_threshold})")
-        
-        # 1. Embed query
-        query_embedding = (await embedding_service.get_embeddings([request.query]))[0]
-        
-        # 2. Embed content of candidates
-        candidate_contents = [r['content'] for r in results]
-        candidate_embeddings = await embedding_service.get_embeddings(candidate_contents)
-        
-        # 3. Compute L2 Distance
-        reranked = []
-        debug_dists = []
-        for i, doc_embedding in enumerate(candidate_embeddings):
-            # L2 Metric
-            vec1 = np.array(query_embedding)
-            vec2 = np.array(doc_embedding)
-            dist = float(np.linalg.norm(vec1 - vec2))
-            debug_dists.append(dist)
-            
-            print(f"[DEBUG] L2: {dist:.4f} vs Threshold: {request.brute_force_threshold:.4f} -> {'KEEP' if dist <= request.brute_force_threshold else 'DROP'}")
-            
-            # Apply threshold (LOWER is better for L2)
-            if dist <= request.brute_force_threshold:
-                # Update score to Similarity Score (Higher is better)
-                # Convert L2 distance to a 0-1 similarity score for consistent sorting/display
-                try:
-                    sim_score = 1.0 / (1.0 + dist)
-                except:
-                    sim_score = 0.0
-                
-                # Safety check for NaN
-                if np.isnan(sim_score) or np.isinf(sim_score):
-                    sim_score = 0.0
-                if np.isnan(dist) or np.isinf(dist):
-                    pass # Keep dist as is for debug or set to -1? Pydantic allows Inf for float, but NaN -> Null.
-                         # But dist is sent as l2_score. 
-                         # If dist is NaN/Inf, let's allow it but ensure score is valid.
-                
-                chunk = results[i].copy()
-                chunk['score'] = float(sim_score)
-                chunk['l2_score'] = float(dist) if not np.isnan(dist) else None
-                reranked.append(chunk)
-        
-        # 4. Sort and Top K (DESCENDING for Similarity)
-        reranked.sort(key=lambda x: x['score'], reverse=True)
-        results = reranked[:request.brute_force_top_k]
-        
-        if not results and candidate_contents:
-             debug_msg = f"BF Filtered All! Threshold: {request.brute_force_threshold}. Dists: {debug_dists}"
-             with open("backend_debug.log", "a") as f:
-                 f.write(f"BF Cut All: {debug_dists}\n")
-             raise HTTPException(status_code=418, detail=debug_msg)
-             
-        with open("backend_debug.log", "a") as f:
-            f.write(f"BF Final Results: {len(results)}\n")
+        f.write(f"Strategy: {request.strategy}, Final Results: {len(results) if results else 0}\\n")
     
     # 4. Generate LLM response based on retrieved chunks
     if not results:
         return ChatResponse(
             answer="I couldn't find any relevant information to answer your question.",
-            chunks=[]
+            chunks=[],
+            execution_log=execution_logs,
+            pipeline_config=pipeline_config
         )
     
     # Build context from top chunks
@@ -400,5 +419,7 @@ async def chat_with_kb(
         answer=answer,
         chunks=results,
         execution_time=time.time() - start_time,
-        strategy=f"{request.strategy}{' (+Graph)' if request.enable_graph_search else ''}"
+        strategy=f"{request.strategy}{' (+Graph)' if request.enable_graph_search else ''}",
+        execution_log=execution_logs,
+        pipeline_config=pipeline_config
     )
