@@ -4,6 +4,8 @@ interface SearchResultsProps {
     chunks: any[];
     kbId?: string;
     graphBackend?: string;
+    logs?: string[];
+    pipeline?: any;
 }
 
 // 청크 팝업 모달 컴포넌트
@@ -107,8 +109,14 @@ function ChunkPopup({ triple, chunks, onClose }: { triple: any; chunks: any[]; o
     );
 }
 
-export default function SearchResults({ chunks, kbId, graphBackend }: SearchResultsProps) {
-    const [activeTab, setActiveTab] = useState<'graph' | 'chunks'>('chunks');
+export default function SearchResults({ chunks, kbId, graphBackend, logs, pipeline }: SearchResultsProps) {
+    const [activeTab, setActiveTab] = useState<'graph' | 'chunks' | 'logs'>('chunks');
+
+    // Sort chunks by score (descending)
+    const sortedChunks = React.useMemo(() => {
+        if (!chunks) return [];
+        return [...chunks].sort((a, b) => (b.score || 0) - (a.score || 0));
+    }, [chunks]);
 
     // Reset tab to chunks when new results arrive
     React.useEffect(() => {
@@ -174,7 +182,7 @@ export default function SearchResults({ chunks, kbId, graphBackend }: SearchResu
                     style={tabStyle(activeTab === 'chunks')}
                     onClick={() => setActiveTab('chunks')}
                 >
-                    📄 Retrieved Chunks ({chunks.length})
+                    📄 Retrieved Chunks ({sortedChunks.length})
                 </div>
                 {(graphMetadata || (extractedKeywords && extractedKeywords.length > 0)) && (
                     <div
@@ -184,6 +192,14 @@ export default function SearchResults({ chunks, kbId, graphBackend }: SearchResu
                         🔍 Retrieval Details
                     </div>
                 )}
+                {(logs && logs.length > 0) && (
+                    <div
+                        style={tabStyle(activeTab === 'logs')}
+                        onClick={() => setActiveTab('logs')}
+                    >
+                        📝 Execution Log
+                    </div>
+                )}
             </div>
 
             {/* Tab Content */}
@@ -191,7 +207,7 @@ export default function SearchResults({ chunks, kbId, graphBackend }: SearchResu
                 {/* Chunks Tab */}
                 {activeTab === 'chunks' && (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                        {chunks.map((chunk, idx) => {
+                        {sortedChunks.map((chunk, idx) => {
                             const isGraph = chunk.metadata?.source === 'graph' || chunk.metadata?.source === 'graph_fallback';
                             return (
                                 <div
@@ -240,12 +256,46 @@ export default function SearchResults({ chunks, kbId, graphBackend }: SearchResu
                                                     Graph
                                                 </span>
                                             )}
-                                            <span className="badge badge-secondary" style={{ fontSize: '0.7rem' }}>
-                                                Score: {chunk.score?.toFixed(4)}
-                                                {chunk.l2_score != null && ` (L2: ${chunk.l2_score.toFixed(4)})`}
-                                            </span>
+                                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '2px' }}>
+                                                <span className="badge badge-secondary" style={{ fontSize: '0.7rem' }}>
+                                                    Final Score: {chunk.score?.toFixed(4)}
+                                                    {chunk.l2_score != null && ` (L2: ${chunk.l2_score.toFixed(4)})`}
+                                                </span>
+                                            </div>
                                         </div>
                                     </div>
+
+                                    {/* Score History Display */}
+                                    {chunk.metadata?.score_history && Object.keys(chunk.metadata.score_history).length > 0 && (
+                                        <div style={{
+                                            marginBottom: '0.5rem',
+                                            padding: '0.4rem',
+                                            background: '#f1f5f9',
+                                            border: '1px dashed #cbd5e1',
+                                            borderRadius: '4px',
+                                            fontSize: '0.7rem',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: '0.5rem',
+                                            flexWrap: 'wrap'
+                                        }}>
+                                            <span style={{ fontWeight: 600, color: '#64748b' }}>Pipeline Scores:</span>
+                                            {Object.entries(chunk.metadata.score_history).map(([stage, score], hIdx) => (
+                                                <div key={stage} style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                                    {hIdx > 0 && <span style={{ color: '#94a3b8' }}>→</span>}
+                                                    <span style={{
+                                                        background: '#e2e8f0',
+                                                        padding: '1px 6px',
+                                                        borderRadius: '4px',
+                                                        color: '#334155',
+                                                        border: '1px solid #cbd5e1'
+                                                    }}>
+                                                        {stage}: <b>{typeof score === 'number' ? score.toFixed(4) : score}</b>
+                                                    </span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
                                     <div style={{
                                         fontSize: '0.9rem',
                                         lineHeight: '1.6',
@@ -323,8 +373,59 @@ export default function SearchResults({ chunks, kbId, graphBackend }: SearchResu
 
                         {/* Graph Detail Tabs */}
                         {graphMetadata && (
-                            <GraphDetailsTabs graphMetadata={graphMetadata} chunks={chunks} />
+                            <GraphDetailsTabs graphMetadata={graphMetadata} chunks={sortedChunks} />
                         )}
+                    </div>
+                )}
+
+                {/* Logs Tab */}
+                {activeTab === 'logs' && logs && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', padding: '1rem' }}>
+                        {/* Pipeline Config */}
+                        {pipeline && (
+                            <div className="card" style={{ padding: '1rem' }}>
+                                <div style={{ fontSize: '0.9rem', fontWeight: 600, marginBottom: '0.5rem' }}>
+                                    Pipeline Configuration
+                                </div>
+                                <pre style={{
+                                    background: '#1e293b',
+                                    color: '#e2e8f0',
+                                    padding: '1rem',
+                                    borderRadius: '6px',
+                                    overflow: 'auto',
+                                    fontSize: '0.75rem',
+                                    maxHeight: '200px'
+                                }}>
+                                    {JSON.stringify(pipeline, null, 2)}
+                                </pre>
+                            </div>
+                        )}
+
+                        {/* Execution Logs */}
+                        <div className="card" style={{ padding: '1rem' }}>
+                            <div style={{ fontSize: '0.9rem', fontWeight: 600, marginBottom: '0.5rem' }}>
+                                Execution Trace
+                            </div>
+                            <div style={{
+                                background: '#1e293b',
+                                color: '#a5b4fc',
+                                padding: '1rem',
+                                borderRadius: '6px',
+                                overflow: 'auto',
+                                fontSize: '0.75rem',
+                                fontFamily: 'monospace',
+                                maxHeight: '400px',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: '4px'
+                            }}>
+                                {logs.map((log, idx) => (
+                                    <div key={idx} style={{ borderBottom: '1px solid #334155', paddingBottom: '2px' }}>
+                                        {log}
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
                     </div>
                 )}
             </div>

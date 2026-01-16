@@ -73,6 +73,7 @@ interface HorizontalConfigProps {
 
     // Callbacks
     onOpenPromptDialog?: () => void;
+    onOpenRerankPromptDialog?: () => void;
 }
 
 // Styles
@@ -147,7 +148,8 @@ export default function HorizontalConfig({
     useSchemaMode,
     setUseSchemaMode,
     setUseRawLog,
-    onOpenPromptDialog
+    onOpenPromptDialog,
+    onOpenRerankPromptDialog
 }: HorizontalConfigProps) {
 
     // Determine available strategies based on RAG type
@@ -256,7 +258,7 @@ export default function HorizontalConfig({
                 <div style={{ width: '1px', backgroundColor: 'var(--border)', alignSelf: 'stretch' }} />
 
                 {/* Column 2: Ontology Settings */}
-                {isGraphRAG && (
+                {isGraphRAG ? (
                     <div style={{ minWidth: '300px' }}>
                         <label style={{ ...labelStyle, marginBottom: '0.8rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
                             {(graphBackend === 'neo4j' || !isOntologyPromoted) ? 'Graph Settings' : 'Ontology Settings'}
@@ -394,9 +396,97 @@ export default function HorizontalConfig({
                             </div>
                         </div>
                     </div>
+                ) : (
+                    <div style={{ minWidth: '300px' }}>
+                        <label style={{ ...labelStyle, marginBottom: '0.8rem' }}>Reranking & Filters</label>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.8rem' }}>
+                            {/* Reranker */}
+                            <div>
+                                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontWeight: 500, fontSize: '0.9rem', marginBottom: '0.5rem' }}>
+                                    <input
+                                        type="checkbox"
+                                        checked={useReranker}
+                                        onChange={(e) => setUseReranker(e.target.checked)}
+                                    />
+                                    Use Reranker
+                                </label>
+
+                                {useReranker && (
+                                    <div style={{ paddingLeft: '0.5rem', borderLeft: '2px solid var(--border)', marginLeft: '0.4rem', display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+                                        <div style={{ display: 'flex', gap: '1rem' }}>
+                                            <div style={{ width: '100px' }}>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.2rem' }}>
+                                                    <span>Top K</span>
+                                                    <span>{rerankerTopK}</span>
+                                                </div>
+                                                <input type="range" min="1" max="20" value={rerankerTopK} onChange={(e) => setRerankerTopK(Number(e.target.value))} style={{ width: '100%', cursor: 'pointer', accentColor: '#3b82f6', height: '6px' }} />
+                                            </div>
+                                            <div style={{ width: '100px' }}>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.2rem' }}>
+                                                    <span>Threshold</span>
+                                                    <span>{rerankerThreshold.toFixed(2)}</span>
+                                                </div>
+                                                <input type="range" min="0" max="1" step="0.05" value={rerankerThreshold} onChange={(e) => setRerankerThreshold(Number(e.target.value))} style={{ width: '100%', cursor: 'pointer', accentColor: '#3b82f6', height: '6px' }} />
+                                            </div>
+                                        </div>
+
+                                        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                                            <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', fontSize: '0.85rem' }}>
+                                                <input type="checkbox" checked={useLLMReranker} onChange={(e) => setUseLLMReranker(e.target.checked)} />
+                                                LLM
+                                            </label>
+                                            {useLLMReranker && (
+                                                <select
+                                                    value={llmChunkStrategy}
+                                                    onChange={(e) => setLlmChunkStrategy(e.target.value)}
+                                                    style={{ padding: '0.1rem 0.3rem', fontSize: '0.8rem', borderRadius: '4px', border: '1px solid var(--border)' }}
+                                                >
+                                                    <option value="full">Full Context</option>
+                                                    <option value="limited">Limited</option>
+                                                    <option value="smart">Smart</option>
+                                                </select>
+                                            )}
+                                        </div>
+                                        {useLLMReranker && (
+                                            <button
+                                                onClick={() => onOpenRerankPromptDialog?.()}
+                                                style={{
+                                                    marginTop: '0.4rem',
+                                                    fontSize: '0.75rem',
+                                                    padding: '0.2rem 0.5rem',
+                                                    backgroundColor: '#f1f5f9',
+                                                    color: '#475569',
+                                                    border: '1px solid #e2e8f0',
+                                                    borderRadius: '4px',
+                                                    cursor: 'pointer'
+                                                }}
+                                            >
+                                                Edit Rerank Prompt
+                                            </button>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* NER */}
+                            <div style={{ borderTop: '1px solid var(--border)', paddingTop: '0.8rem' }}>
+                                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontWeight: 500, fontSize: '0.9rem' }}>
+                                    <input
+                                        type="checkbox"
+                                        checked={useNER}
+                                        onChange={(e) => setUseNER(e.target.checked)}
+                                    />
+                                    NER Filter
+                                </label>
+                                <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', margin: '0.2rem 0 0 1.4rem', lineHeight: 1.2 }}>
+                                    Entity-based filtering
+                                </p>
+                            </div>
+                        </div>
+                    </div>
                 )}
 
-                {isGraphRAG && <div style={{ width: '1px', backgroundColor: 'var(--border)', alignSelf: 'stretch' }} />}
+                <div style={{ width: '1px', backgroundColor: 'var(--border)', alignSelf: 'stretch' }} />
 
                 {/* Column 3: ANN Settings */}
                 <div style={{ minWidth: '220px' }}>
