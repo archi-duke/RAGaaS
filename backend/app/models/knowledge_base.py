@@ -17,5 +17,6 @@ class KnowledgeBase(Base):
     graph_backend = Column(String, default="ontology", nullable=True) # ontology or neo4j
     is_promoted = Column(Boolean, default=False)
     promotion_metadata = Column(JSON, default={})
+    pipeline_config = Column(JSON, default={"stages": []})  # Search pipeline configuration
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

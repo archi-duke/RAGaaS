@@ -65,15 +65,31 @@ class KeywordRetrievalStrategy(RetrievalStrategy):
         # Use shared tokenizer utility - choose mode based on use_multi_pos
         from app.services.retrieval.tokenizer import korean_tokenize
         use_multi_pos = kwargs.get("use_multi_pos", False)  # Default False for keyword-only search
+        tokenizer_engine = kwargs.get("tokenizer", "kiwi")
         tokenize_mode = 'extended' if use_multi_pos else 'strict'
 
         # Tokenize Corpus
-        tokenized_corpus = [korean_tokenize(hit.get("content", ""), mode=tokenize_mode, include_original_words=False, min_length=1) for hit in results]
+        tokenized_corpus = [
+            korean_tokenize(
+                hit.get("content", ""), 
+                mode=tokenize_mode, 
+                include_original_words=False, 
+                min_length=1,
+                engine=tokenizer_engine
+            ) 
+            for hit in results
+        ]
         
         bm25 = BM25Okapi(tokenized_corpus)
         
         # Tokenize Query
-        tokenized_query = korean_tokenize(search_query, mode=tokenize_mode, include_original_words=False, min_length=1)
+        tokenized_query = korean_tokenize(
+            search_query, 
+            mode=tokenize_mode, 
+            include_original_words=False, 
+            min_length=1,
+            engine=tokenizer_engine
+        )
         doc_scores = bm25.get_scores(tokenized_query)
         
         # Combine results with scores
@@ -94,11 +110,18 @@ class KeywordRetrievalStrategy(RetrievalStrategy):
         retrieved.sort(key=lambda x: x["score"], reverse=True)
         final_res = retrieved[:top_k]
         
-        # Attach extracted keywords to ALL results for UI display
+        # Format display name for tokenizer
+        tokenizer_display = "Kiwi"
+        if tokenizer_engine == 'spacy':
+            tokenizer_display = "spaCy (ko_lg)"
+
+        # Attach extracted keywords and tokenizer info to ALL results
         # This ensures the keywords are available even if some chunks are filtered/reranked
         for result in final_res:
             if "extracted_keywords" not in result["metadata"]:
                 result["metadata"]["extracted_keywords"] = tokenized_query
+            # Add tokenizer name for UI display
+            result["metadata"]["tokenizer"] = tokenizer_display
         
         with open("backend_debug.log", "a") as f:
             f.write(f"Keyword Search End. Found: {len(final_res)}\n")

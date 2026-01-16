@@ -144,7 +144,8 @@ export default function SearchResults({ chunks, kbId, graphBackend, logs, pipeli
     // Search ALL chunks for metadata (not just the first one)
     // This is needed because chunks may be filtered/reordered after API response
     let graphMetadata = null;
-    let extractedKeywords = null;
+    let extractedKeywords: string[] | null = null;
+    let tokenizerName: string | null = null;
 
     for (const chunk of chunks) {
         if (!graphMetadata && chunk.graph_metadata) {
@@ -153,8 +154,11 @@ export default function SearchResults({ chunks, kbId, graphBackend, logs, pipeli
         if (!extractedKeywords && chunk.metadata?.extracted_keywords && chunk.metadata.extracted_keywords.length > 0) {
             extractedKeywords = chunk.metadata.extracted_keywords;
         }
-        // Stop early if both are found
-        if (graphMetadata && extractedKeywords) break;
+        if (!tokenizerName && chunk.metadata?.tokenizer) {
+            tokenizerName = chunk.metadata.tokenizer;
+        }
+        // Stop early if all are found
+        if (graphMetadata && extractedKeywords && tokenizerName) break;
     }
 
     // Debug: Log the data to verify it's being received correctly
@@ -290,7 +294,7 @@ export default function SearchResults({ chunks, kbId, graphBackend, logs, pipeli
                                                         color: '#334155',
                                                         border: '1px solid #cbd5e1'
                                                     }}>
-                                                        {stage}: <b>{typeof score === 'number' ? score.toFixed(4) : score}</b>
+                                                        {stage}: <b>{typeof score === 'number' ? score.toFixed(4) : String(score)}</b>
                                                     </span>
                                                 </div>
                                             ))}
@@ -357,8 +361,13 @@ export default function SearchResults({ chunks, kbId, graphBackend, logs, pipeli
                         ) : (
                             extractedKeywords && extractedKeywords.length > 0 && (
                                 <div style={{ marginBottom: '1.5rem' }}>
-                                    <div style={{ fontSize: '0.8rem', fontWeight: 600, marginBottom: '0.5rem', color: 'var(--text-primary)' }}>
-                                        🔑 Extracted Keywords (Hybrid/BM25):
+                                    <div style={{ fontSize: '0.8rem', fontWeight: 600, marginBottom: '0.5rem', color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                        <span>🔑 Extracted Keywords (Hybrid/BM25):</span>
+                                        {tokenizerName && (
+                                            <span style={{ fontSize: '0.65rem', fontWeight: 400, color: '#64748b', background: '#f1f5f9', padding: '1px 6px', borderRadius: '4px', border: '1px solid #e2e8f0' }}>
+                                                Tokenizer: {tokenizerName}
+                                            </span>
+                                        )}
                                     </div>
                                     <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
                                         {extractedKeywords.map((kw: string, idx: number) => (

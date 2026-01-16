@@ -8,6 +8,8 @@ import DocumentsTab from '../components/DocumentsTab';
 import ChatInterface from '../components/ChatInterface';
 import ChunksModal from '../components/ChunksModal';
 import HorizontalConfig from '../components/HorizontalConfig';
+import PipelineBuilder from '../components/PipelineBuilder';
+import type { PipelineConfig } from '../components/PipelineBuilder';
 import SearchResults from '../components/SearchResults';
 import ConfirmDialog from '../components/ConfirmDialog';
 import PromptDialog from '../components/PromptDialog';
@@ -55,10 +57,21 @@ export default function KnowledgeBaseDetail() {
 
     // Chat results state
     const [retrievedChunks, setRetrievedChunks] = useState<any[]>([]);
+    const [executionLogs, setExecutionLogs] = useState<string[]>([]);
+    const [executedPipeline, setExecutedPipeline] = useState<any>(null);
+
+    const handleSearchResults = (chunks: any[], logs?: string[], pipeline?: any) => {
+        setRetrievedChunks(chunks);
+        if (logs) setExecutionLogs(logs);
+        if (pipeline) setExecutedPipeline(pipeline);
+    };
 
     // Custom Prompt State
     const [customQueryPrompt, setCustomQueryPrompt] = useState<string>('');
     const [isPromptDialogOpen, setIsPromptDialogOpen] = useState(false);
+
+    // Pipeline Configuration State
+    const [pipelineConfig, setPipelineConfig] = useState<PipelineConfig>({ stages: [] });
 
     // Chunk viewer state
     const [selectedDoc, setSelectedDoc] = useState<any>(null);
@@ -454,59 +467,17 @@ export default function KnowledgeBaseDetail() {
             )}
 
             {activeTab === 'chat' && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', flex: 1, minHeight: 0 }}>
-                    {/* Top: Horizontal Configuration */}
-                    <HorizontalConfig
-                        isOntologyPromoted={kb.is_promoted}
-                        searchStrategy={searchStrategy}
-                        setSearchStrategy={setSearchStrategy}
-                        bm25TopK={bm25TopK}
-                        setBm25TopK={setBm25TopK}
-                        bm25Tokenizer={bm25Tokenizer}
-                        setBm25Tokenizer={setBm25Tokenizer}
-                        useMultiPOS={useMultiPOS}
-                        setUseMultiPOS={setUseMultiPOS}
-                        annTopK={annTopK}
-                        setAnnTopK={setAnnTopK}
-                        annThreshold={annThreshold}
-                        setAnnThreshold={setAnnThreshold}
-                        useParallelSearch={useParallelSearch}
-                        setUseParallelSearch={setUseParallelSearch}
-                        useReranker={useReranker}
-                        setUseReranker={setUseReranker}
-                        rerankerTopK={rerankerTopK}
-                        setRerankerTopK={setRerankerTopK}
-                        rerankerThreshold={rerankerThreshold}
-                        setRerankerThreshold={setRerankerThreshold}
-                        useLLMReranker={useLLMReranker}
-                        setUseLLMReranker={setUseLLMReranker}
-                        llmChunkStrategy={llmChunkStrategy}
-                        setLlmChunkStrategy={setLlmChunkStrategy}
-                        useNER={useNER}
-                        setUseNER={setUseNER}
-                        enableGraphSearch={enableGraphSearch}
-                        setEnableGraphSearch={setEnableGraphSearch}
-                        graphHops={graphHops}
-                        setGraphHops={setGraphHops}
-                        bruteForceTopK={bruteForceTopK}
-                        setBruteForceTopK={setBruteForceTopK}
-                        bruteForceThreshold={bruteForceThreshold}
-                        setBruteForceThreshold={setBruteForceThreshold}
-                        enableInverseSearch={enableInverseSearch}
-                        setEnableInverseSearch={setEnableInverseSearch}
-                        inverseExtractionMode={inverseExtractionMode}
-                        setInverseExtractionMode={setInverseExtractionMode}
-                        chunkingStrategy={kb.chunking_strategy}
-                        graphBackend={kb.graph_backend}
-                        useRawLog={useRawLog}
-                        setUseRawLog={setUseRawLog}
-                        useRelationFilter={useRelationFilter}
-                        setUseRelationFilter={setUseRelationFilter}
-                        useSchemaMode={useSchemaMode}
-                        setUseSchemaMode={setUseSchemaMode}
-                        promotionMetadata={kb.is_promoted ? kb.promotion_metadata : undefined}
-                        onOpenPromptDialog={() => setIsPromptDialogOpen(true)}
-                    />
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', flex: 1, minHeight: 0, overflow: 'visible' }}>
+                    {/* Top: Pipeline Builder */}
+                    <div style={{ position: 'relative', zIndex: 1000 }}>
+                        <PipelineBuilder
+                            kbId={id!}
+                            graphBackend={kb.graph_backend}
+                            isOntologyPromoted={kb.is_promoted}
+                            initialConfig={pipelineConfig}
+                            onPipelineChange={setPipelineConfig}
+                        />
+                    </div>
 
                     {/* Bottom: Split View */}
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '5px', flex: 1, minHeight: 0 }}>
@@ -538,7 +509,8 @@ export default function KnowledgeBaseDetail() {
                                 useSchemaMode={useSchemaMode}
                                 useRawLog={useRawLog}
                                 customQueryPrompt={customQueryPrompt}
-                                onChunksReceived={setRetrievedChunks}
+                                pipeline={pipelineConfig}
+                                onChunksReceived={handleSearchResults}
                             />
                         </div>
 
@@ -548,6 +520,8 @@ export default function KnowledgeBaseDetail() {
                                 chunks={retrievedChunks}
                                 kbId={id!}
                                 graphBackend={kb.graph_backend}
+                                logs={executionLogs}
+                                pipeline={executedPipeline}
                             />
                         </div>
                     </div>

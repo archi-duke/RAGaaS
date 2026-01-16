@@ -3,6 +3,7 @@ Pipeline Executor - Sequential execution of search pipeline stages
 """
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, field
+import copy
 
 from app.schemas.pipeline import PipelineStage, PipelineConfig, StageContext
 
@@ -99,25 +100,90 @@ class PipelineExecutor:
         return ctx
     
     async def _execute_ann(self, ctx: ExecutionContext, params: dict) -> ExecutionContext:
-        """Execute ANN (vector) search stage"""
+        """Execute ANN (vector) search stage
+        
+        If previous stage results exist (e.g., BM25 candidates), rescore those candidates
+        using vector similarity. Otherwise, run a fresh ANN search.
+        """
         from app.services.retrieval import retrieval_factory
+        from app.services.embedding import embedding_service
+        import numpy as np
         
         top_k = params.get("top_k", 10)
         threshold = params.get("threshold", 0.5)
         index_type = params.get("index_type", "IVF_FLAT")
         merge_mode = params.get("merge_mode", "union")
+        rescore_mode = params.get("rescore", True)  # Default to rescore if candidates exist
         
-        strategy = retrieval_factory.get_strategy("ann")
-        new_results = await strategy.search(
-            ctx.kb_id,
-            ctx.query,
-            top_k,
-            metric_type=ctx.metric_type,
-            score_threshold=threshold,
-            index_type=index_type
-        )
+        # If previous stage provided candidates and rescore mode is enabled, rescore them
+        if ctx.results and rescore_mode:
+            ctx.logs.append(f"[ANN] Rescore mode: rescoring {len(ctx.results)} candidates from previous stage")
+            
+            # Embed query
+            query_embedding = (await embedding_service.get_embeddings([ctx.query]))[0]
+            query_vec = np.array(query_embedding)
+            
+            # Embed all candidate contents
+            candidate_contents = [r.get('content', '') for r in ctx.results]
+            candidate_embeddings = await embedding_service.get_embeddings(candidate_contents)
+            
+            # Compute similarity scores and update
+            rescored_results = []
+            for i, doc_embedding in enumerate(candidate_embeddings):
+                doc_vec = np.array(doc_embedding)
+                
+                # Compute similarity based on metric type
+                if ctx.metric_type == "L2":
+                    dist = float(np.linalg.norm(query_vec - doc_vec))
+                    score = 1.0 / (1.0 + dist)
+                elif ctx.metric_type == "IP":
+                    score = float(np.dot(query_vec, doc_vec))
+                else:  # COSINE (default)
+                    norm1 = np.linalg.norm(query_vec)
+                    norm2 = np.linalg.norm(doc_vec)
+                    if norm1 > 0 and norm2 > 0:
+                        score = float(np.dot(query_vec, doc_vec) / (norm1 * norm2))
+                    else:
+                        score = 0.0
+                
+                # Apply threshold filter
+                if score < threshold:
+                    continue
+                
+                # Deep copy the chunk to preserve previous stage's score_history
+                chunk = copy.deepcopy(ctx.results[i])
+                chunk['score'] = score
+                
+                # Ensure metadata and score_history exist (preserve previous history)
+                if 'metadata' not in chunk:
+                    chunk['metadata'] = {}
+                if 'score_history' not in chunk['metadata']:
+                    chunk['metadata']['score_history'] = {}
+                
+                # Record ANN score in history (previous stages like BM25 are preserved)
+                chunk['metadata']['score_history']['ANN'] = score
+                
+                rescored_results.append(chunk)
+            
+            # Sort by score and take top_k
+            rescored_results.sort(key=lambda x: x['score'], reverse=True)
+            ctx.results = rescored_results[:top_k]
+            ctx.logs.append(f"[ANN] Rescore complete: {len(ctx.results)} results after threshold filter")
+        else:
+            # Fresh ANN search (no previous candidates or rescore disabled)
+            ctx.logs.append(f"[ANN] Fresh search mode: running vector search on full collection")
+            strategy = retrieval_factory.get_strategy("ann")
+            new_results = await strategy.search(
+                ctx.kb_id,
+                ctx.query,
+                top_k,
+                metric_type=ctx.metric_type,
+                score_threshold=threshold,
+                index_type=index_type
+            )
+            
+            ctx.results = self._update_results_with_history(ctx.results, new_results, "ANN", merge_mode)
         
-        ctx.results = self._update_results_with_history(ctx.results, new_results, "ANN", merge_mode)
         return ctx
     
     async def _execute_bm25(self, ctx: ExecutionContext, params: dict) -> ExecutionContext:
@@ -184,23 +250,28 @@ class PipelineExecutor:
         from app.services.retrieval import retrieval_factory
         
         hops = params.get("hops", 2)
+        top_k = params.get("top_k", 10)
         use_relation_filter = params.get("use_relation_filter", True)
         enable_inverse = params.get("enable_inverse", False)
+        inverse_mode = params.get("inverse_mode", "auto")
         use_schema_mode = params.get("use_schema_mode", True)
+        custom_query_prompt = params.get("custom_query_prompt", "")
         merge_mode = params.get("merge_mode", "union")
         
         strategy = retrieval_factory.get_strategy("hybrid_graph")
         new_results = await strategy.search(
             ctx.kb_id,
             ctx.query,
-            top_k=10,
+            top_k=top_k,
             metric_type=ctx.metric_type,
             enable_graph_search=True,
             graph_hops=hops,
             graph_backend=ctx.graph_backend,
             use_relation_filter=use_relation_filter,
             enable_inverse_search=enable_inverse,
-            use_schema_mode=use_schema_mode
+            inverse_extraction_mode=inverse_mode,
+            use_schema_mode=use_schema_mode,
+            custom_query_prompt=custom_query_prompt
         )
         
         ctx.results = self._update_results_with_history(ctx.results, new_results, "Graph", merge_mode)
@@ -274,12 +345,20 @@ class PipelineExecutor:
         from app.services.ner import ner_service
         
         penalty = params.get("penalty", 0.3)
+        tokenizer_engine = params.get("tokenizer", "regex")
+        ner_mode = params.get("mode", "nnp")
         
         if not ctx.results:
             return ctx
         
         # NER filter modifies existing scores (apply penalty)
-        ctx.results = ner_service.filter_by_entities(ctx.query, ctx.results, penalty=penalty)
+        ctx.results = ner_service.filter_by_entities(
+            ctx.query, 
+            ctx.results, 
+            penalty=penalty,
+            engine=tokenizer_engine,
+            mode=ner_mode
+        )
         
         # Log the penalty application
         for r in ctx.results:

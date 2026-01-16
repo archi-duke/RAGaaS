@@ -39,9 +39,19 @@ const DEFAULT_PARAMS: Record<StageType, Record<string, any>> = {
     ann: { top_k: 10, threshold: 0.5, index_type: 'IVF_FLAT' },
     bm25: { top_k: 50, use_multi_pos: true },
     brute_force: { top_k: 3, threshold: 1.5 },
-    graph: { hops: 2, use_relation_filter: true, enable_inverse: false, use_schema_mode: true },
+    graph: {
+        hops: 2,
+        is_auto_hops: true,
+        top_k: 10,
+        use_relation_filter: true,
+        enable_inverse: false,
+        inverse_mode: 'always',
+        use_schema_mode: true,
+        merge_mode: 'union',
+        custom_query_prompt: ''
+    },
     rerank: { top_k: 5, threshold: 0.0, use_llm: false, llm_strategy: 'full' },
-    ner_filter: { penalty: 0.3 },
+    ner_filter: { penalty: 0.3, tokenizer: 'regex', mode: 'nnp' },
 };
 
 // Styles
@@ -78,9 +88,9 @@ export default function PipelineBuilder({
     const [showDropdown, setShowDropdown] = useState(false);
     const [isLoading, setIsLoading] = useState(true);
 
-    // Rerank Prompt Editor state
-    const [showRerankPromptModal, setShowRerankPromptModal] = useState(false);
-    const [rerankPrompt, setRerankPrompt] = useState('');
+    // Generic Prompt Editor state (for Graph, Rerank, etc.)
+    const [editingPromptStage, setEditingPromptStage] = useState<number | null>(null);
+    const [tempPrompt, setTempPrompt] = useState('');
     const [isLoadingPrompt, setIsLoadingPrompt] = useState(false);
     const [promptError, setPromptError] = useState('');
 
@@ -143,15 +153,15 @@ export default function PipelineBuilder({
         onPipelineChange({ stages });
     }, [stages, onPipelineChange]);
 
-    // --- Rerank Prompt Functions ---
-    const loadRerankPrompt = async () => {
+    // --- Prompt Functions ---
+    const loadGlobalRerankPrompt = async () => {
         setIsLoadingPrompt(true);
         setPromptError('');
         try {
             const response = await fetch('/api/knowledge-bases/settings/rerank-prompt');
-            if (!response.ok) throw new Error('Failed to load prompt');
+            if (!response.ok) throw new Error('Failed to load global prompt');
             const data = await response.json();
-            setRerankPrompt(data.content);
+            setTempPrompt(data.content);
         } catch (e: any) {
             setPromptError(e.message || 'Failed to load prompt');
         } finally {
@@ -159,29 +169,49 @@ export default function PipelineBuilder({
         }
     };
 
-    const openRerankPromptEditor = () => {
-        loadRerankPrompt();
-        setShowRerankPromptModal(true);
-    };
-
-    const saveRerankPrompt = async () => {
+    const loadGraphDefaultPrompt = async () => {
         setIsLoadingPrompt(true);
         setPromptError('');
         try {
-            const response = await fetch('/api/knowledge-bases/settings/rerank-prompt', {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ content: rerankPrompt })
-            });
-            if (!response.ok) throw new Error('Failed to save prompt');
-            setShowRerankPromptModal(false);
+            const backendType = graphBackend === 'neo4j'
+                ? 'neo4j'
+                : (isOntologyPromoted ? 'ontology_plus' : 'ontology_minus');
+            const response = await fetch(`/api/knowledge-bases/query-prompt/content?type=${backendType}`);
+            if (!response.ok) throw new Error('Failed to load default graph prompt');
+            const data = await response.json();
+            setTempPrompt(data.content);
         } catch (e: any) {
-            setPromptError(e.message || 'Failed to save prompt');
+            setPromptError(e.message || 'Failed to load prompt');
         } finally {
             setIsLoadingPrompt(false);
         }
     };
-    // --- End Rerank Prompt Functions ---
+
+    const handleSavePrompt = async () => {
+        if (editingPromptStage === -1) {
+            // Global Rerank Prompt
+            setIsLoadingPrompt(true);
+            setPromptError('');
+            try {
+                const response = await fetch('/api/knowledge-bases/settings/rerank-prompt', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ content: tempPrompt })
+                });
+                if (!response.ok) throw new Error('Failed to save global prompt');
+                setEditingPromptStage(null);
+            } catch (e: any) {
+                setPromptError(e.message || 'Failed to save prompt');
+            } finally {
+                setIsLoadingPrompt(false);
+            }
+        } else if (editingPromptStage !== null) {
+            // Stage-specific Custom Prompt (Graph, etc.)
+            handleParamChange(editingPromptStage, 'custom_query_prompt', tempPrompt);
+            setEditingPromptStage(null);
+        }
+    };
+    // --- End Prompt Functions ---
 
     const handleAddStage = (type: StageType) => {
         const newStage: PipelineStage = {
@@ -249,6 +279,58 @@ export default function PipelineBuilder({
                             {stageInfo?.label || stage.type}
                         </span>
 
+                        {stage.type === 'graph' && isOntologyPromoted && (
+                            <button
+                                onClick={() => {
+                                    const current = !!(stage.params.use_schema_mode ?? true);
+                                    const nextSchemaMode = !current;
+                                    const newStages = [...stages];
+                                    const p = { ...newStages[index].params };
+
+                                    if (nextSchemaMode) {
+                                        // Backup
+                                        p._prev_use_relation_filter = p.use_relation_filter ?? true;
+                                        p._prev_enable_inverse = p.enable_inverse ?? false;
+                                        p._prev_inverse_mode = p.inverse_mode ?? 'always';
+
+                                        // Force
+                                        p.use_schema_mode = true;
+                                        p.use_relation_filter = true;
+                                        p.enable_inverse = true;
+                                        p.inverse_mode = 'always';
+                                    } else {
+                                        // Restore
+                                        p.use_schema_mode = false;
+                                        if (p._prev_use_relation_filter !== undefined) p.use_relation_filter = p._prev_use_relation_filter;
+                                        if (p._prev_enable_inverse !== undefined) p.enable_inverse = p._prev_enable_inverse;
+                                        if (p._prev_inverse_mode !== undefined) p.inverse_mode = p._prev_inverse_mode;
+
+                                        delete p._prev_use_relation_filter;
+                                        delete p._prev_enable_inverse;
+                                        delete p._prev_inverse_mode;
+                                    }
+
+                                    newStages[index] = { ...newStages[index], params: p };
+                                    setStages(newStages);
+                                }}
+                                style={{
+                                    fontSize: '0.65rem',
+                                    color: !!(stage.params.use_schema_mode ?? true) ? '#fff' : '#1e40af',
+                                    backgroundColor: !!(stage.params.use_schema_mode ?? true) ? '#1e40af' : '#eff6ff',
+                                    border: '1px solid #1e40af',
+                                    padding: '2px 8px',
+                                    borderRadius: '12px',
+                                    fontWeight: 600,
+                                    lineHeight: '1.2',
+                                    cursor: 'pointer',
+                                    transition: 'all 0.2s ease',
+                                    marginLeft: '8px'
+                                }}
+                            >
+                                {!!(stage.params.use_schema_mode ?? true) ? 'Schema On' : 'Schema Off'}
+                            </button>
+                        )}
+
                         <button
                             onClick={() => handleMoveStage(index, 'right')}
                             disabled={index === stages.length - 1}
@@ -311,6 +393,7 @@ export default function PipelineBuilder({
                         <div style={{ paddingLeft: '0.5rem', paddingTop: '0.2rem' }}>
                             <ParamSelect
                                 label="Index Type"
+                                minWidth="100px"
                                 value={params.index_type || 'IVF_FLAT'}
                                 options={[
                                     { value: 'FLAT', label: 'FLAT' },
@@ -334,11 +417,23 @@ export default function PipelineBuilder({
                             min={1} max={100}
                             onChange={(v) => handleParamChange(index, 'top_k', v)}
                         />
-                        <ParamCheckbox
-                            label="Multi-POS"
-                            checked={params.use_multi_pos}
-                            onChange={(v) => handleParamChange(index, 'use_multi_pos', v)}
-                        />
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', paddingTop: '0.25rem' }}>
+                            <ParamSelect
+                                label="Tokenizer"
+                                minWidth="80px"
+                                value={params.tokenizer || 'kiwi'}
+                                options={[
+                                    { value: 'kiwi', label: 'Kiwi' },
+                                    { value: 'spacy', label: 'spaCy' }
+                                ]}
+                                onChange={(v) => handleParamChange(index, 'tokenizer', v)}
+                            />
+                            <ParamCheckbox
+                                label="Multi-POS"
+                                checked={params.use_multi_pos}
+                                onChange={(v) => handleParamChange(index, 'use_multi_pos', v)}
+                            />
+                        </div>
                     </div>
                 );
 
@@ -361,32 +456,119 @@ export default function PipelineBuilder({
                 );
 
             case 'graph':
+                const isAutoHops = params.is_auto_hops ?? true;
+                const showLatencyWarning = !isAutoHops && params.hops >= 4;
                 return (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                    <div style={{ display: 'flex', flexDirection: 'row', gap: '0.5rem', alignItems: 'flex-start' }}>
+                        {/* Hops Slider */}
+                        <div style={{ position: 'relative' }}>
+                            <ParamSlider
+                                label="Hops"
+                                value={isAutoHops ? 2 : params.hops}
+                                min={1} max={5}
+                                onChange={(v) => handleParamChange(index, 'hops', v)}
+                                disabled={isAutoHops}
+                            />
+                            {showLatencyWarning && (
+                                <div style={{
+                                    color: '#c2410c',
+                                    fontSize: '0.65rem',
+                                    position: 'absolute',
+                                    bottom: '-14px',
+                                    left: '24px',
+                                    whiteSpace: 'nowrap'
+                                }}>
+                                    ⚠️ High latency warning
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Top K Slider */}
                         <ParamSlider
-                            label="Hops"
-                            value={params.hops}
-                            min={1} max={5}
-                            onChange={(v) => handleParamChange(index, 'hops', v)}
+                            label="Top K"
+                            value={params.top_k || 10}
+                            min={1} max={50}
+                            onChange={(v) => handleParamChange(index, 'top_k', v)}
                         />
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+
+                        {/* Config Column (Checkboxes) */}
+                        <div style={{
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '0.6rem',
+                            paddingTop: '0.4rem',
+                            minWidth: '100px'
+                        }}>
                             <ParamCheckbox
-                                label="Relation Filter"
+                                label="Auto Hops"
+                                checked={isAutoHops}
+                                onChange={(v) => handleParamChange(index, 'is_auto_hops', v)}
+                            />
+                            <ParamCheckbox
+                                label="Rel Filter"
                                 checked={params.use_relation_filter}
                                 onChange={(v) => handleParamChange(index, 'use_relation_filter', v)}
+                                disabled={!!params.use_schema_mode}
                             />
-                            <ParamCheckbox
-                                label="Inverse Relations"
-                                checked={params.enable_inverse}
-                                onChange={(v) => handleParamChange(index, 'enable_inverse', v)}
-                            />
-                            {isOntologyPromoted && (
-                                <ParamCheckbox
-                                    label="Schema Mode"
-                                    checked={params.use_schema_mode}
-                                    onChange={(v) => handleParamChange(index, 'use_schema_mode', v)}
+                            <div style={{ marginLeft: '3px' }}>
+                                <ParamSelect
+                                    label="Inverse Search"
+                                    minWidth="80px"
+                                    disabled={!!params.use_schema_mode}
+                                    value={!params.enable_inverse ? 'none' : (params.inverse_mode || 'always')}
+                                    options={[
+                                        { value: 'none', label: 'None' },
+                                        { value: 'auto', label: 'Auto' },
+                                        { value: 'always', label: 'Always' }
+                                    ]}
+                                    onChange={(v) => {
+                                        const newStages = [...stages];
+                                        newStages[index] = {
+                                            ...newStages[index],
+                                            params: {
+                                                ...newStages[index].params,
+                                                enable_inverse: v !== 'none',
+                                                inverse_mode: v === 'none' ? (params.inverse_mode || 'always') : v
+                                            }
+                                        };
+                                        setStages(newStages);
+                                    }}
                                 />
-                            )}
+                            </div>
+                        </div>
+
+                        {/* Actions Column */}
+                        <div style={{
+                            paddingTop: '0.4rem',
+                            marginLeft: '0.4rem',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            justifyContent: 'flex-start',
+                            minHeight: '120px'
+                        }}>
+                            <button
+                                onClick={() => {
+                                    setEditingPromptStage(index);
+                                    if (!params.custom_query_prompt) {
+                                        loadGraphDefaultPrompt();
+                                    } else {
+                                        setTempPrompt(params.custom_query_prompt);
+                                    }
+                                }}
+                                style={{
+                                    padding: '6px 12px',
+                                    fontSize: '0.75rem',
+                                    backgroundColor: '#f1f5f9',
+                                    border: '1px solid #e2e8f0',
+                                    borderRadius: '6px',
+                                    cursor: 'pointer',
+                                    color: '#475569',
+                                    fontWeight: 500,
+                                    whiteSpace: 'nowrap'
+                                }}
+                            >
+                                Query Prompt
+                            </button>
                         </div>
                     </div>
                 );
@@ -422,6 +604,7 @@ export default function PipelineBuilder({
                             <div style={{ marginLeft: '0.3rem' }}>
                                 <ParamSelect
                                     label="LLM Strategy"
+                                    minWidth="80px"
                                     value={params.llm_strategy || 'full'}
                                     options={[
                                         { value: 'full', label: 'Full' },
@@ -433,7 +616,10 @@ export default function PipelineBuilder({
                             </div>
                             {params.use_llm && (
                                 <button
-                                    onClick={openRerankPromptEditor}
+                                    onClick={() => {
+                                        setEditingPromptStage(-1); // -1 means global rerank prompt
+                                        loadGlobalRerankPrompt();
+                                    }}
                                     style={{
                                         marginTop: '0.5rem',
                                         fontSize: '0.75rem',
@@ -453,14 +639,40 @@ export default function PipelineBuilder({
                 );
 
             case 'ner_filter':
+                const isRegex = !params.tokenizer || params.tokenizer === 'regex';
                 return (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                    <div style={{ display: 'flex', flexDirection: 'row', gap: '0.5rem', alignItems: 'flex-start' }}>
                         <ParamSlider
                             label="Penalty"
                             value={params.penalty}
                             min={0} max={1} step={0.05}
                             onChange={(v) => handleParamChange(index, 'penalty', v)}
                         />
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', paddingTop: '0.25rem', minWidth: '90px' }}>
+                            <ParamSelect
+                                label="Engine"
+                                minWidth="90px"
+                                value={params.tokenizer || 'regex'}
+                                options={[
+                                    { value: 'regex', label: 'Regex' },
+                                    { value: 'kiwi', label: 'Kiwi' },
+                                    { value: 'spacy', label: 'spaCy' }
+                                ]}
+                                onChange={(v) => handleParamChange(index, 'tokenizer', v)}
+                            />
+                            {!isRegex && (
+                                <ParamSelect
+                                    label="Mode"
+                                    minWidth="90px"
+                                    value={params.mode || 'nnp'}
+                                    options={[
+                                        { value: 'nnp', label: 'NNP' },
+                                        { value: 'ner', label: 'NER' }
+                                    ]}
+                                    onChange={(v) => handleParamChange(index, 'mode', v)}
+                                />
+                            )}
+                        </div>
                     </div>
                 );
 
@@ -606,8 +818,8 @@ export default function PipelineBuilder({
                 </div>
             )}
 
-            {/* Rerank Prompt Editor Modal */}
-            {showRerankPromptModal && createPortal(
+            {/* Generic Prompt Editor Modal */}
+            {editingPromptStage !== null && createPortal(
                 <div style={{
                     position: 'fixed',
                     top: 0,
@@ -631,10 +843,12 @@ export default function PipelineBuilder({
                         boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)'
                     }}>
                         <h3 style={{ marginTop: 0, marginBottom: '1rem', fontSize: '1.1rem', fontWeight: 600 }}>
-                            Edit LLM Rerank Prompt
+                            {editingPromptStage === -1 ? 'Edit Global Rerank Prompt' : 'Edit Stage Custom Prompt'}
                         </h3>
                         <p style={{ fontSize: '0.8rem', color: '#64748b', marginBottom: '0.75rem' }}>
-                            Use <code style={{ backgroundColor: '#f1f5f9', padding: '0.1rem 0.3rem', borderRadius: '3px' }}>{'{query}'}</code> and <code style={{ backgroundColor: '#f1f5f9', padding: '0.1rem 0.3rem', borderRadius: '3px' }}>{'{chunk_content}'}</code> as placeholders.
+                            {editingPromptStage === -1
+                                ? "Use {query} and {chunk_content} as placeholders."
+                                : "Add custom instructions for this search stage."}
                         </p>
                         {promptError && (
                             <div style={{ color: '#ef4444', fontSize: '0.85rem', marginBottom: '0.5rem' }}>
@@ -642,8 +856,8 @@ export default function PipelineBuilder({
                             </div>
                         )}
                         <textarea
-                            value={rerankPrompt}
-                            onChange={(e) => setRerankPrompt(e.target.value)}
+                            value={tempPrompt}
+                            onChange={(e) => setTempPrompt(e.target.value)}
                             style={{
                                 flex: 1,
                                 minHeight: '400px',
@@ -661,11 +875,11 @@ export default function PipelineBuilder({
                             }}
                             spellCheck={false}
                             disabled={isLoadingPrompt}
-                            placeholder="Enter custom instructions for reranking..."
+                            placeholder="Enter custom instructions..."
                         />
                         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', marginTop: '1rem' }}>
                             <button
-                                onClick={() => setShowRerankPromptModal(false)}
+                                onClick={() => setEditingPromptStage(null)}
                                 style={{
                                     padding: '0.5rem 1rem',
                                     backgroundColor: '#f1f5f9',
@@ -678,7 +892,7 @@ export default function PipelineBuilder({
                                 Cancel
                             </button>
                             <button
-                                onClick={saveRerankPrompt}
+                                onClick={handleSavePrompt}
                                 disabled={isLoadingPrompt}
                                 style={{
                                     padding: '0.5rem 1rem',
@@ -688,10 +902,12 @@ export default function PipelineBuilder({
                                     borderRadius: '6px',
                                     cursor: isLoadingPrompt ? 'not-allowed' : 'pointer',
                                     fontSize: '0.9rem',
-                                    fontWeight: 500
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '0.5rem'
                                 }}
                             >
-                                {isLoadingPrompt ? 'Saving...' : 'Save Prompt'}
+                                {isLoadingPrompt ? 'Saving...' : 'Save Changes'}
                             </button>
                         </div>
                     </div>
@@ -709,7 +925,8 @@ function ParamSlider({
     min,
     max,
     step = 1,
-    onChange
+    onChange,
+    disabled = false
 }: {
     label: string;
     value: number;
@@ -717,6 +934,7 @@ function ParamSlider({
     max: number;
     step?: number;
     onChange: (v: number) => void;
+    disabled?: boolean;
 }) {
     return (
         <div style={{
@@ -724,7 +942,9 @@ function ParamSlider({
             flexDirection: 'column',
             alignItems: 'center',
             gap: '0.2rem',
-            minHeight: '120px'
+            minHeight: '120px',
+            opacity: disabled ? 0.5 : 1,
+            pointerEvents: disabled ? 'none' : 'auto'
         }}>
             {/* Value on Top */}
             <span style={{
@@ -771,13 +991,14 @@ function ParamSlider({
                         max={max}
                         step={step}
                         value={value}
+                        disabled={disabled}
                         onChange={(e) => onChange(Number(e.target.value))}
                         style={{
                             width: '80px',
                             height: '6px',
                             margin: 0,
                             padding: 0,
-                            cursor: 'pointer',
+                            cursor: disabled ? 'not-allowed' : 'pointer',
                             accentColor: '#3b82f6',
                             transform: 'rotate(-90deg)',
                             transformOrigin: 'center',
@@ -794,17 +1015,28 @@ function ParamSlider({
 function ParamCheckbox({
     label,
     checked,
-    onChange
+    onChange,
+    disabled
 }: {
     label: string;
     checked: boolean;
     onChange: (v: boolean) => void;
+    disabled?: boolean;
 }) {
     return (
-        <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8rem', cursor: 'pointer', color: '#475569' }}>
+        <label style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.4rem',
+            fontSize: '0.8rem',
+            cursor: disabled ? 'not-allowed' : 'pointer',
+            color: '#475569',
+            opacity: disabled ? 0.6 : 1
+        }}>
             <input
                 type="checkbox"
                 checked={checked}
+                disabled={disabled}
                 onChange={(e) => onChange(e.target.checked)}
             />
             {label}
@@ -817,13 +1049,15 @@ function ParamSelect({
     value,
     options,
     onChange,
-    disabled
+    disabled,
+    minWidth = '130px'
 }: {
     label: string;
     value: string;
     options: { value: string; label: string }[];
     onChange: (v: string) => void;
     disabled?: boolean;
+    minWidth?: string;
 }) {
     const [isOpen, setIsOpen] = React.useState(false);
     const containerRef = React.useRef<HTMLDivElement>(null);
@@ -879,7 +1113,8 @@ function ParamSelect({
             ref={containerRef}
             style={{
                 position: 'relative',
-                width: '100px',
+                width: 'auto',
+                minWidth: minWidth,
                 cursor: disabled ? 'not-allowed' : 'pointer',
                 opacity: disabled ? 0.6 : 1
             }}
@@ -929,7 +1164,8 @@ function ParamSelect({
                         left: coords.left,
                         top: isUpward ? 'auto' : coords.top + 45, // 트리거 높이 고려
                         bottom: isUpward ? (window.innerHeight - coords.top) + 4 : 'auto',
-                        width: coords.width,
+                        width: Math.max(coords.width, parseInt(minWidth)),
+                        minWidth: minWidth,
                         backgroundColor: 'white',
                         border: '1px solid #e2e8f0',
                         borderRadius: '8px',
@@ -944,7 +1180,8 @@ function ParamSelect({
                     {options.map((opt) => (
                         <div
                             key={opt.value}
-                            onClick={() => {
+                            onMouseDown={(e) => {
+                                e.preventDefault(); // Prevent blur
                                 onChange(opt.value);
                                 setIsOpen(false);
                             }}
