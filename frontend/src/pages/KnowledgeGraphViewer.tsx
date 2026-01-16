@@ -319,6 +319,15 @@ const GraphViewer: React.FC = () => {
                 const nodesToRemove = new Set<string>();
 
                 neighbors.forEach(neighborId => {
+                    // Find the neighbor node to check its type
+                    const neighborNode = prev.nodes.find(n => n.id === neighborId);
+
+                    // In schema mode, only allow removing instance nodes, not class nodes
+                    if (isSchemaMode && neighborNode && (neighborNode as any).isClass) {
+                        // Don't remove class nodes in schema mode
+                        return;
+                    }
+
                     // Start assuming it's removable
                     let isRemovable = true;
 
@@ -375,6 +384,11 @@ const GraphViewer: React.FC = () => {
         }
 
         // EXPAND LOGIC (If not already expanded)
+        if (node.isInstance) {
+            console.log("Blocking expansion for instance node:", node.label);
+            return;
+        }
+
         try {
             let apiUrl: string;
 

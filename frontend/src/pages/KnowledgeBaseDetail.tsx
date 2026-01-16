@@ -154,6 +154,7 @@ export default function KnowledgeBaseDetail() {
                 setEnableInverseSearch(settings.enableInverseSearch ?? false);
                 setInverseExtractionMode(settings.inverseExtractionMode ?? 'auto');
                 setUseRelationFilter(settings.useRelationFilter ?? true);
+                setUseSchemaMode(settings.useSchemaMode ?? true);
             } else {
                 console.log(`[KB ${id}] No saved settings found, using defaults`);
             }
@@ -183,7 +184,8 @@ export default function KnowledgeBaseDetail() {
             enableInverseSearch,
             inverseExtractionMode,
             useParallelSearch,
-            useRelationFilter
+            useRelationFilter,
+            useSchemaMode
         };
         // KB별 설정 저장
         const settingsKey = `retrievalSettings_${id}`;
@@ -213,7 +215,8 @@ export default function KnowledgeBaseDetail() {
         enableInverseSearch,
         inverseExtractionMode,
         useParallelSearch,
-        useRelationFilter
+        useRelationFilter,
+        useSchemaMode
     ]);
 
     const loadKB = async () => {
@@ -226,10 +229,31 @@ export default function KnowledgeBaseDetail() {
             // (단, 사용자가 저장한 설정이 없을 때만)
             const settingsKey = `retrievalSettings_${id}`;
             const saved = localStorage.getItem(settingsKey);
+            const isGraphRAG = kbData.graph_backend === 'neo4j' || kbData.graph_backend === 'ontology';
 
-            if (!saved && kbData.graph_backend && kbData.graph_backend !== 'none') {
-                console.log(`[KB ${id}] Auto-enabling graph search (graph_backend: ${kbData.graph_backend})`);
-                setEnableGraphSearch(true);
+            if (!saved) {
+                // 저장된 설정이 없으면 KB의 graph_backend에 맞게 기본값 설정
+                if (isGraphRAG) {
+                    console.log(`[KB ${id}] Auto-enabling graph search (graph_backend: ${kbData.graph_backend})`);
+                    setEnableGraphSearch(true);
+                    setSearchStrategy('hybrid_graph');
+                } else {
+                    setEnableGraphSearch(false);
+                    setSearchStrategy('ann');
+                }
+            } else {
+                // 저장된 설정이 있어도 현재 KB의 graph_backend와 호환되지 않으면 조정
+                const savedSettings = JSON.parse(saved);
+                if (savedSettings.searchStrategy === 'hybrid_graph' && !isGraphRAG) {
+                    // Graph가 없는 KB인데 hybrid_graph가 설정되어 있으면 ann으로 변경
+                    console.log(`[KB ${id}] Resetting searchStrategy from hybrid_graph to ann (no graph backend)`);
+                    setSearchStrategy('ann');
+                    setEnableGraphSearch(false);
+                } else if (isGraphRAG && !savedSettings.enableGraphSearch) {
+                    // Graph KB인데 그래프 검색이 비활성화되어 있으면 활성화
+                    console.log(`[KB ${id}] Graph KB detected, enabling graph search`);
+                    setEnableGraphSearch(true);
+                }
             }
         } catch (error) {
             console.error('Failed to load KB:', error);
