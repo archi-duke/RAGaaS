@@ -38,6 +38,10 @@ class FusekiBackend(GraphBackend):
         chunk_ids = []
         triples = []
         sparql_query = ""
+        trace_logs = []
+
+        def log_trace(msg: str):
+            trace_logs.append(msg)
 
         # 1. Try using SPARQLGenerator (LLM-based)
         if self.generator and query_text:
@@ -50,8 +54,6 @@ class FusekiBackend(GraphBackend):
                 # If user explicitly disabled inverse search, override mode
                 if not enable_inverse:
                     inv_mode = "none"
-                
-                print(f"DEBUG: [Fuseki] Generating SPARQL for: {query_text} (inverse_relation='{inv_mode}', enable_inverse_search={enable_inverse})")
                 
                 # [NEW] Fetch Schema Info from DB (Moved up)
                 # Only fetch schema if use_schema_mode is True (default ON)
@@ -69,11 +71,11 @@ class FusekiBackend(GraphBackend):
                              kb = result.scalars().first()
                              if kb and kb.is_promoted and kb.promotion_metadata:
                                  schema_info = kb.promotion_metadata.get("schema_info")
-                                 print(f"DEBUG: [Fuseki] Schema Mode ON. Found schema info for promoted KB. Classes: {len(schema_info.get('classes', {}))}")
                     except Exception as e_schema:
-                        print(f"WARNING: [Fuseki] Failed to fetch schema info: {e_schema}")
+                        log_trace(f"[Fuseki] WARNING: Failed to fetch schema info: {e_schema}")
                 else:
-                    print("DEBUG: [Fuseki] Schema Mode OFF. Using basic graph search (no ontology inference).")
+                    # Schema Mode OFF
+                    pass
 
                 # Build custom prompt with inverse relation instruction
                 custom_prompt = kwargs.get("custom_query_prompt") or ""
@@ -106,10 +108,9 @@ class FusekiBackend(GraphBackend):
                     if schema_info:
                          generated_sparql = f"# [Used Promoted Ontology Schema]\n{generated_sparql}"
 
-                    print(f"DEBUG: [Fuseki] Generated SPARQL:\n{generated_sparql}")
+                    log_trace(f"[Fuseki] Generated SPARQL:\n{generated_sparql}")
                     
                     # Remove any existing PREFIX declarations from LLM-generated query
-                    # to avoid conflicts with our correct prefixes
                     # to avoid conflicts with our correct prefixes
                     sparql_body = re.sub(r'PREFIX\s+\w+:\s*<[^>]+>\s*', '', generated_sparql, flags=re.IGNORECASE)
                     sparql_body = sparql_body.strip()
@@ -143,7 +144,6 @@ class FusekiBackend(GraphBackend):
                     bindings = results.get("results", {}).get("bindings", [])
                     
                     if bindings:
-                         print(f"DEBUG: [Fuseki] Generator query returned {len(bindings)} results")
                          sparql_query = full_query
                          
                     if bindings:
@@ -166,7 +166,7 @@ class FusekiBackend(GraphBackend):
                                      if " " not in clean_val: # Only single word entities usually
                                          found_entities.add(clean_val)
                         
-                        print(f"DEBUG: [Fuseki] Found {len(found_entities)} entities from graph for chunk retrieval: {found_entities}")
+                        log_trace(f"[Fuseki] Found {len(found_entities)} entities from graph: {list(found_entities)[:5]}...")
 
                         # 오프셋 정보 첨부
                         triples_with_offset, discovered_chunk_ids = await self._attach_offsets_to_triples(kb_id, triples)
@@ -175,31 +175,30 @@ class FusekiBackend(GraphBackend):
                             "chunk_ids": discovered_chunk_ids, # 오프셋에서 발견된 청크 ID
                             "sparql_query": generated_sparql.strip(),
                             "triples": triples_with_offset,
-                            "found_entities": list(found_entities) # Pass this back!
+                            "found_entities": list(found_entities), # Pass this back!
+                            "trace_logs": trace_logs
                         }
                     else:
-                        print("DEBUG: [Fuseki] Generator query returned no results. Falling back to default logic.")
-                        
                         # If inverse search is disabled and LLM query returned no results,
                         # don't fall back to generic search - return empty results
                         # UNLESS it is a promoted KB (schema_info exists), then we want fallback to capture anything.
                         if inv_mode == "none" and not schema_info:
-                            print("DEBUG: [Fuseki] Inverse search disabled. Skipping fallback to preserve strict directional search.")
                             return {
                                 "chunk_ids": [],
                                 "sparql_query": generated_sparql.strip(),
                                 "triples": [],
-                                "found_entities": []
+                                "found_entities": [],
+                                "trace_logs": trace_logs
                             }
                         
             except Exception as e:
-                print(f"WARNING: [Fuseki] Error during SPARQL generation/execution: {e}")
+                log_trace(f"[Fuseki] Error during SPARQL generation/execution: {e}")
                 # Fallback continues below
 
         # Fallback / Default Logic (Original regex-based search)
         
         if not entities:
-            return {"chunk_ids": [], "sparql_query": "", "triples": []}
+            return {"chunk_ids": [], "sparql_query": "", "triples": [], "trace_logs": trace_logs}
 
         # Escape entities for SPARQL regex
         # Replace '\ ' with ' ' because SPARQL regex doesn't support escaped spaces like Python does
@@ -238,10 +237,6 @@ class FusekiBackend(GraphBackend):
         
         filter_clause = " || ".join(entity_filters) if entity_filters else "1=1"
 
-        # DEBUG: Print exact filter clause and entities
-        print(f"DEBUG: [Fuseki] Search Entities: {entities}")
-        print(f"DEBUG: [Fuseki] Filter Clause: {filter_clause}")
-
         # Enhanced SPARQL query - Search Default Graph (where Fallback data lives)
         sparql_query = f"""
         PREFIX rel: <{self.namespace_relation}>
@@ -273,12 +268,8 @@ class FusekiBackend(GraphBackend):
         LIMIT 100
         """
         
-        print(f"DEBUG: [Fuseki] SPARQL Query (Fallback):\n{sparql_query}")
         results = fuseki_client.query_sparql(kb_id, sparql_query)
         bindings = results.get("results", {}).get("bindings", [])
-        
-        if bindings:
-             print(f"DEBUG: [Fuseki] Sample binding: {bindings[0]}")
 
         chunk_ids = []
         triples = []
@@ -345,7 +336,6 @@ class FusekiBackend(GraphBackend):
                 seen.add(key)
                 unique_triples.append(t)
         
-        print(f"DEBUG: Found {len(chunk_ids)} chunk_ids and {len(unique_triples)} triples from graph (Fallback)")
         
         # 오프셋 정보 첨부
         triples_with_offset, discovered_chunk_ids = await self._attach_offsets_to_triples(kb_id, unique_triples)
@@ -356,7 +346,8 @@ class FusekiBackend(GraphBackend):
         return {
             "chunk_ids": all_chunk_ids,
             "sparql_query": sparql_query.strip(),
-            "triples": triples_with_offset
+            "triples": triples_with_offset,
+            "trace_logs": trace_logs
         }
 
     async def _attach_offsets_to_triples(self, kb_id: str, triples: List[Dict]) -> Tuple[List[Dict], List[str]]:

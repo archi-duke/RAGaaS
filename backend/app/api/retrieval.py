@@ -290,6 +290,13 @@ async def chat_with_kb(
         )
         execution_logs.append(f"[Legacy] Search complete. Found {len(results)} chunks.")
         
+        # [Trace Log Integration] Merge graph trace_logs into execution_logs
+        if results:
+            for res in results:
+                if res.get("graph_metadata") and res["graph_metadata"].get("trace_logs"):
+                    execution_logs.extend(res["graph_metadata"]["trace_logs"])
+                    break  # Only need to get trace_logs once (it's the same for all)
+        
         # 2. Reranking (legacy)
         if request.use_reranker and request.strategy != "2-stage" and results:
             execution_logs.append(f"[Legacy] Applying Reranker (Top K: {request.reranker_top_k})")

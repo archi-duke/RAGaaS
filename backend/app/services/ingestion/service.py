@@ -17,6 +17,35 @@ from app.services.ingestion.doc2onto import doc2onto_processor
 
 
 class IngestionService:
+    def _normalize_whitespace(self, text: str) -> str:
+        """
+        Normalize whitespace: 
+        1. Keep double newlines (paragraphs).
+        2. Replace single newlines with space (hard breaks in PDF).
+        3. Clean up excessive spaces.
+        """
+        import re
+        if not text:
+            return ""
+            
+        # Standardize line endings
+        text = text.replace('\r\n', '\n').replace('\r', '\n')
+        
+        # Mark paragraphs (2+ newlines with optional whitespace in between)
+        placeholder = " [[PARA]] "
+        text = re.sub(r'\n\s*\n+', placeholder, text)
+        
+        # Replace remaining single newlines with space
+        text = text.replace('\n', ' ')
+        
+        # Restore paragraphs
+        text = text.replace(placeholder, '\n\n')
+        
+        # Clean up multiple spaces
+        text = re.sub(r'[ \t]+', ' ', text)
+        
+        return text.strip()
+
     async def process_document(
         self, 
         kb_id: str, 
@@ -42,9 +71,12 @@ class IngestionService:
             if filename.endswith(".pdf"):
                 pdf = PdfReader(io.BytesIO(file_content))
                 for page in pdf.pages:
-                    text += page.extract_text()
+                    text += (page.extract_text() or "") + "\n"
             else:
                 text = file_content.decode("utf-8")
+
+            # 1.5. Normalize Whitespace (Merge hard breaks from PDF/Text)
+            text = self._normalize_whitespace(text)
 
             # 2. Chunking
             chunks = []
