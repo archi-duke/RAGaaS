@@ -256,6 +256,7 @@ class PipelineExecutor:
         
         inverse_mode = params.get("inverse_mode", "auto")
         use_schema_mode = params.get("use_schema_mode", True)
+        use_dynamic_schema = params.get("use_dynamic_schema", False)
         custom_query_prompt = params.get("custom_query_prompt", "")
         merge_mode = params.get("merge_mode", "union")
         enable_entity_expansion = params.get("enable_entity_expansion", False)
@@ -273,6 +274,7 @@ class PipelineExecutor:
             enable_inverse_search=enable_inverse,
             inverse_extraction_mode=inverse_mode,
             use_schema_mode=use_schema_mode,
+            use_dynamic_schema=use_dynamic_schema,
             custom_query_prompt=custom_query_prompt,
             enable_entity_expansion=enable_entity_expansion
         )

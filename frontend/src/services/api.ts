@@ -111,6 +111,8 @@ export const retrievalApi = {
         use_relation_filter?: boolean;
         // Schema Mode (for Promoted Ontology)
         use_schema_mode?: boolean;
+        // Dynamic Schema (for non-promoted KB)
+        use_dynamic_schema?: boolean;
         use_raw_log?: boolean;
         custom_query_prompt?: string;
         // Pipeline Configuration

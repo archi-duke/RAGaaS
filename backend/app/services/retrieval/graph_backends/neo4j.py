@@ -63,11 +63,16 @@ class Neo4jBackend(GraphBackend):
 """
                 custom_prompt = no_inverse_instruction + custom_prompt
 
+            # Get use_dynamic_schema from kwargs
+            use_dynamic_schema = kwargs.get("use_dynamic_schema", False)
+            
             gen_result = generator.generate(
                 query_text, 
                 context=context, 
                 custom_prompt=custom_prompt if custom_prompt else None,
-                inverse_search_mode=inv_mode
+                inverse_search_mode=inv_mode,
+                kb_id=kb_id,
+                use_dynamic_schema=use_dynamic_schema
             )
             cypher_query = gen_result.get("cypher")
             thought = gen_result.get("thought")
@@ -78,8 +83,8 @@ class Neo4jBackend(GraphBackend):
             if not cypher_query:
                 return {"chunk_ids": [], "sparql_query": "Generation Failed", "triples": [], "trace_logs": trace_logs}
                 
-            # Execute generated query
-            records = neo4j_client.execute_query(cypher_query)
+            # Execute generated query with kb_id parameter
+            records = neo4j_client.execute_query(cypher_query, {"kb_id": kb_id})
             
             discovered_entities = set()
             
