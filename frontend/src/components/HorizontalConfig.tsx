@@ -71,6 +71,10 @@ interface HorizontalConfigProps {
     useRawLog?: boolean;
     setUseRawLog?: (value: boolean) => void;
 
+    // Dynamic Schema (for non-promoted KB)
+    useDynamicSchema?: boolean;
+    setUseDynamicSchema?: (value: boolean) => void;
+
     // Callbacks
     onOpenPromptDialog?: () => void;
     onOpenRerankPromptDialog?: () => void;
@@ -148,6 +152,8 @@ export default function HorizontalConfig({
     useSchemaMode,
     setUseSchemaMode,
     setUseRawLog,
+    useDynamicSchema,
+    setUseDynamicSchema,
     onOpenPromptDialog,
     onOpenRerankPromptDialog
 }: HorizontalConfigProps) {
@@ -392,6 +398,26 @@ export default function HorizontalConfig({
                                     >
                                         Query Prompt
                                     </button>
+                                    {/* Dynamic Schema - only show when NOT promoted */}
+                                    {!isOntologyPromoted && (
+                                        <label style={{
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: '0.4rem',
+                                            cursor: 'pointer',
+                                            fontSize: '0.8rem',
+                                            color: useDynamicSchema ? 'var(--primary)' : 'var(--text-secondary)',
+                                            marginTop: '0.3rem'
+                                        }}>
+                                            <input
+                                                type="checkbox"
+                                                checked={useDynamicSchema ?? false}
+                                                onChange={(e) => setUseDynamicSchema?.(e.target.checked)}
+                                                style={{ accentColor: 'var(--primary)' }}
+                                            />
+                                            Dynamic Schema
+                                        </label>
+                                    )}
                                 </div>
                             </div>
                         </div>

@@ -29,8 +29,9 @@ class CypherGenerator:
 4. 다단계(Multi-hop) 연결 및 순환 방지: 질문이 여러 단계를 거치는 경우, 시작 노드와 끝 노드가 같지 않도록 조건을 추가하세요.
    (예: `MATCH (n:Entity {name: "성기훈"})-[:`제자`|`스승`]-(m)-[:`제자`|`스승`]-(o) WHERE n <> o RETURN o.name`)
 5. 결과 형식: `RETURN` 구문을 사용하며, 반환 값은 **노드 객체(Nodes)와 관계(Relationships)를 모두 포함**하여 그래프 구조를 파악할 수 있게 하세요.
-   (예: `RETURN n, m, o`)
-6. 결과 정제: 가능한 중복을 제거하기 위해 `DISTINCT`를 사용하거나 리스트로 수집(`collect`)하세요.
+   (예: `RETURN n, r, m`)
+6. 모든 검색에서 반드시 `kb_id: $kb_id` 매칭이나 `n.kb_id = $kb_id` 조건을 포함하세요. (예: `MATCH (n:Entity {name: "성기훈", kb_id: $kb_id})`)
+7. 결과 정제: 가능한 중복을 제거하기 위해 `DISTINCT`를 사용하거나 리스트로 수집(`collect`)하세요.
 
 반드시 아래 JSON 형식으로만 응답하세요:
 ```json
@@ -58,8 +59,41 @@ class CypherGenerator:
 
 [중요 제약 조건]
 1. 존재하지 않는 관계 상상 금지: [추가 컨텍스트]에 스키마 정보가 주어지면, 그기에 명시된 관계 유형(Relationship Types)만 사용하세요. 
-2. 유연한 탐색: 질문의 동사(예: '사용하다')가 스키마에 없다면, 가장 유사한 의미의 관계를 선택하거나 관계 유형 없이 `(n)-[]-(m)`로 탐색하는 쿼리를 생성하세요.
+2. 유연한 탐색: 질문의 동사(예: '사용하다')가 스키마에 없다면, 가장 유사한 의미의 관계를 선택하거나 관계 유형 없이 `(n)-[r]-(m)`로 탐색하는 쿼리를 생성하세요.
 3. 한국어 지원: `name` 속성을 사용하여 한글 엔티티 명칭을 매칭하세요.
+
+[필수 문법 규칙 - 반드시 준수]
+1. **모든 노드에 변수명 부여 필수**: MATCH 패턴의 모든 노드에 반드시 변수명을 붙여야 합니다.
+   - ✅ 올바른 예: `MATCH (n:Entity)-[r]-(m:Entity)` (n, m 모두 정의됨)
+   - ❌ 틀린 예: `MATCH (n:Entity)-[r]-(:Entity)` (두 번째 노드에 변수 없음)
+2. **변수 사용 전 정의 필수**: WHERE나 RETURN에서 사용하는 변수는 반드시 MATCH에서 먼저 정의되어야 합니다.
+   - ✅ 올바른 예: `MATCH (n)-[r]-(m) WHERE m.name = "조상우" RETURN m`
+   - ❌ 틀린 예: `MATCH (n)-[r]-(:Entity) WHERE m.name = "조상우"` (m이 정의 안됨)
+3. **관계 변수도 정의 필수**: type(r)을 사용하려면 반드시 관계에 변수 r을 붙여야 합니다.
+   - ✅ 올바른 예: `MATCH (n)-[r]-(m) RETURN type(r)`
+   - ❌ 틀린 예: `MATCH (n)-[]-(m) RETURN type(r)` (r이 정의 안됨)
+
+[절대 금지 - 위반 시 즉시 오류]
+1. **가변 길이 경로(*) 절대 금지**: `-[*1..2]-`, `-[r*]-`, `-[:xxx*1..2]-` 형태는 절대 사용하지 마세요. 모든 쿼리에서 단일 홉만 사용하세요.
+   - ❌ 금지: `MATCH (n)-[*1..2]-(m)`, `MATCH (n)-[r*]-(m)`, `MATCH (n)-[:\`관계\`*1..2]-(m)`
+   - ✅ 허용: `MATCH (n)-[r]-(m)` (단일 홉만 사용)
+2. **"관계"라는 타입명 절대 금지**: `[:\`관계\`]`는 존재하지 않는 타입입니다. 사용하면 결과가 0건입니다.
+   - ❌ 금지: `MATCH (n)-[:\`관계\`]-(m)`, `MATCH (n)-[:\`관계\`*1..2]-(m)`
+   - ✅ 허용: `MATCH (n)-[r]-(m)` (모든 관계 타입 탐색)
+3. **relationships() 함수 금지**: Neo4j에서 `relationships(a, b)` 함수는 존재하지 않습니다.
+   - ❌ 금지: `RETURN type(relationships(n, m))`
+   - ✅ 허용: `RETURN type(r)`
+
+[두 엔티티 간 관계 찾기 - 반드시 이 패턴만 사용]
+"A와 B의 관계는?", "성기훈과 조상우의 관계는?" 유형의 질문에는 **반드시** 아래 정확한 패턴을 사용하세요:
+```cypher
+MATCH (a:Entity {name: "성기훈", kb_id: $kb_id})-[r]-(b:Entity {name: "조상우", kb_id: $kb_id})
+RETURN a.name, type(r) AS relationship, b.name
+```
+위 패턴에서:
+- 가변 길이 경로(*)를 사용하지 않음
+- 관계 타입을 지정하지 않고 [r]로 모든 관계 탐색
+- type(r)로 관계 타입 반환
 """
 
     def __init__(
@@ -77,7 +111,7 @@ class CypherGenerator:
             # RAGaaS 실행 환경에서 OPENAI_API_KEY가 없을 경우 대비
             pass
 
-    def generate(self, question: str, context: Optional[str] = None, mode: str = "graph", custom_prompt: Optional[str] = None, inverse_search_mode: str = "auto") -> Dict:
+    def generate(self, question: str, context: Optional[str] = None, mode: str = "graph", custom_prompt: Optional[str] = None, inverse_search_mode: str = "auto", kb_id: Optional[str] = None, use_dynamic_schema: bool = False) -> Dict:
         """사용자 질문을 Cypher로 변환"""
         
         # Dynamic Load from File
@@ -88,6 +122,19 @@ class CypherGenerator:
         else:
             system_prompt = self.DEFAULT_SYSTEM_PROMPT
 
+        # Dynamic Schema Injection (for non-promoted KBs)
+        if use_dynamic_schema and kb_id:
+            schema_info = self._fetch_neo4j_schema(kb_id)
+            if schema_info:
+                system_prompt += f"""
+
+[현재 데이터베이스 스키마 - 반드시 준수]
+사용 가능한 관계 타입(Relationship Types): {schema_info.get('relationship_types', [])}
+사용 가능한 노드 라벨(Node Labels): {schema_info.get('node_labels', [])}
+
+**주의**: 위 목록에 없는 관계 타입이나 노드 라벨은 절대 사용하지 마세요. 
+질문에 "관계"라는 단어가 있더라도, 위 목록에 "관계"가 없으면 타입을 지정하지 말고 [r]로 모든 관계를 탐색하세요.
+"""
         
         # 그래프 검색 모드 특화 지침 (필요 시 보강)
         if mode == "graph":
@@ -156,6 +203,44 @@ class CypherGenerator:
                 "error": str(e),
                 "cypher": None
             }
+    
+    def _fetch_neo4j_schema(self, kb_id: str) -> Optional[Dict]:
+        """Neo4j에서 현재 KB의 관계 타입과 노드 라벨을 조회 (캐싱 적용)"""
+        try:
+            from app.core.neo4j_client import neo4j_client
+            
+            # Fetch relationship types
+            rel_query = """
+            MATCH (n:Entity {kb_id: $kb_id})-[r]-(m:Entity {kb_id: $kb_id})
+            RETURN DISTINCT type(r) AS rel_type
+            LIMIT 100
+            """
+            rel_records = neo4j_client.execute_query(rel_query, {"kb_id": kb_id})
+            relationship_types = [record["rel_type"] for record in rel_records if record.get("rel_type")]
+            
+            # Fetch node labels (usually just Entity, but could be more)
+            label_query = """
+            MATCH (n {kb_id: $kb_id})
+            RETURN DISTINCT labels(n) AS node_labels
+            LIMIT 50
+            """
+            label_records = neo4j_client.execute_query(label_query, {"kb_id": kb_id})
+            node_labels = set()
+            for record in label_records:
+                if record.get("node_labels"):
+                    node_labels.update(record["node_labels"])
+            
+            schema_info = {
+                "relationship_types": relationship_types,
+                "node_labels": list(node_labels)
+            }
+            
+            print(f"[CypherGenerator] Dynamic Schema for KB {kb_id}: {schema_info}")
+            return schema_info
+            
+        except Exception as e:
+            print(f"[CypherGenerator] Failed to fetch schema: {e}")
+            return None
 
 # 사용 예시
 if __name__ == "__main__":

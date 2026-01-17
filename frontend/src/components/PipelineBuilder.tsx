@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { Plus, X, ChevronLeft, ChevronRight, GripVertical } from 'lucide-react';
+import { Plus, X, ChevronLeft, ChevronRight, GripVertical, Download, Check } from 'lucide-react';
 
 // Stage type definitions
 export type StageType = 'ann' | 'bm25' | 'brute_force' | 'graph' | 'rerank' | 'ner_filter';
@@ -47,6 +47,7 @@ const DEFAULT_PARAMS: Record<StageType, Record<string, any>> = {
         enable_inverse: true,
         inverse_mode: 'always',
         use_schema_mode: false,
+        use_dynamic_schema: false,
         enable_entity_expansion: false,
         merge_mode: 'union',
         custom_query_prompt: ''
@@ -60,8 +61,10 @@ const cardStyle: React.CSSProperties = {
     backgroundColor: 'white',
     border: '1px solid #e2e8f0',
     borderRadius: '12px',
-    padding: '1rem',
+    padding: '0.75rem 0.75rem 0.65rem 0.75rem',
     minWidth: '180px',
+    height: '157px',
+    boxSizing: 'border-box',
     position: 'relative',
 };
 
@@ -88,6 +91,14 @@ export default function PipelineBuilder({
     const [stages, setStages] = useState<PipelineStage[]>(initialConfig?.stages || []);
     const [showDropdown, setShowDropdown] = useState(false);
     const [isLoading, setIsLoading] = useState(true);
+    const [copied, setCopied] = useState(false);
+
+    const handleCopyPipeline = () => {
+        const config: PipelineConfig = { stages };
+        navigator.clipboard.writeText(JSON.stringify(config, null, 2));
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+    };
 
     // Generic Prompt Editor state (for Graph, Rerank, etc.)
     const [editingPromptStage, setEditingPromptStage] = useState<number | null>(null);
@@ -279,7 +290,10 @@ export default function PipelineBuilder({
         const isSearch = SEARCH_STAGES.some(s => s.type === stage.type);
 
         return (
-            <div key={index} style={cardStyle}>
+            <div key={index} style={{
+                ...cardStyle,
+                paddingBottom: stage.type === 'graph' ? '0.35rem' : '0.65rem'
+            }}>
                 {/* Header */}
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.15rem' }}>
@@ -515,42 +529,45 @@ export default function PipelineBuilder({
                 const showLatencyWarning = !isAutoHops && params.hops >= 4;
                 return (
                     <div style={{ display: 'flex', flexDirection: 'row', gap: '0.5rem', alignItems: 'flex-start' }}>
-                        {/* Hops Slider */}
-                        <div style={{ position: 'relative' }}>
-                            <ParamSlider
-                                label="Hops"
-                                value={isAutoHops ? 2 : params.hops}
-                                min={1} max={5}
-                                onChange={(v) => handleParamChange(index, 'hops', v)}
-                                disabled={isAutoHops}
-                            />
+                        {/* Sliders Block */}
+                        <div style={{ display: 'flex', flexDirection: 'column', minWidth: '85px' }}>
+                            <div style={{ display: 'flex', flexDirection: 'row', gap: '0.5rem' }}>
+                                <ParamSlider
+                                    label="Hops"
+                                    value={isAutoHops ? 2 : params.hops}
+                                    min={1} max={5}
+                                    onChange={(v) => handleParamChange(index, 'hops', v)}
+                                    disabled={isAutoHops}
+                                />
+                                <ParamSlider
+                                    label="Top K"
+                                    value={params.top_k || 10}
+                                    min={1} max={50}
+                                    onChange={(v) => handleParamChange(index, 'top_k', v)}
+                                />
+                            </div>
                             {showLatencyWarning && (
                                 <div style={{
                                     color: '#c2410c',
                                     fontSize: '0.65rem',
-                                    position: 'absolute',
-                                    bottom: '-14px',
-                                    left: '24px',
-                                    whiteSpace: 'nowrap'
+                                    marginTop: '-16px',
+                                    paddingLeft: '4px',
+                                    whiteSpace: 'nowrap',
+                                    display: 'flex',
+                                    gap: '3px',
+                                    alignItems: 'center'
                                 }}>
-                                    ⚠️ High latency warning
+                                    <span style={{ flexShrink: 0 }}>⚠️</span>
+                                    <span>High latency</span>
                                 </div>
                             )}
                         </div>
-
-                        {/* Top K Slider */}
-                        <ParamSlider
-                            label="Top K"
-                            value={params.top_k || 10}
-                            min={1} max={50}
-                            onChange={(v) => handleParamChange(index, 'top_k', v)}
-                        />
 
                         {/* Config Column (Checkboxes) */}
                         <div style={{
                             display: 'flex',
                             flexDirection: 'column',
-                            gap: '0.6rem',
+                            gap: '0.4rem',
                             paddingTop: '0.4rem',
                             minWidth: '100px'
                         }}>
@@ -599,8 +616,7 @@ export default function PipelineBuilder({
                             display: 'flex',
                             flexDirection: 'column',
                             justifyContent: 'flex-start',
-                            minHeight: '120px',
-                            gap: '0.5rem'
+                            gap: '0.4rem'
                         }}>
                             {/* Entity Expansion Checkbox */}
                             <label style={{
@@ -648,6 +664,14 @@ export default function PipelineBuilder({
                             >
                                 Query Prompt
                             </button>
+                            {/* Dynamic Schema - only show when NOT promoted */}
+                            {!isOntologyPromoted && (
+                                <ParamCheckbox
+                                    label="Dynamic Schema"
+                                    checked={params.use_dynamic_schema ?? false}
+                                    onChange={(v) => handleParamChange(index, 'use_dynamic_schema', v)}
+                                />
+                            )}
                         </div>
                     </div>
                 );
@@ -762,14 +786,38 @@ export default function PipelineBuilder({
 
     return (
         <div className="card" style={{
-            padding: '1rem',
+            padding: '1rem 1rem 10px 1rem',
             overflow: 'visible',
             position: 'relative',
             zIndex: 100
         }}>
-            <h3 style={{ marginTop: 0, marginBottom: '1rem', fontSize: '1.1rem', fontWeight: 600 }}>
-                Search Pipeline
-            </h3>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '1rem' }}>
+                <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 600 }}>
+                    Search Pipeline
+                </h3>
+                <button
+                    onClick={handleCopyPipeline}
+                    title="파이프라인 구성 JSON 복사"
+                    style={{
+                        background: 'none',
+                        border: 'none',
+                        cursor: 'pointer',
+                        padding: '4px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        borderRadius: '4px',
+                        transition: 'background 0.2s',
+                    }}
+                    onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#f1f5f9'}
+                    onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                >
+                    {copied ? (
+                        <Check size={16} color="#10b981" />
+                    ) : (
+                        <Download size={16} color="#64748b" />
+                    )}
+                </button>
+            </div>
 
             {/* Wrapper for stages and add button */}
             <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-start', overflow: 'visible' }}>
@@ -778,9 +826,8 @@ export default function PipelineBuilder({
                     display: 'flex',
                     gap: '0.5rem',
                     alignItems: 'flex-start',
-                    minHeight: '120px',
                     overflowX: 'auto',
-                    paddingBottom: '0.5rem'
+                    paddingBottom: '2px'
                 }}>
                     {/* Render stages */}
                     {stages.map((stage, index) => (
@@ -1020,8 +1067,8 @@ function ParamSlider({
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'center',
-            gap: '0.2rem',
-            minHeight: '120px',
+            gap: '0.1rem',
+            minHeight: '100px',
             opacity: disabled ? 0.5 : 1,
             pointerEvents: disabled ? 'none' : 'auto'
         }}>
@@ -1059,7 +1106,7 @@ function ParamSlider({
                 {/* Vertical Slider Track */}
                 <div style={{
                     width: '24px',
-                    height: '80px',
+                    height: '70px',
                     display: 'flex',
                     justifyContent: 'center',
                     alignItems: 'center'
@@ -1073,7 +1120,7 @@ function ParamSlider({
                         disabled={disabled}
                         onChange={(e) => onChange(Number(e.target.value))}
                         style={{
-                            width: '80px',
+                            width: '70px',
                             height: '6px',
                             margin: 0,
                             padding: 0,

@@ -49,6 +49,7 @@ export default function KnowledgeBaseDetail() {
     const [enableInverseSearch, setEnableInverseSearch] = useState(false);
     const [useRelationFilter, setUseRelationFilter] = useState(true);
     const [useSchemaMode, setUseSchemaMode] = useState(true); // Default ON for promoted KBs
+    const [useDynamicSchema, setUseDynamicSchema] = useState(false); // Dynamic Schema for non-promoted KBs
     const [useRawLog, setUseRawLog] = React.useState(false);
 
     // Brute Force State (for 2-stage)
@@ -197,6 +198,7 @@ export default function KnowledgeBaseDetail() {
                 setInverseExtractionMode(settings.inverseExtractionMode ?? 'auto');
                 setUseRelationFilter(settings.useRelationFilter ?? true);
                 setUseSchemaMode(settings.useSchemaMode ?? true);
+                setUseDynamicSchema(settings.useDynamicSchema ?? false);
             } else {
                 console.log(`[KB ${id}] No saved settings found, using defaults`);
             }
@@ -227,7 +229,8 @@ export default function KnowledgeBaseDetail() {
             inverseExtractionMode,
             useParallelSearch,
             useRelationFilter,
-            useSchemaMode
+            useSchemaMode,
+            useDynamicSchema
         };
         // KB별 설정 저장
         const settingsKey = `retrievalSettings_${id}`;
@@ -258,7 +261,8 @@ export default function KnowledgeBaseDetail() {
         inverseExtractionMode,
         useParallelSearch,
         useRelationFilter,
-        useSchemaMode
+        useSchemaMode,
+        useDynamicSchema
     ]);
 
     const loadKB = async () => {
@@ -553,6 +557,7 @@ export default function KnowledgeBaseDetail() {
                                 useParallelSearch={useParallelSearch}
                                 useRelationFilter={useRelationFilter}
                                 useSchemaMode={useSchemaMode}
+                                useDynamicSchema={useDynamicSchema}
                                 useRawLog={useRawLog}
                                 customQueryPrompt={customQueryPrompt}
                                 pipeline={pipelineConfig}

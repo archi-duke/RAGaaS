@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Loader2 } from 'lucide-react';
+import { Send, Loader2, RotateCcw } from 'lucide-react';
 import { retrievalApi } from '../services/api';
 
 interface Message {
@@ -8,6 +8,9 @@ interface Message {
     chunks?: any[];
     execution_time?: number;
     strategy?: string;
+    has_error?: boolean;
+    used_fallback?: boolean;
+    pipeline_config?: any;
 }
 
 interface ChatInterfaceProps {
@@ -42,6 +45,8 @@ interface ChatInterfaceProps {
     useRelationFilter?: boolean;
     // Schema Mode (for Promoted Ontology)
     useSchemaMode?: boolean;
+    // Dynamic Schema (for non-promoted KB)
+    useDynamicSchema?: boolean;
     useRawLog?: boolean;
     customQueryPrompt?: string; // Add this
     // Pipeline Configuration
@@ -73,6 +78,7 @@ export default function ChatInterface({
     inverseExtractionMode,
     useRelationFilter,
     useSchemaMode,
+    useDynamicSchema,
     useRawLog,
     customQueryPrompt, // Add Destructuring
     pipeline, // Pipeline configuration
@@ -101,11 +107,34 @@ export default function ChatInterface({
         };
 
         setMessages(prev => [...prev, userMessage]);
+        const queryToSend = input;
         setInput('');
         setIsLoading(true);
 
         // Clear previous search results
         onChunksReceived([]);
+
+        await executeQuery(queryToSend);
+    };
+
+    const handleResend = async (query: string) => {
+        if (isLoading) return;
+
+        const userMessage: Message = {
+            role: 'user',
+            content: query
+        };
+
+        setMessages(prev => [...prev, userMessage]);
+        setIsLoading(true);
+
+        // Clear previous search results
+        onChunksReceived([]);
+
+        await executeQuery(query);
+    };
+
+    const executeQuery = async (queryText: string) => {
 
         try {
             // Auto-switch to hybrid strategy when graph search is enabled or implied by strategy
@@ -149,7 +178,7 @@ export default function ChatInterface({
             console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
             const response = await retrievalApi.chat(kbId, {
-                query: input,
+                query: queryText,
                 top_k: effectiveTopK,
                 score_threshold: annThreshold,
                 strategy: effectiveStrategy,
@@ -178,6 +207,7 @@ export default function ChatInterface({
                 inverse_extraction_mode: inverseExtractionMode,
                 use_relation_filter: useRelationFilter,
                 use_schema_mode: useSchemaMode,
+                use_dynamic_schema: useDynamicSchema,
                 use_raw_log: useRawLog,
                 custom_query_prompt: customQueryPrompt, // Pass to API
                 // Pipeline Configuration (if set, backend will use pipeline executor)
@@ -196,7 +226,10 @@ export default function ChatInterface({
                 content: response.data.answer,
                 chunks: response.data.chunks,
                 execution_time: response.data.execution_time,
-                strategy: response.data.strategy
+                strategy: response.data.strategy,
+                has_error: response.data.has_error,
+                used_fallback: response.data.used_fallback,
+                pipeline_config: response.data.pipeline_config
             };
 
             setMessages(prev => [...prev, assistantMessage]);
@@ -272,16 +305,52 @@ export default function ChatInterface({
                                 maxWidth: '85%',
                                 padding: '0.75rem 1rem',
                                 borderRadius: '12px',
-                                background: msg.role === 'user' ? 'var(--primary)' : 'white',
+                                background: msg.role === 'user'
+                                    ? 'var(--primary)'
+                                    : (msg.has_error || msg.used_fallback)
+                                        ? 'rgba(255, 99, 71, 0.1)'  // Light tomato for error/fallback
+                                        : 'white',
                                 color: msg.role === 'user' ? 'white' : 'var(--text-primary)',
                                 boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
-                                whiteSpace: 'pre-wrap',
-                                wordBreak: 'break-word',
-                                border: msg.role === 'assistant' ? '1px solid var(--border)' : 'none'
+                                border: msg.role === 'assistant'
+                                    ? (msg.has_error || msg.used_fallback)
+                                        ? '1px solid rgba(255, 99, 71, 0.4)'  // Tomato border for error/fallback
+                                        : '1px solid var(--border)'
+                                    : 'none',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: '0.25rem'
                             }}
                         >
-                            {msg.content}
-
+                            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem', justifyContent: 'space-between' }}>
+                                <div style={{ flex: 1, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                                    {msg.content}
+                                </div>
+                                {msg.role === 'user' && (
+                                    <button
+                                        onClick={() => handleResend(msg.content)}
+                                        disabled={isLoading}
+                                        title="이 질문 다시 보내기"
+                                        style={{
+                                            background: 'rgba(255, 255, 255, 0.1)',
+                                            border: 'none',
+                                            cursor: isLoading ? 'not-allowed' : 'pointer',
+                                            padding: '4px',
+                                            borderRadius: '4px',
+                                            opacity: isLoading ? 0.5 : 0.8,
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            marginTop: '2px',
+                                            transition: 'opacity 0.2s',
+                                            flexShrink: 0
+                                        }}
+                                        onMouseEnter={(e) => { if (!isLoading) e.currentTarget.style.opacity = '1'; }}
+                                        onMouseLeave={(e) => { e.currentTarget.style.opacity = isLoading ? '0.5' : '0.8'; }}
+                                    >
+                                        <RotateCcw size={12} color="white" />
+                                    </button>
+                                )}
+                            </div>
 
 
                             {msg.role === 'assistant' && (msg.execution_time !== undefined || msg.strategy) && (

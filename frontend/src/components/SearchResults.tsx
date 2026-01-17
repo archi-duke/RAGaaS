@@ -193,7 +193,13 @@ export default function SearchResults({ chunks, kbId, graphBackend, logs, pipeli
                         style={tabStyle(activeTab === 'graph')}
                         onClick={() => setActiveTab('graph')}
                     >
-                        🔍 Retrieval Details
+                        <span style={{
+                            color: (graphMetadata && (graphMetadata.sparql_query === 'Error' || graphMetadata.sparql_query === 'Generation Failed' || !graphMetadata.sparql_query))
+                                ? 'tomato'
+                                : 'inherit'
+                        }}>
+                            🔍 Retrieval Details
+                        </span>
                     </div>
                 )}
                 {(logs && logs.length > 0) && (
@@ -467,7 +473,13 @@ function GraphDetailsTabs({ graphMetadata, chunks }: { graphMetadata: any, chunk
                     Knowledge Graph Triples
                 </div>
                 <div style={subTabStyle(subTab === 'query')} onClick={() => setSubTab('query')}>
-                    {graphMetadata.graph_backend === 'neo4j' ? 'Cypher Query' : 'SPARQL Query'}
+                    <span style={{
+                        color: (graphMetadata.sparql_query === 'Error' || graphMetadata.sparql_query === 'Generation Failed' || !graphMetadata.sparql_query)
+                            ? 'tomato'
+                            : (subTab === 'query' ? '#0369a1' : '#64748b')
+                    }}>
+                        {graphMetadata.graph_backend === 'neo4j' ? 'Cypher Query' : 'SPARQL Query'}
+                    </span>
                 </div>
             </div>
 
@@ -580,7 +592,7 @@ function GraphDetailsTabs({ graphMetadata, chunks }: { graphMetadata: any, chunk
                         {graphMetadata.sparql_query ? (
                             <div style={{ padding: '0', background: '#1e293b', borderRadius: '8px', border: '1px solid #cbd5e1', overflow: 'hidden' }}>
                                 <pre style={{
-                                    color: '#e2e8f0',
+                                    color: (graphMetadata.sparql_query === 'Error' || graphMetadata.sparql_query === 'Generation Failed') ? 'tomato' : '#e2e8f0',
                                     padding: '1rem',
                                     margin: 0,
                                     overflow: 'auto',

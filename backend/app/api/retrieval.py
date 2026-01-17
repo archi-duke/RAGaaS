@@ -40,6 +40,7 @@ class ChatRequest(BaseModel):
     enable_inverse_search: bool = False
     inverse_extraction_mode: str = "auto"
     use_schema_mode: bool = True  # Schema-aware SPARQL generation for promoted KBs
+    use_dynamic_schema: bool = False  # Dynamic schema injection for non-promoted KBs
     use_raw_log: bool = False
     
     # Pipeline configuration (optional - if provided, uses pipeline executor)
@@ -55,6 +56,8 @@ class ChatResponse(BaseModel):
     strategy: str = "unknown"
     execution_log: Optional[List[str]] = None
     pipeline_config: Optional[Dict] = None
+    has_error: bool = False  # Query generation or execution error occurred
+    used_fallback: bool = False  # Fallback search was triggered due to error/no results
 
 
 RERANK_PROMPT_PATH = "/app/data/prompts/rerank_llm_prompt.txt"
@@ -422,11 +425,49 @@ async def chat_with_kb(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to generate response: {str(e)}")
     
+    # Determine display strategy name
+    if pipeline_config and pipeline_config.get("stages"):
+        # Pipeline Mode
+        stage_names = []
+        for stage in pipeline_config["stages"]:
+            s_type = stage.get("type", "unknown").upper()
+            if s_type == "ANN": s_type = "Vector"
+            stage_names.append(s_type)
+        display_strategy = " → ".join(stage_names)
+    else:
+        # Standard Mode - Mapping to user-friendly names
+        base_strategy = request.strategy.lower()
+        strategy_map = {
+            "hybrid": "Hybrid",
+            "keyword": "Keyword",
+            "ann": "Vector",
+            "vector": "Vector",
+            "2-stage": "2-Stage (L2)"
+        }
+        name = strategy_map.get(base_strategy, base_strategy.capitalize())
+        
+        if request.enable_graph_search or (kb.enable_graph_rag and kb.graph_backend):
+            display_strategy = f"Graph → {name}"
+        else:
+            display_strategy = name
+    
+    # Detect error and fallback states from execution logs
+    has_error = False
+    used_fallback = False
+    for log_entry in execution_logs:
+        log_lower = log_entry.lower()
+        if "error" in log_lower or "failed" in log_lower or "generation failed" in log_lower:
+            has_error = True
+        if "fallback" in log_lower or "entity-guided" in log_lower:
+            used_fallback = True
+    
     return ChatResponse(
         answer=answer,
         chunks=results,
         execution_time=time.time() - start_time,
-        strategy=f"{request.strategy}{' (+Graph)' if request.enable_graph_search else ''}",
+        strategy=display_strategy,
         execution_log=execution_logs,
-        pipeline_config=pipeline_config
+        pipeline_config=pipeline_config,
+        has_error=has_error,
+        used_fallback=used_fallback
     )
