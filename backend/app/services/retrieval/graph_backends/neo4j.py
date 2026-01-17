@@ -28,8 +28,11 @@ class Neo4jBackend(GraphBackend):
             return {"chunk_ids": [], "sparql_query": "", "triples": []}
 
         # Use Doc2Onto CypherGenerator
-        print(f"DEBUG: [Neo4j] Generating Cypher using Doc2Onto CypherGenerator for: {query_text}")
         
+        trace_logs = []
+        def log_trace(msg: str):
+            trace_logs.append(msg)
+
         from app.core.config import settings
         
         try:
@@ -43,8 +46,6 @@ class Neo4jBackend(GraphBackend):
             # If user explicitly disabled inverse search, override mode
             if not enable_inverse:
                 inv_mode = "none"
-            
-            print(f"DEBUG: [Neo4j] Inverse settings: mode='{inv_mode}', enable_inverse_search={enable_inverse}")
             
             # Build custom prompt with inverse relation instruction
             custom_prompt = kwargs.get("custom_query_prompt") or ""
@@ -71,11 +72,11 @@ class Neo4jBackend(GraphBackend):
             cypher_query = gen_result.get("cypher")
             thought = gen_result.get("thought")
             
-            print(f"DEBUG: [Neo4j] Generated Cypher: {cypher_query}")
-            print(f"DEBUG: [Neo4j] Reason: {thought}")
+            log_trace(f"[Neo4j] Generated Cypher: {cypher_query}")
+            log_trace(f"[Neo4j] Reason: {thought}")
             
             if not cypher_query:
-                return {"chunk_ids": [], "sparql_query": "Generation Failed", "triples": []}
+                return {"chunk_ids": [], "sparql_query": "Generation Failed", "triples": [], "trace_logs": trace_logs}
                 
             # Execute generated query
             records = neo4j_client.execute_query(cypher_query)
@@ -99,21 +100,21 @@ class Neo4jBackend(GraphBackend):
                         if value and len(value) > 1:
                             discovered_entities.add(value)
                             
-            print(f"DEBUG: [Neo4j] Discovered entities from query result: {len(discovered_entities)}")
+            log_trace(f"[Neo4j] Discovered entities from query result: {len(discovered_entities)}")
             
             # If inverse search is disabled and no entities were found, skip fallback
             if inv_mode == "none" and len(discovered_entities) == 0:
-                print("DEBUG: [Neo4j] Inverse search disabled. No results found. Skipping fallback to preserve strict directional search.")
                 return {
                     "chunk_ids": [],
                     "sparql_query": cypher_query,
                     "triples": [],
                     "thought": thought,
-                    "found_entities": []
+                    "found_entities": [],
+                    "trace_logs": trace_logs
                 }
             
             # 순수 그래프에서 트리플 조회 (MENTIONED_IN 없음)
-            triples = self._fetch_triples_from_graph(kb_id, entities, list(discovered_entities))
+            triples = self._fetch_triples_from_graph(kb_id, entities, list(discovered_entities), trace_logs)
             
             # SQLite에서 트리플 오프셋 정보 조회
             triples_with_offset, chunk_ids = await self._attach_offsets_to_triples(kb_id, triples)
@@ -123,16 +124,18 @@ class Neo4jBackend(GraphBackend):
                 "sparql_query": cypher_query,
                 "triples": triples_with_offset,
                 "thought": thought,
-                "found_entities": list(discovered_entities)
+                "found_entities": list(discovered_entities),
+                "trace_logs": trace_logs
             }
 
         except Exception as e:
             logger.error(f"Neo4j search failed: {e}")
             import traceback
             traceback.print_exc()
-            return {"chunk_ids": [], "sparql_query": "Error", "triples": []}
+            trace_logs.append(f"[Neo4j] Error: {str(e)}")
+            return {"chunk_ids": [], "sparql_query": "Error", "triples": [], "trace_logs": trace_logs}
 
-    def _fetch_triples_from_graph(self, kb_id: str, input_entities: List[str], discovered_entities: List[str]) -> List[Dict[str, str]]:
+    def _fetch_triples_from_graph(self, kb_id: str, input_entities: List[str], discovered_entities: List[str], trace_logs: List[str] = None) -> List[Dict[str, str]]:
         """순수 그래프에서 관련 트리플 조회 (Chunk 노드 없음)"""
         triples = []
         try:
@@ -156,8 +159,6 @@ class Neo4jBackend(GraphBackend):
             LIMIT 30
             """
             
-            print(f"DEBUG: [Neo4j] Fetching triples for entities: {focus_entities[:5]}...")
-
             t_records = neo4j_client.execute_query(triples_query, {
                 "kb_id": kb_id,
                 "entities": focus_entities
@@ -174,8 +175,6 @@ class Neo4jBackend(GraphBackend):
                         "object": r["obj"],
                         "is_inverse": r.get("is_inverse", False)
                     })
-            
-            print(f"DEBUG: [Neo4j] Found {len(triples)} triples from pure graph")
         except Exception as e:
             logger.error(f"Error in _fetch_triples_from_graph: {e}")
         

@@ -44,9 +44,10 @@ const DEFAULT_PARAMS: Record<StageType, Record<string, any>> = {
         is_auto_hops: true,
         top_k: 10,
         use_relation_filter: true,
-        enable_inverse: false,
+        enable_inverse: true,
         inverse_mode: 'always',
-        use_schema_mode: true,
+        use_schema_mode: false,
+        enable_entity_expansion: false,
         merge_mode: 'union',
         custom_query_prompt: ''
     },
@@ -117,7 +118,29 @@ export default function PipelineBuilder({
                 if (response.ok) {
                     const config = await response.json();
                     if (config.stages && config.stages.length > 0) {
-                        setStages(config.stages);
+                        // Adjust graph stage parameters based on promotion status
+                        const adjustedStages = config.stages.map((stage: PipelineStage) => {
+                            if (stage.type === 'graph') {
+                                const params = { ...stage.params };
+
+                                // If not promoted (Schema None), ensure filters are enabled
+                                if (!isOntologyPromoted) {
+                                    params.use_relation_filter = true;
+                                    params.enable_inverse = true;
+                                    params.use_schema_mode = false;
+                                } else {
+                                    // If promoted, respect saved settings or default to schema mode on
+                                    if (params.use_schema_mode === undefined) {
+                                        params.use_schema_mode = true;
+                                    }
+                                }
+
+                                return { ...stage, params };
+                            }
+                            return stage;
+                        });
+
+                        setStages(adjustedStages);
                     }
                 }
             } catch (error) {
@@ -127,7 +150,7 @@ export default function PipelineBuilder({
             }
         };
         loadPipeline();
-    }, [kbId]);
+    }, [kbId, isOntologyPromoted]);
 
     // Save pipeline config to backend (debounced)
     useEffect(() => {
@@ -214,9 +237,16 @@ export default function PipelineBuilder({
     // --- End Prompt Functions ---
 
     const handleAddStage = (type: StageType) => {
+        const params = { ...DEFAULT_PARAMS[type] };
+
+        // For graph stage: set use_schema_mode based on promotion status
+        if (type === 'graph') {
+            params.use_schema_mode = isOntologyPromoted ?? false;
+        }
+
         const newStage: PipelineStage = {
             type,
-            params: { ...DEFAULT_PARAMS[type] }
+            params
         };
         setStages([...stages, newStage]);
         setShowDropdown(false);
@@ -279,56 +309,81 @@ export default function PipelineBuilder({
                             {stageInfo?.label || stage.type}
                         </span>
 
-                        {stage.type === 'graph' && isOntologyPromoted && (
-                            <button
-                                onClick={() => {
-                                    const current = !!(stage.params.use_schema_mode ?? true);
-                                    const nextSchemaMode = !current;
-                                    const newStages = [...stages];
-                                    const p = { ...newStages[index].params };
+                        {stage.type === 'graph' && (graphBackend === 'neo4j' || graphBackend === 'ontology') && (
+                            isOntologyPromoted ? (
+                                // Promoted: Show toggleable Schema On/Off button
+                                <button
+                                    onClick={() => {
+                                        const current = !!(stage.params.use_schema_mode ?? true);
+                                        const nextSchemaMode = !current;
+                                        const newStages = [...stages];
+                                        const p = { ...newStages[index].params };
 
-                                    if (nextSchemaMode) {
-                                        // Backup
-                                        p._prev_use_relation_filter = p.use_relation_filter ?? true;
-                                        p._prev_enable_inverse = p.enable_inverse ?? false;
-                                        p._prev_inverse_mode = p.inverse_mode ?? 'always';
+                                        if (nextSchemaMode) {
+                                            // Backup
+                                            p._prev_use_relation_filter = p.use_relation_filter ?? true;
+                                            p._prev_enable_inverse = p.enable_inverse ?? false;
+                                            p._prev_inverse_mode = p.inverse_mode ?? 'always';
+                                            p._prev_enable_entity_expansion = p.enable_entity_expansion ?? false;
 
-                                        // Force
-                                        p.use_schema_mode = true;
-                                        p.use_relation_filter = true;
-                                        p.enable_inverse = true;
-                                        p.inverse_mode = 'always';
-                                    } else {
-                                        // Restore
-                                        p.use_schema_mode = false;
-                                        if (p._prev_use_relation_filter !== undefined) p.use_relation_filter = p._prev_use_relation_filter;
-                                        if (p._prev_enable_inverse !== undefined) p.enable_inverse = p._prev_enable_inverse;
-                                        if (p._prev_inverse_mode !== undefined) p.inverse_mode = p._prev_inverse_mode;
+                                            // Force
+                                            p.use_schema_mode = true;
+                                            p.use_relation_filter = true;
+                                            p.enable_inverse = true;
+                                            p.inverse_mode = 'always';
+                                            p.enable_entity_expansion = true;
+                                        } else {
+                                            // Restore
+                                            p.use_schema_mode = false;
+                                            if (p._prev_use_relation_filter !== undefined) p.use_relation_filter = p._prev_use_relation_filter;
+                                            if (p._prev_enable_inverse !== undefined) p.enable_inverse = p._prev_enable_inverse;
+                                            if (p._prev_inverse_mode !== undefined) p.inverse_mode = p._prev_inverse_mode;
+                                            if (p._prev_enable_entity_expansion !== undefined) p.enable_entity_expansion = p._prev_enable_entity_expansion;
 
-                                        delete p._prev_use_relation_filter;
-                                        delete p._prev_enable_inverse;
-                                        delete p._prev_inverse_mode;
-                                    }
+                                            delete p._prev_use_relation_filter;
+                                            delete p._prev_enable_inverse;
+                                            delete p._prev_inverse_mode;
+                                            delete p._prev_enable_entity_expansion;
+                                        }
 
-                                    newStages[index] = { ...newStages[index], params: p };
-                                    setStages(newStages);
-                                }}
-                                style={{
-                                    fontSize: '0.65rem',
-                                    color: !!(stage.params.use_schema_mode ?? true) ? '#fff' : '#1e40af',
-                                    backgroundColor: !!(stage.params.use_schema_mode ?? true) ? '#1e40af' : '#eff6ff',
-                                    border: '1px solid #1e40af',
-                                    padding: '2px 8px',
-                                    borderRadius: '12px',
-                                    fontWeight: 600,
-                                    lineHeight: '1.2',
-                                    cursor: 'pointer',
-                                    transition: 'all 0.2s ease',
-                                    marginLeft: '8px'
-                                }}
-                            >
-                                {!!(stage.params.use_schema_mode ?? true) ? 'Schema On' : 'Schema Off'}
-                            </button>
+                                        newStages[index] = { ...newStages[index], params: p };
+                                        setStages(newStages);
+                                    }}
+                                    style={{
+                                        fontSize: '0.65rem',
+                                        color: !!(stage.params.use_schema_mode ?? true) ? '#fff' : '#1e40af',
+                                        backgroundColor: !!(stage.params.use_schema_mode ?? true) ? '#1e40af' : '#eff6ff',
+                                        border: '1px solid #1e40af',
+                                        padding: '2px 8px',
+                                        borderRadius: '12px',
+                                        fontWeight: 600,
+                                        lineHeight: '1.2',
+                                        cursor: 'pointer',
+                                        transition: 'all 0.2s ease',
+                                        marginLeft: '8px'
+                                    }}
+                                >
+                                    {!!(stage.params.use_schema_mode ?? true) ? 'Schema On' : 'Schema Off'}
+                                </button>
+                            ) : (
+                                // Not promoted: Show disabled "Schema None" text
+                                <span
+                                    style={{
+                                        fontSize: '0.65rem',
+                                        color: '#cbd5e1',
+                                        backgroundColor: '#f8fafc',
+                                        border: '1px solid #e2e8f0',
+                                        padding: '2px 8px',
+                                        borderRadius: '12px',
+                                        fontWeight: 600,
+                                        lineHeight: '1.2',
+                                        cursor: 'default',
+                                        marginLeft: '8px'
+                                    }}
+                                >
+                                    Schema None
+                                </span>
+                            )
                         )}
 
                         <button
@@ -544,8 +599,32 @@ export default function PipelineBuilder({
                             display: 'flex',
                             flexDirection: 'column',
                             justifyContent: 'flex-start',
-                            minHeight: '120px'
+                            minHeight: '120px',
+                            gap: '0.5rem'
                         }}>
+                            {/* Entity Expansion Checkbox */}
+                            <label style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '0.3rem',
+                                fontSize: '0.7rem',
+                                color: params.use_schema_mode ? '#94a3b8' : '#475569',
+                                cursor: params.use_schema_mode ? 'not-allowed' : 'pointer',
+                                opacity: params.use_schema_mode ? 0.7 : 1
+                            }}>
+                                <input
+                                    type="checkbox"
+                                    checked={!!params.enable_entity_expansion}
+                                    disabled={!!params.use_schema_mode}
+                                    onChange={(e) => handleParamChange(index, 'enable_entity_expansion', e.target.checked)}
+                                    style={{
+                                        width: '14px',
+                                        height: '14px',
+                                        cursor: params.use_schema_mode ? 'not-allowed' : 'pointer'
+                                    }}
+                                />
+                                Entity Expand
+                            </label>
                             <button
                                 onClick={() => {
                                     setEditingPromptStage(index);

@@ -253,10 +253,12 @@ class PipelineExecutor:
         top_k = params.get("top_k", 10)
         use_relation_filter = params.get("use_relation_filter", True)
         enable_inverse = params.get("enable_inverse", False)
+        
         inverse_mode = params.get("inverse_mode", "auto")
         use_schema_mode = params.get("use_schema_mode", True)
         custom_query_prompt = params.get("custom_query_prompt", "")
         merge_mode = params.get("merge_mode", "union")
+        enable_entity_expansion = params.get("enable_entity_expansion", False)
         
         strategy = retrieval_factory.get_strategy("hybrid_graph")
         new_results = await strategy.search(
@@ -271,14 +273,21 @@ class PipelineExecutor:
             enable_inverse_search=enable_inverse,
             inverse_extraction_mode=inverse_mode,
             use_schema_mode=use_schema_mode,
-            custom_query_prompt=custom_query_prompt
+            custom_query_prompt=custom_query_prompt,
+            enable_entity_expansion=enable_entity_expansion
         )
         
         ctx.results = self._update_results_with_history(ctx.results, new_results, "Graph", merge_mode)
         
         # Store graph metadata if available
         if new_results and new_results[0].get("graph_metadata"):
-            ctx.metadata["graph_metadata"] = new_results[0]["graph_metadata"]
+            g_meta = new_results[0]["graph_metadata"]
+            ctx.metadata["graph_metadata"] = g_meta
+            
+            # [Integrate Trace Logs]
+            # Pull discrete trace logs from graph strategy into the main execution trace
+            if "trace_logs" in g_meta:
+                ctx.logs.extend(g_meta["trace_logs"])
         
         return ctx
     

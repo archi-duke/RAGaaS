@@ -42,16 +42,14 @@ class GraphRetrievalStrategy(RetrievalStrategy):
             if clean_msg.startswith("DEBUG:"):
                 clean_msg = clean_msg[6:].strip()
             
+            # Simplified format per user request
             if is_first_log:
-                PREFIX = f"DEBUG: {start_dt} -"
+                formatted_msg = f"[Graph] Start Search ({start_dt}): {clean_msg}"
                 is_first_log = False
-                formatted_msg = f"{PREFIX} {clean_msg}"
             else:
-                formatted_msg = f"DEBUG [{elapsed_ms} ms] : {clean_msg}"
+                formatted_msg = f"[{elapsed_ms}ms] {clean_msg}"
             
-            print(formatted_msg)
-            if use_raw_log:
-                trace_logs.append(formatted_msg)
+            trace_logs.append(formatted_msg)
 
         log(f"🚀 Graph Search Start for query: {query}")
         
@@ -63,9 +61,20 @@ class GraphRetrievalStrategy(RetrievalStrategy):
         entities = await self._extract_entities(kb_id, query)
         log(f"DEBUG: 🔍 Extracted entities: {entities}")
         
-        # 3. Expand entities - find related entities in graph
-        expanded_entities = await self._expand_entities(kb_id, entities)
-        log(f"DEBUG: 🔗 Expanded entities: {expanded_entities}")
+        # 3. Expand entities - find related entities in graph (conditional)
+        graph_backend_type = kwargs.get("graph_backend", "ontology")
+        enable_entity_expansion = kwargs.get("enable_entity_expansion", False)
+        
+        # Combine with alternatives from analysis for better coverage
+        alternatives = query_analysis.get("alternatives", [])
+        search_entities = list(set(entities + alternatives))
+        
+        expanded_entities = []
+        if enable_entity_expansion:
+            expanded_entities = await self._expand_entities(kb_id, search_entities, backend_type=graph_backend_type)
+            log(f"DEBUG: 🔗 Expanded entities: {expanded_entities}")
+        else:
+            log(f"DEBUG: 🔗 Entity expansion disabled")
         
         all_entities = list(set(entities + expanded_entities))
         
@@ -82,12 +91,10 @@ class GraphRetrievalStrategy(RetrievalStrategy):
             log(f"DEBUG: 🔀 Detected multi-hop query, setting hops to {graph_hops}")
         
         log(f"DEBUG: 🔎 Searching graph with hops={graph_hops}")
-        graph_backend_type = kwargs.get("graph_backend", "ontology")
         
         # Use Factory to get backend instance
         backend = GraphBackendFactory.get_backend(graph_backend_type)
         
-        # Execute query via backend strategy
         # Execute query via backend strategy
         graph_result = await backend.query(
             kb_id=kb_id,
@@ -98,6 +105,10 @@ class GraphRetrievalStrategy(RetrievalStrategy):
             query_text=query,
             **kwargs
         )
+
+        # Merge backend trace logs
+        if "trace_logs" in graph_result:
+            trace_logs.extend(graph_result["trace_logs"])
         
         # Log triple count
         found_triples = graph_result.get("triples", [])
@@ -180,15 +191,20 @@ class GraphRetrievalStrategy(RetrievalStrategy):
         Include specific terms that might be nodes in a knowledge graph.
         Don't be too generic (e.g., avoid "technology" if a specific name is implied, but include "1인자" or "Master" if present).
         
+        IMPORTANT: 
+        - Keep entities in their ORIGINAL language as they appear in the query. 
+        - Do NOT translate them (e.g., if query is "성기훈", entity must be "성기훈", not "Seong Gi-hun").
+        - If needed, you can provide English synonyms in a separate list.
+        
         Query: {query}
         
-        Output format: {{"entities": ["Elon Musk", "SpaceX", "CEO"]}}
+        Output format: {{"entities": ["성기훈", "오일남"], "translated_entities": ["Seong Gi-hun", "Oh Il-nam"]}}
         """
         try:
             response = await self.client.chat.completions.create(
                 model="gpt-4o-mini", # Use smarter model for extraction
                 messages=[
-                    {"role": "system", "content": "You are a precise entity extractor for Knowledge Graphs. Output JSON only."},
+                    {"role": "system", "content": "You are a precise entity extractor for Knowledge Graphs. Output JSON only. Never translate entities in the main list."},
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0,
@@ -198,6 +214,11 @@ class GraphRetrievalStrategy(RetrievalStrategy):
             data = json.loads(content)
             for e in data.get("entities", []):
                 entities.add(e)
+            
+            # Combine translated entities for broader recall
+            for e in data.get("translated_entities", []):
+                entities.add(e)
+                
         except Exception as e:
             logger.error(f"Error extracting query entities with LLM: {e}")
 
@@ -303,62 +324,112 @@ class GraphRetrievalStrategy(RetrievalStrategy):
         
         return analysis
     
-    async def _expand_entities(self, kb_id: str, entities: List[str]) -> List[str]:
+    async def _expand_entities(self, kb_id: str, entities: List[str], backend_type: str = "ontology") -> List[str]:
         """Expand entities by finding related entities in the graph."""
         if not entities:
             return []
         
+        # Internal debug log
+        def log_debug(msg):
+            print(f"[DEBUG_EXPAND] {msg}")
+
+        log_debug(f"Input Entities: {entities}, Backend: {backend_type}, KB: {kb_id}")
         expanded = set()
         
-        # Escape entities for SPARQL
-        safe_entities = [re.escape(e) for e in entities]
-        regex_pattern = "|".join(safe_entities)
-        
-        # Find entities connected to the initial entities
-        expand_query = f"""
-        PREFIX rel: <{self.namespace_relation}>
-        PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-        
-        SELECT DISTINCT ?relatedLabel
-        WHERE {{
-            {{
-                # Find entities with matching labels
-                ?entity rdfs:label ?entityLabel .
-                FILTER regex(?entityLabel, "({regex_pattern})", "i")
+        if backend_type == "neo4j":
+            # Neo4j Expansion
+            try:
+                from app.core.neo4j_client import neo4j_client
+                # Escape entities for regex
+                safe_entities = [re.escape(e) for e in entities]
+                regex_pattern = "(?i).*(" + "|".join(safe_entities) + ").*"
                 
-                # Get connected entities (1-hop)
-                ?entity ?pred ?related .
-                FILTER (?pred != rel:hasSource)
-                FILTER (?pred != rdfs:label)
-                
-                OPTIONAL {{ ?related rdfs:label ?relatedLabel }}
+                # We search for neighbors of the given entities with more flexible matching
+                # Fix: Handle nulls in label_ko safely using coalesce or separate conditions
+                expand_query = """
+                MATCH (n:Entity {kb_id: $kb_id})
+                WHERE n.name =~ $regex_pattern OR coalesce(n.label_ko, '') =~ $regex_pattern
+                MATCH (n)-[r]-(m)
+                WHERE NOT (m.name IN $entities) AND NOT (coalesce(m.label_ko, '') IN $entities)
+                RETURN DISTINCT coalesce(m.label_ko, m.name) AS relatedLabel
+                LIMIT 50
+                """
+                log_debug(f"Executing Neo4j Expand Query with pattern: {regex_pattern}")
+                records = neo4j_client.execute_query(expand_query, parameters={
+                    "entities": entities, 
+                    "regex_pattern": regex_pattern,
+                    "kb_id": kb_id
+                })
+                log_debug(f"Neo4j Result count: {len(records)}")
+                for record in records:
+                    label = record.get("relatedLabel")
+                    if label:
+                        expanded.add(label)
+            except Exception as e:
+                log_debug(f"Error expanding entities in Neo4j: {e}")
+        else:
+            # Fuseki (SPARQL) Expansion
+            # Escape entities for SPARQL Regex (avoiding re.escape which adds too many backslashes)
+            def sparql_escape(s):
+                chars_to_escape = r".*+?^${}()|[]\\"
+                for char in chars_to_escape:
+                    s = s.replace(char, "\\" + char)
+                return s
+
+            safe_entities = [sparql_escape(e) for e in entities]
+            regex_pattern = "|".join(safe_entities)
+            
+            # Find entities connected to the initial entities
+            expand_query = f"""
+            PREFIX rel: <{self.namespace_relation}>
+            PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+            
+            SELECT DISTINCT ?relatedLabel
+            WHERE {{
+                {{
+                    # Find entities with matching labels
+                    ?entity rdfs:label ?entityLabel .
+                    FILTER regex(?entityLabel, "({regex_pattern})", "i")
+                    
+                    # Get connected entities (1-hop)
+                    ?entity ?pred ?related .
+                    FILTER (?pred != rel:hasSource)
+                    FILTER (?pred != rdfs:label)
+                    
+                    OPTIONAL {{ ?related rdfs:label ?relatedLabel }}
+                }}
+                UNION
+                {{
+                    # Inverse direction
+                    ?related ?pred ?entity .
+                    FILTER (?pred != rel:hasSource)
+                    FILTER (?pred != rdfs:label)
+                    
+                    ?entity rdfs:label ?entityLabel .
+                    FILTER regex(?entityLabel, "({regex_pattern})", "i")
+                    
+                    OPTIONAL {{ ?related rdfs:label ?relatedLabel }}
+                }}
             }}
-            UNION
-            {{
-                # Inverse direction
-                ?related ?pred ?entity .
-                FILTER (?pred != rel:hasSource)
-                FILTER (?pred != rdfs:label)
-                
-                ?entity rdfs:label ?entityLabel .
-                FILTER regex(?entityLabel, "({regex_pattern})", "i")
-                
-                OPTIONAL {{ ?related rdfs:label ?relatedLabel }}
-            }}
-        }}
-        LIMIT 50
-        """
+            LIMIT 50
+            """
+            log_debug(f"Executing Fuseki Expand Query with pattern: {regex_pattern}")
+            
+            try:
+                from app.core.fuseki import fuseki_client
+                results = fuseki_client.query_sparql(kb_id, expand_query)
+                bindings = results.get("results", {}).get("bindings", [])
+                log_debug(f"Fuseki Result bindings count: {len(bindings)}")
+                for binding in bindings:
+                    label = binding.get("relatedLabel", {}).get("value", "")
+                    if label and label not in entities:
+                        expanded.add(label)
+            except Exception as e:
+                log_debug(f"Error expanding entities in Fuseki: {e}")
         
-        try:
-            results = fuseki_client.query_sparql(kb_id, expand_query)
-            for binding in results.get("results", {}).get("bindings", []):
-                label = binding.get("relatedLabel", {}).get("value", "")
-                if label and label not in entities:
-                    expanded.add(label)
-        except Exception as e:
-            logger.warning(f"Error expanding entities: {e}")
-        
-        return list(expanded)[:10]  # Limit to prevent explosion
+        res = list(expanded)[:10]
+        log_debug(f"Final Expanded Entities: {res}")
+        return res
 
     async def _fallback_search(self, kb_id: str, query: str, entities: List[str], top_k: int) -> List[Dict[str, Any]]:
         """Fallback to hybrid vector+keyword search when graph doesn't have complete data."""

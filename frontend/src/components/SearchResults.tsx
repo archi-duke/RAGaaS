@@ -179,7 +179,7 @@ export default function SearchResults({ chunks, kbId, graphBackend, logs, pipeli
     });
 
     return (
-        <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', height: '100%', width: '100%', flex: 1 }}>
             {/* Tab Headers */}
             <div style={{ display: 'flex', borderBottom: '1px solid var(--border)', marginBottom: '1rem' }}>
                 <div
@@ -210,7 +210,14 @@ export default function SearchResults({ chunks, kbId, graphBackend, logs, pipeli
             <div style={{ flex: 1, overflowY: 'auto' }}>
                 {/* Chunks Tab */}
                 {activeTab === 'chunks' && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                    <div style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '1rem',
+                        padding: '1rem',
+                        width: '100%',
+                        boxSizing: 'border-box'
+                    }}>
                         {sortedChunks.map((chunk, idx) => {
                             const isGraph = chunk.metadata?.source === 'graph' || chunk.metadata?.source === 'graph_fallback';
                             return (
@@ -218,7 +225,9 @@ export default function SearchResults({ chunks, kbId, graphBackend, logs, pipeli
                                     key={idx}
                                     className="card"
                                     style={{
-                                        padding: '1rem',
+                                        width: '100%',
+                                        boxSizing: 'border-box',
+                                        padding: '1.25rem',
                                         background: isGraph ? '#f0fdf4' : '#f8fafc',
                                         borderRadius: '8px',
                                         border: isGraph ? '1px solid #86efac' : '1px solid var(--border)',
@@ -260,12 +269,7 @@ export default function SearchResults({ chunks, kbId, graphBackend, logs, pipeli
                                                     Graph
                                                 </span>
                                             )}
-                                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '2px' }}>
-                                                <span className="badge badge-secondary" style={{ fontSize: '0.7rem' }}>
-                                                    Final Score: {chunk.score?.toFixed(4)}
-                                                    {chunk.l2_score != null && ` (L2: ${chunk.l2_score.toFixed(4)})`}
-                                                </span>
-                                            </div>
+
                                         </div>
                                     </div>
 
@@ -304,7 +308,10 @@ export default function SearchResults({ chunks, kbId, graphBackend, logs, pipeli
                                         fontSize: '0.9rem',
                                         lineHeight: '1.6',
                                         color: 'var(--text-primary)',
-                                        whiteSpace: 'pre-wrap'
+                                        whiteSpace: 'pre-wrap',
+                                        wordBreak: 'break-word',
+                                        width: '100%',
+                                        display: 'block'
                                     }}>
                                         {chunk.content ? chunk.content.replace(/\n\s*\n/g, '\n').trim() : ''}
                                     </div>
@@ -389,29 +396,16 @@ export default function SearchResults({ chunks, kbId, graphBackend, logs, pipeli
 
                 {/* Logs Tab */}
                 {activeTab === 'logs' && logs && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', padding: '1rem' }}>
-                        {/* Pipeline Config */}
-                        {pipeline && (
-                            <div className="card" style={{ padding: '1rem' }}>
-                                <div style={{ fontSize: '0.9rem', fontWeight: 600, marginBottom: '0.5rem' }}>
-                                    Pipeline Configuration
-                                </div>
-                                <pre style={{
-                                    background: '#1e293b',
-                                    color: '#e2e8f0',
-                                    padding: '1rem',
-                                    borderRadius: '6px',
-                                    overflow: 'auto',
-                                    fontSize: '0.75rem',
-                                    maxHeight: '200px'
-                                }}>
-                                    {JSON.stringify(pipeline, null, 2)}
-                                </pre>
-                            </div>
-                        )}
-
+                    <div style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '1rem',
+                        padding: '1rem',
+                        width: '100%',
+                        boxSizing: 'border-box'
+                    }}>
                         {/* Execution Logs */}
-                        <div className="card" style={{ padding: '1rem' }}>
+                        <div className="card" style={{ padding: '1rem', width: '100%', boxSizing: 'border-box' }}>
                             <div style={{ fontSize: '0.9rem', fontWeight: 600, marginBottom: '0.5rem' }}>
                                 Execution Trace
                             </div>
@@ -420,16 +414,23 @@ export default function SearchResults({ chunks, kbId, graphBackend, logs, pipeli
                                 color: '#a5b4fc',
                                 padding: '1rem',
                                 borderRadius: '6px',
-                                overflow: 'auto',
                                 fontSize: '0.75rem',
                                 fontFamily: 'monospace',
-                                maxHeight: '400px',
                                 display: 'flex',
                                 flexDirection: 'column',
-                                gap: '4px'
+                                gap: '4px',
+                                width: '100%',
+                                boxSizing: 'border-box',
+                                overflowX: 'auto',
+                                whiteSpace: 'pre-wrap',
+                                wordBreak: 'break-word'
                             }}>
                                 {logs.map((log, idx) => (
-                                    <div key={idx} style={{ borderBottom: '1px solid #334155', paddingBottom: '2px' }}>
+                                    <div key={idx} style={{
+                                        borderBottom: '1px solid #334155',
+                                        paddingBottom: '4px',
+                                        lineHeight: '1.4'
+                                    }}>
                                         {log}
                                     </div>
                                 ))}
@@ -444,7 +445,7 @@ export default function SearchResults({ chunks, kbId, graphBackend, logs, pipeli
 
 // Sub-component for Graph Tabs to keep code clean
 function GraphDetailsTabs({ graphMetadata, chunks }: { graphMetadata: any, chunks: any[] }) {
-    const [subTab, setSubTab] = React.useState<'triples' | 'query' | 'log'>('triples');
+    const [subTab, setSubTab] = React.useState<'triples' | 'query'>('triples');
     const [selectedTriple, setSelectedTriple] = React.useState<any>(null);
 
     const subTabStyle = (isActive: boolean) => ({
@@ -468,11 +469,6 @@ function GraphDetailsTabs({ graphMetadata, chunks }: { graphMetadata: any, chunk
                 <div style={subTabStyle(subTab === 'query')} onClick={() => setSubTab('query')}>
                     {graphMetadata.graph_backend === 'neo4j' ? 'Cypher Query' : 'SPARQL Query'}
                 </div>
-                {graphMetadata.trace_logs && graphMetadata.trace_logs.length > 0 && (
-                    <div style={subTabStyle(subTab === 'log')} onClick={() => setSubTab('log')}>
-                        Log & Analysis
-                    </div>
-                )}
             </div>
 
             <div style={{ minHeight: '200px' }}>
@@ -485,8 +481,6 @@ function GraphDetailsTabs({ graphMetadata, chunks }: { graphMetadata: any, chunk
                                     Found {graphMetadata.triples.length} triples related to your query.
                                 </div>
                                 <div style={{
-                                    maxHeight: '300px',
-                                    overflowY: 'auto',
                                     background: 'white',
                                     padding: '0.75rem',
                                     borderRadius: '6px',
@@ -604,111 +598,6 @@ function GraphDetailsTabs({ graphMetadata, chunks }: { graphMetadata: any, chunk
                                 No query generated.
                             </div>
                         )}
-                    </div>
-                )}
-
-                {/* 3. Log Tab */}
-                {subTab === 'log' && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                        {/* Query Understanding Log */}
-                        {graphMetadata.rewritten_query && (
-                            <div style={{ padding: '0.75rem', background: '#fffbeb', borderRadius: '6px', border: '1px solid #fcd34d' }}>
-                                <div style={{ fontSize: '0.8rem', fontWeight: 600, marginBottom: '0.5rem', color: '#92400e' }}>
-                                    Query Understanding
-                                </div>
-                                <div style={{ fontSize: '0.75rem', color: '#78350f', display: 'grid', gap: '0.5rem' }}>
-                                    <div><strong>Rewritten:</strong> {graphMetadata.rewritten_query.rewritten_query_text || 'N/A'}</div>
-                                    <div style={{ display: 'flex', gap: '0.5rem' }}>
-                                        {graphMetadata.rewritten_query.query_type && <span className="badge badge-secondary">Type: {graphMetadata.rewritten_query.query_type}</span>}
-                                        {graphMetadata.rewritten_query.hops && <span className="badge badge-secondary">Hops: {graphMetadata.rewritten_query.hops}</span>}
-                                    </div>
-                                </div>
-                            </div>
-                        )}
-
-                        {/* Search Stats Log */}
-                        {graphMetadata.total_chunks_found !== undefined && (
-                            <div style={{ padding: '0.75rem', background: '#f0fdf4', borderRadius: '6px', border: '1px solid #bbf7d0' }}>
-                                <div style={{ fontSize: '0.8rem', fontWeight: 600, marginBottom: '0.5rem', color: '#166534' }}>
-                                    Search Execution Stats
-                                </div>
-                                <ul style={{ margin: 0, paddingLeft: '1.2rem', fontSize: '0.75rem', color: '#15803d' }}>
-                                    <li>Total Chunks Found in Graph: <strong>{graphMetadata.total_chunks_found}</strong></li>
-                                    <li>Graph Backend: <strong>{graphMetadata.graph_backend || 'ontology'}</strong></li>
-                                </ul>
-
-
-                            </div>
-                        )}
-
-                        {/* Process Trace Logs */}
-                        {graphMetadata.trace_logs && graphMetadata.trace_logs.length > 0 && (
-                            <div style={{ marginTop: '1rem', padding: '0.75rem', background: '#f8fafc', borderRadius: '6px', border: '1px solid #e2e8f0' }}>
-                                <div style={{ fontSize: '0.8rem', fontWeight: 600, marginBottom: '0.5rem', color: '#475569' }}>
-                                    🛠️ Process Trace Logs
-                                </div>
-                                <div style={{
-                                    fontFamily: 'monospace',
-                                    fontSize: '0.7rem',
-                                    color: '#334155',
-                                    display: 'flex',
-                                    flexDirection: 'column',
-                                    gap: '0.2rem',
-                                    maxHeight: '200px',
-                                    overflowY: 'auto'
-                                }}>
-                                    {graphMetadata.trace_logs.map((log: string, idx: number) => (
-                                        <div key={idx} style={{ borderBottom: '1px solid #f1f5f9', paddingBottom: '2px' }}>
-                                            {log}
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
-                        )}
-
-                        {/* 3. Raw JSON Logs (Full Debug Dump) */}
-                        <div style={{ marginTop: '1rem' }}>
-                            <div style={{
-                                display: 'flex',
-                                justifyContent: 'space-between',
-                                alignItems: 'center',
-                                marginBottom: '0.5rem'
-                            }}>
-                                <div style={{ fontSize: '0.8rem', fontWeight: 600, color: '#334155' }}>
-                                    📋 Raw JSON Logs (for Debugging)
-                                </div>
-                                <button
-                                    onClick={() => navigator.clipboard.writeText(JSON.stringify(graphMetadata, null, 2))}
-                                    style={{
-                                        fontSize: '0.7rem',
-                                        padding: '0.2rem 0.6rem',
-                                        background: 'white',
-                                        border: '1px solid #cbd5e1',
-                                        borderRadius: '4px',
-                                        cursor: 'pointer',
-                                        color: '#475569'
-                                    }}
-                                >
-                                    Copy JSON
-                                </button>
-                            </div>
-                            <pre style={{
-                                background: '#1e293b',
-                                color: '#a5b4fc',
-                                padding: '1rem',
-                                borderRadius: '6px',
-                                overflow: 'auto',
-                                fontSize: '0.7rem',
-                                lineHeight: '1.4',
-                                margin: 0,
-                                whiteSpace: 'pre-wrap',
-                                wordBreak: 'break-word',
-                                maxHeight: '300px',
-                                fontFamily: 'Menlo, Monaco, Consolas, "Courier New", monospace'
-                            }}>
-                                {JSON.stringify(graphMetadata, null, 2)}
-                            </pre>
-                        </div>
                     </div>
                 )}
             </div>

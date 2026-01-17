@@ -93,6 +93,35 @@ export default function KnowledgeBaseDetail() {
     });
     const [isPromoting, setIsPromoting] = useState(false);
 
+    // Resizable Panel State
+    const [chatPanelWidth, setChatPanelWidth] = useState(50); // percentage
+    const [isResizing, setIsResizing] = useState(false);
+
+    const handleResizerMouseDown = (e: React.MouseEvent) => {
+        e.preventDefault();
+        setIsResizing(true);
+
+        const startX = e.clientX;
+        const startWidth = chatPanelWidth;
+        const containerWidth = (e.currentTarget.parentElement as HTMLElement).offsetWidth;
+
+        const handleMouseMove = (moveEvent: MouseEvent) => {
+            const deltaX = moveEvent.clientX - startX;
+            const deltaPercent = (deltaX / containerWidth) * 100;
+            const newWidth = Math.min(Math.max(startWidth + deltaPercent, 20), 80); // 20-80% range
+            setChatPanelWidth(newWidth);
+        };
+
+        const handleMouseUp = () => {
+            setIsResizing(false);
+            document.removeEventListener('mousemove', handleMouseMove);
+            document.removeEventListener('mouseup', handleMouseUp);
+        };
+
+        document.addEventListener('mousemove', handleMouseMove);
+        document.addEventListener('mouseup', handleMouseUp);
+    };
+
 
     useEffect(() => {
         if (!id) return;
@@ -365,9 +394,17 @@ export default function KnowledgeBaseDetail() {
     }
 
     return (
-        <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', padding: '5px', overflow: 'hidden' }}>
+        <div style={{
+            display: 'flex',
+            flexDirection: 'column',
+            height: '100vh',
+            width: '100%',
+            padding: '0',
+            overflow: 'hidden',
+            boxSizing: 'border-box'
+        }}>
             {/* Header */}
-            <div style={{ marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '1rem' }}>
+            <div style={{ padding: '8px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: '1rem', background: 'white' }}>
                 <Link to="/" className="btn btn-ghost" style={{ padding: '0.5rem', display: 'flex', alignItems: 'center' }}>
                     <ArrowLeft size={24} />
                 </Link>
@@ -479,10 +516,19 @@ export default function KnowledgeBaseDetail() {
                         />
                     </div>
 
-                    {/* Bottom: Split View */}
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '5px', flex: 1, minHeight: 0 }}>
+                    {/* Bottom: Split View with Resizable Panels */}
+                    <div style={{ display: 'flex', gap: '0', flex: 1, minHeight: 0, position: 'relative' }}>
                         {/* Left: Chat */}
-                        <div style={{ overflow: 'hidden', height: '100%', minHeight: 0 }}>
+                        <div style={{
+                            width: `${chatPanelWidth}%`,
+                            overflow: 'hidden',
+                            height: '100%',
+                            minHeight: 0,
+                            minWidth: '400px',
+                            padding: '10px',
+                            boxSizing: 'border-box',
+                            background: '#f8fafc'
+                        }}>
                             <ChatInterface
                                 kbId={id!}
                                 graphBackend={kb.graph_backend}
@@ -514,8 +560,54 @@ export default function KnowledgeBaseDetail() {
                             />
                         </div>
 
+                        {/* Resizer Bar */}
+                        <div
+                            onMouseDown={handleResizerMouseDown}
+                            style={{
+                                width: '5px',
+                                cursor: 'col-resize',
+                                background: isResizing ? 'var(--primary)' : '#e5e7eb',
+                                transition: isResizing ? 'none' : 'background 0.2s',
+                                position: 'relative',
+                                flexShrink: 0,
+                                userSelect: 'none'
+                            }}
+                            onMouseEnter={(e) => {
+                                if (!isResizing) {
+                                    e.currentTarget.style.background = 'var(--primary)';
+                                }
+                            }}
+                            onMouseLeave={(e) => {
+                                if (!isResizing) {
+                                    e.currentTarget.style.background = '#e5e7eb';
+                                }
+                            }}
+                        >
+                            <div style={{
+                                position: 'absolute',
+                                top: '50%',
+                                left: '50%',
+                                transform: 'translate(-50%, -50%)',
+                                width: '3px',
+                                height: '40px',
+                                background: 'white',
+                                borderRadius: '2px',
+                                opacity: 0.7
+                            }} />
+                        </div>
+
                         {/* Right: Results */}
-                        <div style={{ overflow: 'hidden', height: '100%', minHeight: 0 }}>
+                        <div style={{
+                            flex: 1,
+                            overflow: 'hidden',
+                            height: '100%',
+                            minHeight: 0,
+                            minWidth: '300px',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            padding: '10px',
+                            boxSizing: 'border-box'
+                        }}>
                             <SearchResults
                                 chunks={retrievedChunks}
                                 kbId={id!}
