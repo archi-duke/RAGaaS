@@ -4,10 +4,10 @@ import requests
 from typing import Optional, Dict
 
 class SPARQLGenerator:
-    """자연어 질문을 SPARQL 쿼리로 변환하는 LLM 기반 생성기"""
+    """LLM-based generator that converts natural language questions into SPARQL queries"""
 
-    DEFAULT_SYSTEM_PROMPT = """당신은 SPARQL 및 지식 그래프(Knowledge Graph) 전문가입니다.
-주어진 Ontology 스키마와 규칙을 기반으로, 자연어 질문을 실행 가능한 SPARQL 1.1 쿼리로 변환하세요.
+    DEFAULT_SYSTEM_PROMPT = """You are an expert in SPARQL and Knowledge Graphs.
+Based on the provided Ontology Schema and rules, convert the natural language question into an executable SPARQL 1.1 query.
 
 [Ontology Schema]
 1. Namespaces (Prefixes):
@@ -15,48 +15,48 @@ class SPARQLGenerator:
    - rdfs: <http://www.w3.org/2000/01/rdf-schema#>
    - owl: <http://www.w3.org/2002/07/owl#>
    - xsd: <http://www.w3.org/2001/XMLSchema#>
-   - inst: <http://rag.local/inst/>  (인스턴스)
-   - rel: <http://rag.local/rel/>    (관계/Predicate)
-   - prop: <http://rag.local/prop/>  (속성/Property)
-   - class: <http://rag.local/class/> (클래스)
+   - inst: <http://rag.local/inst/>  (Instance)
+   - rel: <http://rag.local/rel/>    (Relation/Predicate)
+   - prop: <http://rag.local/prop/>  (Property)
+   - class: <http://rag.local/class/> (Class)
 
-2. 주요 구조 및 규칙:
-   - 모든 엔티티는 URI를 가집니다 (예: inst:성기훈).
-   - 엔티티의 이름(Label)은 `rdfs:label` 속성에 저장됩니다. (문자열 리터럴)
-   - 예: `?s rdfs:label "성기훈"`
-   - **관계 방향성 중요**: 
-     - `rel:제자` (is student of): `[학생] rel:제자 [스승]` -> 학생이 주어(Subject), 스승이 목적어(Object)
-     - `rel:스승` (is teacher of): `[스승] rel:스승 [학생]` -> 스승이 주어(Subject), 학생이 목적어(Object)
-   - **스승을 찾을 때**: `?student rel:제자 ?teacher` 또는 `?teacher rel:스승 ?student` 를 탐색하세요.
+2. Key Structures and Rules:
+   - Every entity has a URI (e.g., inst:Seong_Gi_hun).
+   - Entity names (Labels) are stored in the `rdfs:label` property (as string literals).
+   - Example: `?s rdfs:label "Seong Gi-hun"`
+   - **Relation Directionality Matters**: 
+     - `rel:student_of`: `[Student] rel:student_of [Teacher]` -> Student is Subject, Teacher is Object.
+     - `rel:teacher_of`: `[Teacher] rel:teacher_of [Student]` -> Teacher is Subject, Student is Object.
+   - **When finding a teacher**: Search for `?student rel:student_of ?teacher` or `?teacher rel:teacher_of ?student`.
 
-3. 관계 탐색:
-   - 질문의 의도를 파악하여 적절한 `rel:관계명`을 추론하세요.
-   - 방향 무관 탐색이 필요할 경우 Property Path(`|` 또는 `^`)를 사용하세요. 
-     - 예: 스승을 찾기 위해 `(rel:제자|^rel:스승)` 사용 가능.
+3. Relationship Search:
+   - Identify the intent of the question and infer the appropriate `rel:relation_name`.
+   - If direction-agnostic search is needed, use Property Paths (`|` or `^`).
+     - Example: You can use `(rel:student_of|^rel:teacher_of)` to find a teacher.
 
-[작성 원칙]
-1. **PREFIX 필수 포함**: 쿼리 시작 부분에 위 Namespaces를 모두 정의하세요.
-2. **엔티티 매칭 (중요)**: 
-   - 이름으로 찾을 때는 `rdfs:label`을 사용하되, `FILTER(STR(?label) = "이름")` 형식을 권장합니다.
-3. **결과 반환**:
-   - 가능한 `DISTINCT`를 사용하세요.
+[Writing Principles]
+1. **Include PREFIXES**: Define all the above Namespaces at the beginning of the query.
+2. **Entity Matching (Critical)**:
+   - Use `rdfs:label` to find by name, preferably using `FILTER(STR(?label) = "Name")`.
+3. **Return Results**:
+   - Use `DISTINCT` whenever possible.
 
-[예시]
-질문: "성기훈의 스승은 누구야?"
+[Example]
+Question: "Who is Seong Gi-hun's teacher?"
 SPARQL:
 PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
 PREFIX rel: <http://rag.local/rel/>
 SELECT DISTINCT ?teacherLabel WHERE {
   ?s rdfs:label ?sLabel .
-  FILTER(STR(?sLabel) = "성기훈") .
-  ?s (rel:제자|^rel:스승) ?teacher .
+  FILTER(STR(?sLabel) = "Seong Gi-hun") .
+  ?s (rel:student_of|^rel:teacher_of) ?teacher .
   ?teacher rdfs:label ?teacherLabel .
 }
 
-반드시 JSON 형식으로 응답하세요:
+You MUST respond in JSON format:
 {
-  "thought": "논리적 추론 과정",
-  "sparql": "생성된 SPARQL 쿼리"
+  "thought": "logical reasoning process",
+  "sparql": "generated SPARQL query"
 }
 """
     
@@ -74,7 +74,7 @@ SELECT DISTINCT ?teacherLabel WHERE {
         self.api_key = api_key or os.environ.get("OPENAI_API_KEY", "")
 
     def generate(self, question: str, context: Optional[str] = None, mode: str = "ontology", inverse_relation: str = "auto", custom_prompt: Optional[str] = None, schema_info: Optional[Dict] = None, system_prompt_override: Optional[str] = None) -> Dict:
-        """자연어 질문을 SPARQL로 변환 (custom_prompt 지원)"""
+        """Convert natural language question to SPARQL (Supports custom_prompt)"""
         
         # Dynamic Load from File (Priority: Override > File > Default)
         from pathlib import Path
@@ -127,15 +127,15 @@ SELECT DISTINCT ?teacherLabel WHERE {
             system_prompt += schema_text
 
         if inverse_relation == "auto" or inverse_relation == "always":
-            system_prompt += "\n[추가 지침]\n- 관계 탐색 시 Property Path `|` 와 역방향 `^` 연산자를 적극 활용하여 방향성 문제를 해결하세요 (예: `rel:스승|^rel:제자`)."
+            system_prompt += "\n[Additional Instructions]\n- When searching for relationships, actively use Property Path `|` and inverse `^` operators to solve directionality issues (e.g., `rel:teacher_of|^rel:student_of`)."
 
         # Add Custom Prompt (User Override)
         if custom_prompt:
             system_prompt += f"\n\n[USER CUSTOM INSTRUCTIONS (PRIORITY OVERRIDE)]\n{custom_prompt}\n"
 
-        user_content = f"사용자 질문: {question}"
+        user_content = f"User Question: {question}"
         if context:
-            user_content += f"\n\n[컨텍스트]\n{context}"
+            user_content += f"\n\n[Context]\n{context}"
 
         headers = {
             "Authorization": f"Bearer {self.api_key}",

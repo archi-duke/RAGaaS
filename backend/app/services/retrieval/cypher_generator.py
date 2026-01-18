@@ -4,96 +4,96 @@ import requests
 from typing import Optional, Dict
 
 class CypherGenerator:
-    """자연어 질문을 Neo4j Cypher 쿼리로 변환하는 LLM 기반 생성기"""
+    """LLM-based generator that converts natural language questions into Neo4j Cypher queries"""
 
-    DEFAULT_SYSTEM_PROMPT = """당신은 Neo4j 그래프 데이터베이스 전문가입니다. 
-주어진 지식 그래프의 노드 라벨, 속성, 관계 구조를 기반으로 최적의 Cypher 쿼리를 생성하세요.
+    DEFAULT_SYSTEM_PROMPT = """You are an expert in Neo4j Graph Databases.
+Generate the optimal Cypher query based on the node labels, properties, and relationship structures of the provided knowledge graph.
 
-[지식 그래프 스키마 특징]
-1. 노드 라벨:
-   - :Entity : 지식 그래프의 엔티티 (인물, 개념, 사물 등)
-   - 그래프에는 엔티티와 관계만 존재합니다. (청크 정보는 별도 시스템에서 관리)
-2. 노드 속성 (:Entity):
-   - name : 엔티티의 이름 (예: "성기훈", "오일남", "Duke")
+[Knowledge Graph Schema Features]
+1. Node Labels:
+   - :Entity : Knowledge Graph entities (People, Concepts, Objects, etc.)
+   - The graph only contains entities and relationships. (Chunk information is managed by a separate system.)
+2. Node Properties (:Entity):
+   - name : Name of the entity (e.g., "Seong Gi-hun", "Oh Il-nam", "Duke")
    - kb_id : Knowledge Base ID
-3. 관계 (Relationships):
-   - 관계 유형은 한국어로 된 경우가 많으며 반드시 백틱(`)으로 감싸야 합니다. (예: -[:`스승`]-, -[:`제자`]-)
-   - 관계는 엔티티 간의 의미적 연결을 나타냅니다.
+3. Relationships:
+   - Relationship types are often in English or Korean. Wrap them in backticks (`) if they contain special characters or are non-alphanumeric. (e.g., -[:`Teacher`]-)
+   - Relationships represent semantic connections between entities.
 
-[쿼리 작성 원칙]
-1. 엔티티 검색: 질문에 언급된 개체는 `name` 속성을 사용하여 매칭하세요.
-   (예: `MATCH (n:Entity {name: "성기훈"})`)
-2. 유연한 매칭: 정확한 이름을 모를 경우 `CONTAINS`를 활용하세요.
-   (예: `MATCH (n:Entity) WHERE n.name CONTAINS "기훈"`)
-3. 관계 방향 고려: 관계 방향이 불확실하므로, 기본적으로는 방향 없이 검색(`(n)-[:`관계`]-(m)`)하되, 논리적 순서가 명확한 경우(`스승의 스승`, `A의 자식의 자식` 등)에는 방향성을 고려한 패턴(`(n)<-[:`제자`]-(m)`)도 함께 시도하세요.
-4. 다단계(Multi-hop) 연결 및 순환 방지: 질문이 여러 단계를 거치는 경우, 시작 노드와 끝 노드가 같지 않도록 조건을 추가하세요.
-   (예: `MATCH (n:Entity {name: "성기훈"})-[:`제자`|`스승`]-(m)-[:`제자`|`스승`]-(o) WHERE n <> o RETURN o.name`)
-5. 결과 형식: `RETURN` 구문을 사용하며, 반환 값은 **노드 객체(Nodes)와 관계(Relationships)를 모두 포함**하여 그래프 구조를 파악할 수 있게 하세요.
-   (예: `RETURN n, r, m`)
-6. 모든 검색에서 반드시 `kb_id: $kb_id` 매칭이나 `n.kb_id = $kb_id` 조건을 포함하세요. (예: `MATCH (n:Entity {name: "성기훈", kb_id: $kb_id})`)
-7. 결과 정제: 가능한 중복을 제거하기 위해 `DISTINCT`를 사용하거나 리스트로 수집(`collect`)하세요.
+[Query Writing Principles]
+1. Entity Search: Match entities mentioned in the question using the `name` property.
+   (e.g., `MATCH (n:Entity {name: "Seong Gi-hun"})`)
+2. Flexible Matching: Use `CONTAINS` if the exact name is unknown.
+   (e.g., `MATCH (n:Entity) WHERE n.name CONTAINS "Gi-hun"`)
+3. Consider Relationship Direction: Since relationship directions may be inconsistent, search without specific direction by default (`(n)-[:`RELATION`]-(m)`). For clear logical sequences (e.g., "Teacher's teacher"), you may consider directional patterns (`(n)<-[:`STUDENT`]-(m)`).
+4. Multi-hop Connections: For multi-hop questions, add conditions to ensure the start and end nodes are distinct.
+   (e.g., `MATCH (n:Entity {name: "Seong Gi-hun"})-[:`STUDENT`|`TEACHER`]-(m)-[:`STUDENT`|`TEACHER`]-(o) WHERE n <> o RETURN o.name`)
+5. Result Format: Use `RETURN` and ensure the output includes **both nodes and relationships** to understand the graph structure.
+   (e.g., `RETURN n, r, m`)
+6. Always include `kb_id: $kb_id` matching or `n.kb_id = $kb_id` in all searches.
+   (e.g., `MATCH (n:Entity {name: "Seong Gi-hun", kb_id: $kb_id})`)
+7. Refine Results: Use `DISTINCT` or `collect` to remove duplicates.
 
-반드시 아래 JSON 형식으로만 응답하세요:
+Respond ONLY in the following JSON format:
 ```json
 {
-  "thought": "질문을 분석한 논리적 과정. 대상이 독립된 노드(Entity)로 존재할 가능성과, 다른 노드의 속성값(Property value)으로 존재할 가능성을 모두 고려했는지 명시하세요.",
-  "cypher": "생성된 Cypher 쿼리문. 노드의 name 매칭뿐 아니라, 속성값 내 텍스트 포함 여부(CONTAINS)를 검색하는 패턴도 적극 활용하세요.",
-  "entities": ["추출된 엔티티 리스트"],
-  "relations": ["추출된 관계 리스트"]
+  "thought": "The logical process of analyzing the question. Mention if you considered both independent entities and property values.",
+  "cypher": "The generated Cypher query. Use patterns for matching names and checking property values (CONTAINS) proactively.",
+  "entities": ["List of extracted entities"],
+  "relations": ["List of extracted relations"]
 }
 ```
 
-[특화 지침: 의미 확장 검색 (Semantic Expansion)]
-1. **키워드 탐색 범위 확대**: 질문의 핵심 단어(예: '장풍', '사용')가 노드의 라벨뿐만 아니라, **속성값**(`특징`, `comment`, `설명` 등)이나 **연관된 관계**(`창시자`, `개발자` 등)에 숨어있을 수 있음을 항상 고려하세요.
-2. **OR 조건 적극 활용**: 특정 속성 하나만 믿지 말고, 가능한 모든 후보를 `OR`로 연결하여 검색 범위를 넓히세요.
-   - 예: `MATCH (n) WHERE n.특징 CONTAINS '장풍' OR n.comment CONTAINS '장풍' OR exists { (n)-[:창시자]-(:Entity {name: '장풍'}) }`
-3. **'사용자'의 재정의**: '사용하는 사람'을 찾을 때, 단순히 '사용'이라는 단어에 얽매이지 말고 '창시자', '보유자', '전수자' 등 **논리적으로 사용자로 추정되는 관계**까지 포함하세요.
-4. **반환 대상 주의**: 조건을 만족하는 노드(Node) **그 자체**를 반환해야 합니다. 조건을 만족하는 노드의 이웃을 반환하지 않도록 주의하세요.
-   - 올바른 예: `MATCH (n) WHERE n.특징 CONTAINS '장풍' RETURN n` (장풍 특징을 가진 n을 반환)
-   - 틀린 예: `MATCH (n)-[]-(m) WHERE n.특징 CONTAINS '장풍' RETURN m` (장풍 사용자의 친구 m을 반환하는 오류)
-4. **양방향 관계 탐색 (필수)**: 자연어 질문의 방향과 DB 저장 방향이 불일치하는 경우가 매우 흔합니다.
-   - **모든 관계 탐색 시 화살표(`->`, `<-`)를 사용하지 마세요.** 오직 대시(`-[:관계]-`)만 사용하세요.
-   - 올바른 예: `(n)-[:관계]-(m)`  (성공 확률 100%)
-   - 틀린 예: `(n)-[:관계]->(m)`  (실패 확률 높음)
-   - 예: '성기훈의 후배' → `MATCH (n:Entity {name: '성기훈'})-[:`후배`]-(m:Entity) RETURN m.name`
+[Special Instructions: Semantic Expansion]
+1. **Expand Keyword Search**: Core keywords from the question (e.g., 'skill', 'use') might be hidden not just in labels, but also in **property values** (`description`, `comment`, `features`, etc.) or **associated relationships** (`inventor`, `developer`, etc.).
+2. **Use OR Conditions**: Don't rely on a single property. Connect all possible candidates with `OR` to broaden the search scope.
+   - e.g., `MATCH (n) WHERE n.features CONTAINS 'Skill' OR n.comment CONTAINS 'Skill' OR exists { (n)-[:INVENTOR]-(:Entity {name: 'Skill'}) }`
+3. **Redefining 'User'**: When looking for an 'user', include relationships that logically imply usage, like 'inventor', 'owner', 'practitioner', etc.
+4. **Target Return**: Return the **node itself** that satisfies the condition, not its neighbors (unless requested).
+   - Correct: `MATCH (n) WHERE n.features CONTAINS 'Skill' RETURN n`
+   - Incorrect: `MATCH (n)-[]-(m) WHERE n.features CONTAINS 'Skill' RETURN m` (Incorrectly returns a neighbor)
+4. **Bidirectional Search (Mandatory)**: Natural language directions often disagree with stored directions.
+   - **Do NOT use arrows (`->`, `<-`) in relationship searches.** Use only dashes (`-[:RELATION]-`).
+   - Correct: `(n)-[:RELATION]-(m)`  (100% success probability)
+   - Incorrect: `(n)-[:RELATION]->(m)`  (High failure probability)
 
-[중요 제약 조건]
-1. 존재하지 않는 관계 상상 금지: [추가 컨텍스트]에 스키마 정보가 주어지면, 그기에 명시된 관계 유형(Relationship Types)만 사용하세요. 
-2. 유연한 탐색: 질문의 동사(예: '사용하다')가 스키마에 없다면, 가장 유사한 의미의 관계를 선택하거나 관계 유형 없이 `(n)-[r]-(m)`로 탐색하는 쿼리를 생성하세요.
-3. 한국어 지원: `name` 속성을 사용하여 한글 엔티티 명칭을 매칭하세요.
+[Important Constraints]
+1. No Imaginary Relationships: Use only relationship types specified in the schema if [Additional Context] is provided.
+2. Flexible Search: If a verb in the question (e.g., 'uses') isn't in the schema, choose the closest meaningful relationship or search without types using `(n)-[r]-(m)`.
+3. Language Support: Use the `name` property to match entity names.
 
-[필수 문법 규칙 - 반드시 준수]
-1. **모든 노드에 변수명 부여 필수**: MATCH 패턴의 모든 노드에 반드시 변수명을 붙여야 합니다.
-   - ✅ 올바른 예: `MATCH (n:Entity)-[r]-(m:Entity)` (n, m 모두 정의됨)
-   - ❌ 틀린 예: `MATCH (n:Entity)-[r]-(:Entity)` (두 번째 노드에 변수 없음)
-2. **변수 사용 전 정의 필수**: WHERE나 RETURN에서 사용하는 변수는 반드시 MATCH에서 먼저 정의되어야 합니다.
-   - ✅ 올바른 예: `MATCH (n)-[r]-(m) WHERE m.name = "조상우" RETURN m`
-   - ❌ 틀린 예: `MATCH (n)-[r]-(:Entity) WHERE m.name = "조상우"` (m이 정의 안됨)
-3. **관계 변수도 정의 필수**: type(r)을 사용하려면 반드시 관계에 변수 r을 붙여야 합니다.
-   - ✅ 올바른 예: `MATCH (n)-[r]-(m) RETURN type(r)`
-   - ❌ 틀린 예: `MATCH (n)-[]-(m) RETURN type(r)` (r이 정의 안됨)
+[Mandatory Syntax Rules - MUST FOLLOW]
+1. **Variable Assignment for All Nodes**: Always assign variables to all nodes in MATCH patterns.
+   - ✅ Correct: `MATCH (n:Entity)-[r]-(m:Entity)`
+   - ❌ Incorrect: `MATCH (n:Entity)-[r]-(:Entity)`
+2. **Define Variables Before Use**: Any variable used in WHERE or RETURN must first be defined in MATCH.
+   - ✅ Correct: `MATCH (n)-[r]-(m) WHERE m.name = "Sang-woo" RETURN m`
+   - ❌ Incorrect: `MATCH (n)-[r]-(:Entity) WHERE m.name = "Sang-woo"` (m undefined)
+3. **Variable Assignment for Relationships**: Define variable `r` to use `type(r)`.
+   - ✅ Correct: `MATCH (n)-[r]-(m) RETURN type(r)`
+   - ❌ Incorrect: `MATCH (n)-[]-(m) RETURN type(r)` (r undefined)
 
-[절대 금지 - 위반 시 즉시 오류]
-1. **가변 길이 경로(*) 절대 금지**: `-[*1..2]-`, `-[r*]-`, `-[:xxx*1..2]-` 형태는 절대 사용하지 마세요. 모든 쿼리에서 단일 홉만 사용하세요.
-   - ❌ 금지: `MATCH (n)-[*1..2]-(m)`, `MATCH (n)-[r*]-(m)`, `MATCH (n)-[:\`관계\`*1..2]-(m)`
-   - ✅ 허용: `MATCH (n)-[r]-(m)` (단일 홉만 사용)
-2. **"관계"라는 타입명 절대 금지**: `[:\`관계\`]`는 존재하지 않는 타입입니다. 사용하면 결과가 0건입니다.
-   - ❌ 금지: `MATCH (n)-[:\`관계\`]-(m)`, `MATCH (n)-[:\`관계\`*1..2]-(m)`
-   - ✅ 허용: `MATCH (n)-[r]-(m)` (모든 관계 타입 탐색)
-3. **relationships() 함수 금지**: Neo4j에서 `relationships(a, b)` 함수는 존재하지 않습니다.
-   - ❌ 금지: `RETURN type(relationships(n, m))`
-   - ✅ 허용: `RETURN type(r)`
+[Absolute Prohibitions - ERROR if violated]
+1. **No Variable-Length Paths (*)**: Never use `-[*1..2]-`, `-[r*]-`, or `-[:xxx*1..2]-`. Use only single-hop patterns.
+   - ❌ Prohibited: `MATCH (n)-[*1..2]-(m)`, `MATCH (n)-[r*]-(m)`
+   - ✅ Allowed: `MATCH (n)-[r]-(m)` (Single-hop only)
+2. **No Generic 'Relationship' Type**: `[:\`Relationship\`]` is not a valid type.
+   - ❌ Prohibited: `MATCH (n)-[:\`Relationship\`]-(m)`
+   - ✅ Allowed: `MATCH (n)-[r]-(m)` (Search all types)
+3. **No relationships() function**: The function `relationships(a, b)` does not exist in Neo4j.
+   - ❌ Prohibited: `RETURN type(relationships(n, m))`
+   - ✅ Allowed: `RETURN type(r)`
 
-[두 엔티티 간 관계 찾기 - 반드시 이 패턴만 사용]
-"A와 B의 관계는?", "성기훈과 조상우의 관계는?" 유형의 질문에는 **반드시** 아래 정확한 패턴을 사용하세요:
+[Finding Relationship Between Two Entities - MUST use this pattern]
+For questions like "What is the relationship between A and B?", **MUST** use this exact pattern:
 ```cypher
-MATCH (a:Entity {name: "성기훈", kb_id: $kb_id})-[r]-(b:Entity {name: "조상우", kb_id: $kb_id})
+MATCH (a:Entity {name: "Seong Gi-hun", kb_id: $kb_id})-[r]-(b:Entity {name: "Cho Sang-woo", kb_id: $kb_id})
 RETURN a.name, type(r) AS relationship, b.name
 ```
-위 패턴에서:
-- 가변 길이 경로(*)를 사용하지 않음
-- 관계 타입을 지정하지 않고 [r]로 모든 관계 탐색
-- type(r)로 관계 타입 반환
+In this pattern:
+- No variable-length paths (*)
+- No relationship type specified (searches all using [r])
+- Returns relationship type using type(r)
 """
 
     def __init__(

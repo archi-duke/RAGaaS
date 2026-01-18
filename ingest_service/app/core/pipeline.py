@@ -1,14 +1,14 @@
 """
 LlamaIndex Pipeline - Chunking and Graph Extraction
 
-지원하는 청킹 전략:
-- fixed_size: SentenceSplitter (기본)
+Supported Chunking Strategies:
+- fixed_size: SentenceSplitter (Default)
 - sliding_window: SentenceWindowNodeParser
 - hierarchical: HierarchicalNodeParser
 - semantic: SemanticSplitterNodeParser
 - markdown: MarkdownNodeParser
 
-지원하는 그래프 추출기:
+Supported Graph Extractors:
 - simple: SimpleLLMPathExtractor
 - dynamic: DynamicLLMPathExtractor
 - schema: SchemaLLMPathExtractor
@@ -54,7 +54,7 @@ class GraphExtractorType(str, Enum):
 
 
 class IngestPipeline:
-    """LlamaIndex 기반 인제스션 파이프라인"""
+    """LlamaIndex-based Ingestion Pipeline"""
     
     def __init__(self):
         # Initialize LLM and Embedding
@@ -76,7 +76,7 @@ class IngestPipeline:
         strategy: ChunkingStrategy,
         config: Dict[str, Any]
     ):
-        """청킹 전략에 따른 Node Parser 반환"""
+        """Return Node Parser based on chunking strategy"""
         
         if strategy == ChunkingStrategy.FIXED_SIZE:
             return SentenceSplitter(
@@ -109,7 +109,7 @@ class IngestPipeline:
         
         elif strategy == ChunkingStrategy.HYBRID:
             # Hybrid: Markdown first, then SentenceSplitter for large chunks
-            # 실제 구현 시 복합 파이프라인 필요
+            # Complex pipeline needed for actual implementation
             return SentenceSplitter(
                 chunk_size=config.get("chunk_size", 1024),
                 chunk_overlap=config.get("chunk_overlap", 20),
@@ -124,7 +124,7 @@ class IngestPipeline:
         extractor_type: GraphExtractorType,
         config: Dict[str, Any]
     ):
-        """그래프 추출기 타입에 따른 Extractor 반환"""
+        """Return Extractor based on graph extractor type"""
         
         if extractor_type == GraphExtractorType.NONE:
             return None
@@ -172,7 +172,7 @@ class IngestPipeline:
         strategy: ChunkingStrategy,
         config: Dict[str, Any]
     ) -> List[BaseNode]:
-        """문서를 청킹하여 노드 리스트 반환"""
+        """Chunk documents and return list of nodes"""
         
         # Create Document
         document = Document(text=text)
@@ -193,10 +193,10 @@ class IngestPipeline:
         examples: Optional[str] = None,
         custom_prompt: Optional[str] = None
     ) -> List[Dict[str, Any]]:
-        """노드에서 그래프 트리플 추출
-        
-        Note: LlamaIndex의 Path Extractor들은 PropertyGraphIndex와 함께 사용되도록 설계됨.
-        여기서는 직접 LLM을 호출하여 트리플을 추출하는 간소화된 방식 사용.
+        """Extract graph triples from nodes
+
+        Note: LlamaIndex Path Extractors are designed for use with PropertyGraphIndex.
+        Here we use a simplified method of calling LLM directly to extract triples.
         """
         
         if extractor_type == GraphExtractorType.NONE:
@@ -204,36 +204,36 @@ class IngestPipeline:
         
         all_triples = []
         
-        # 간소화된 LLM 기반 트리플 추출
+        # Simplified LLM-based triple extraction
         for node in nodes:
             try:
                 text = node.get_content()
-                if len(text.strip()) < 10:  # 너무 짧은 텍스트는 스킵
+                if len(text.strip()) < 10:  # Skip too short text
                     continue
                 
-                # 간단한 프롬프트 기반 추출
+                # Simple prompt-based extraction
                 examples_text = ""
                 if examples:
                     print(f"[Pipeline] Using Few-Shot Examples ({len(examples)} chars):\n{examples[:100]}...")
-                    examples_text = f"\n[참고 예제 (Few-Shot)]\n{examples}\n"
+                    examples_text = f"\n[Reference Examples (Few-Shot)]\n{examples}\n"
 
-                # 기본 프롬프트 또는 커스텀 프롬프트 사용
+                # Use custom prompt or default prompt
                 if custom_prompt:
                     prompt = custom_prompt.format(text=text[:2000], examples=examples_text)
                 else:
-                    prompt = f"""다음 텍스트에서 주요 엔티티와 관계를 추출하세요.
-형식: (주체, 관계, 객체)
-최대 5개까지 추출하세요.
+                    prompt = f"""Extract primary entities and their relationships from the following text.
+Format: (Subject, Relation, Object)
+Extract up to 5 triplets.
 {examples_text}
-텍스트:
+Text:
 {text[:2000]}
 
-트리플 (한 줄에 하나씩, 형식: 주체|관계|객체):"""
+Triplets (one per line, format: Subject|Relation|Object):"""
                 
                 response = self.llm.complete(prompt)
                 response_text = response.text.strip()
                 
-                # 응답 파싱
+                # Parse response
                 for line in response_text.split('\n'):
                     line = line.strip()
                     if '|' in line:
@@ -269,11 +269,11 @@ class IngestPipeline:
         extraction_examples_yaml: Optional[str] = None,
         custom_prompt: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """전체 인제스션 프로세스 실행"""
+        """Execute the entire ingestion process"""
         
         graph_config = graph_config or {}
         
-        # 0. Text Cleaning (청크 가공 전 정제)
+        # 0. Text Cleaning (Pre-chunking)
         if enable_text_cleaning:
             from app.core.text_cleaner import text_cleaner
             original_len = len(text)
@@ -302,7 +302,7 @@ class IngestPipeline:
             triples = self.extract_graph(nodes, graph_extractor_type, graph_config, extraction_examples_yaml, custom_prompt)
             print(f"[Pipeline] Extracted {len(triples)} triples.")
             
-            # 4. Entity Normalization (적재 직전)
+            # 4. Entity Normalization (Pre-loading)
             if graph_config.get("enable_entity_normalization", True):
                 from app.core.entity_normalizer import entity_normalizer
                 original_count = len(triples)

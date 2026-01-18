@@ -22,7 +22,7 @@ from app.core.fuseki_connector import fuseki_connector
 router = APIRouter()
 
 
-# In-memory job storage (실제 운영에서는 Redis 또는 DB 사용)
+# In-memory job storage (In production, use Redis or a Database)
 jobs: Dict[str, Dict[str, Any]] = {}
 
 
@@ -35,7 +35,7 @@ class JobStatus(str, Enum):
 
 
 class ChunkingConfig(BaseModel):
-    """청킹 설정"""
+    """Chunking Configuration"""
     strategy: ChunkingStrategy = ChunkingStrategy.FIXED_SIZE
     chunk_size: int = Field(default=1024, ge=100, le=10000)
     chunk_overlap: int = Field(default=20, ge=0, le=1000)
@@ -46,7 +46,7 @@ class ChunkingConfig(BaseModel):
 
 
 class GraphConfig(BaseModel):
-    """그래프 추출 설정"""
+    """Graph Extraction Configuration"""
     extractor_type: GraphExtractorType = GraphExtractorType.NONE
     max_paths_per_chunk: int = Field(default=10, ge=1, le=50)
     max_triplets_per_chunk: int = Field(default=20, ge=1, le=100)
@@ -57,29 +57,29 @@ class GraphConfig(BaseModel):
 
 
 class IngestRequest(BaseModel):
-    """인제스션 요청"""
+    """Ingestion Request"""
     kb_id: str
     doc_id: str
     file_path: str
     chunking: ChunkingConfig = ChunkingConfig()
     graph: GraphConfig = GraphConfig()
     graph_store: str = "neo4j"  # "neo4j" or "fuseki"
-    enable_text_cleaning: bool = False  # 번호/불릿 등 형식 문자 제거
-    enable_inference: bool = False  # 규칙 기반 관계 추론
+    enable_text_cleaning: bool = False  # Remove bullets, numbers, etc.
+    enable_inference: bool = False  # Rule-based relationship inference
     extraction_examples_yaml: Optional[str] = None
     custom_prompt: Optional[str] = None
     callback_url: Optional[str] = None
 
 
 class IngestResponse(BaseModel):
-    """인제스션 응답"""
+    """Ingestion Response"""
     job_id: str
     status: JobStatus
     message: str
 
 
 class JobStatusResponse(BaseModel):
-    """작업 상태 응답"""
+    """Job Status Response"""
     job_id: str
     status: JobStatus
     kb_id: str
@@ -92,13 +92,13 @@ class JobStatusResponse(BaseModel):
 
 
 async def process_ingest_job(job_id: str, request: IngestRequest):
-    """백그라운드 인제스션 작업 처리"""
+    """Process ingestion job in background"""
     try:
         print(f"[IngestJob] Starting job {job_id} for doc {request.doc_id}")
         jobs[job_id]["status"] = JobStatus.PROCESSING
         jobs[job_id]["updated_at"] = datetime.utcnow().isoformat()
         
-        # 1. 파일 읽기 (PDF 또는 텍스트)
+        # 1. Read file (PDF or Text)
         file_path = request.file_path
         if file_path.lower().endswith('.pdf'):
             from pypdf import PdfReader
@@ -117,7 +117,7 @@ async def process_ingest_job(job_id: str, request: IngestRequest):
         jobs[job_id]["progress"] = 10
 
         
-        # 2. 청킹 설정 변환
+        # 2. Convert chunking config
         chunking_config = {
             "chunk_size": request.chunking.chunk_size,
             "chunk_overlap": request.chunking.chunk_overlap,
@@ -127,7 +127,7 @@ async def process_ingest_job(job_id: str, request: IngestRequest):
             "breakpoint_threshold": request.chunking.breakpoint_threshold,
         }
         
-        # 3. 그래프 설정 변환
+        # 3. Convert graph config
         graph_config = {
             "max_paths_per_chunk": request.graph.max_paths_per_chunk,
             "max_triplets_per_chunk": request.graph.max_triplets_per_chunk,
@@ -138,7 +138,7 @@ async def process_ingest_job(job_id: str, request: IngestRequest):
         
         jobs[job_id]["progress"] = 20
         
-        # 4. 파이프라인 실행
+        # 4. Run pipeline
         result = await ingest_pipeline.process(
             text=text,
             chunking_strategy=request.chunking.strategy,
@@ -152,7 +152,7 @@ async def process_ingest_job(job_id: str, request: IngestRequest):
         
         jobs[job_id]["progress"] = 80
         
-        # 5. 저장 (Milvus, Neo4j/Fuseki)
+        # 5. Save (Milvus, Neo4j/Fuseki)
         print(f"[IngestJob] Saving to databases for doc {request.doc_id}...")
         
         # Milvus: 벡터 저장
@@ -175,7 +175,7 @@ async def process_ingest_job(job_id: str, request: IngestRequest):
         
         jobs[job_id]["progress"] = 90
         
-        # Graph: 트리플 저장 (Neo4j 또는 Fuseki) - 선택적 저장
+        # Graph: Save triples (Neo4j or Fuseki) - Optional storage
         if result["triples"]:
             if request.graph_store == "fuseki":
                 print(f"[IngestJob] Saving to Fuseki for doc {request.doc_id}...")
@@ -198,7 +198,7 @@ async def process_ingest_job(job_id: str, request: IngestRequest):
         jobs[job_id]["progress"] = 100
         jobs[job_id]["status"] = JobStatus.COMPLETED
         
-        # 추론 관계 생성 (적재 이후)
+        # Generate inferred relations (Post-loading)
         inference_count = 0
         if request.enable_inference and result["triples"]:
             if request.graph_store == "neo4j":
@@ -235,7 +235,7 @@ async def process_ingest_job(job_id: str, request: IngestRequest):
 
 
         
-        # 6. 콜백 호출 (선택사항)
+        # 6. Call callback (Optional)
         if request.callback_url:
             import httpx
             async with httpx.AsyncClient() as client:
@@ -262,10 +262,10 @@ async def create_ingest_job(
     request: IngestRequest,
     background_tasks: BackgroundTasks
 ):
-    """인제스션 작업 생성"""
+    """Create an ingestion job"""
     job_id = str(uuid.uuid4())
     
-    # 작업 등록
+    # Register job
     jobs[job_id] = {
         "job_id": job_id,
         "status": JobStatus.PENDING,
@@ -278,7 +278,7 @@ async def create_ingest_job(
         "error": None,
     }
     
-    # 백그라운드 작업 추가
+    # Add background task
     background_tasks.add_task(process_ingest_job, job_id, request)
     
     return IngestResponse(
@@ -290,7 +290,7 @@ async def create_ingest_job(
 
 @router.get("/jobs/{job_id}", response_model=JobStatusResponse)
 async def get_job_status(job_id: str):
-    """작업 상태 조회"""
+    """Get job status"""
     if job_id not in jobs:
         raise HTTPException(status_code=404, detail="Job not found")
     
@@ -300,7 +300,7 @@ async def get_job_status(job_id: str):
 
 @router.post("/jobs/{job_id}/cancel")
 async def cancel_job(job_id: str):
-    """작업 취소"""
+    """Cancel job"""
     if job_id not in jobs:
         raise HTTPException(status_code=404, detail="Job not found")
     
@@ -324,7 +324,7 @@ async def list_jobs(
     status: Optional[JobStatus] = None,
     limit: int = 50
 ):
-    """작업 목록 조회"""
+    """List jobs"""
     result = []
     
     for job in jobs.values():

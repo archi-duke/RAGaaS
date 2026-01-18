@@ -8,14 +8,14 @@ interface ExtractionPromptModalProps {
     onSave: (prompt: string) => void;
 }
 
-const DEFAULT_PROMPT = `다음 텍스트에서 주요 엔티티와 관계를 추출하세요.
-형식: (주체, 관계, 객체)
-최대 5개까지 추출하세요.
+const DEFAULT_PROMPT = `Extract primary entities and their relationships from the following text.
+Format: (Subject, Relation, Object)
+Extract up to 5 triplets.
 {examples}
-텍스트:
+Text:
 {text}
 
-트리플 (한 줄에 하나씩, 형식: 주체|관계|객체):`;
+Triplets (one per line, format: Subject|Relation|Object):`;
 
 export default function ExtractionPromptModal({ isOpen, onClose, initialPrompt, onSave }: ExtractionPromptModalProps) {
     const [promptContent, setPromptContent] = useState(initialPrompt || DEFAULT_PROMPT);
