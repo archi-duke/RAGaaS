@@ -255,81 +255,97 @@ async def delete_knowledge_base(kb_id: str):
         raise HTTPException(status_code=404, detail="Knowledge Base not found")
     
     graph_backend = kb.graph_backend  # Save before deletion for cleanup
-    
-    # 1. Delete all associated documents from MongoDB
+    print(f"[KB Delete] Starting deletion for KB {kb_id}, graph_backend: {graph_backend}")
+
+    # 1. Delete all associated documents with proper cascading (Milvus, Neo4j, Fuseki per doc)
     from app.models.document import Document as DocModel
+    from app.services.ingestion.cleanup_service import cleanup_service
+    
     try:
-        await DocModel.find(DocModel.kb_id == kb_id).delete()
-        print(f"Deleted all documents for KB {kb_id} from MongoDB")
+        docs = await DocModel.find(DocModel.kb_id == kb_id).to_list()
+        print(f"[KB Delete] Found {len(docs)} documents to clean up")
+        
+        for doc in docs:
+            try:
+                # Perform full cascading deletion for each document
+                await cleanup_service.perform_cascading_deletion(kb_id, doc.id)
+            except Exception as doc_e:
+                print(f"[KB Delete] Error cleaning up doc {doc.id}: {doc_e}")
+                # Continue with other documents even if one fails
+                
     except Exception as e:
-        print(f"Error deleting documents from MongoDB: {e}")
+        print(f"[KB Delete] Error during document cleanup: {e}")
     
     # 2. Delete KB record from MongoDB
     await kb.delete()
+    print(f"[KB Delete] KB record deleted from MongoDB")
     
-    # 3. Drop Milvus collection
+    # 3. Drop Milvus collection (entire KB collection)
     try:
         connect_milvus()
         collection_name = f"kb_{kb_id.replace('-', '_')}"
-        try:
-            if utility.has_collection(collection_name):
-                col = Collection(collection_name)
-                col.drop()
-                print(f"Dropped Milvus collection: {collection_name}")
-        except Exception:
-            pass
+        if utility.has_collection(collection_name):
+            col = Collection(collection_name)
+            col.drop()
+            print(f"[KB Delete] Dropped Milvus collection: {collection_name}")
     except Exception as e:
-        print(f"Error during Milvus cleanup: {e}")
+        print(f"[KB Delete] Milvus cleanup error: {e}")
 
-    # 4. Delete Fuseki dataset (if fuseki/ontology backend)
-    if graph_backend in ['fuseki', 'ontology', None]:  # Default to fuseki cleanup
-        try:
-            fuseki_client.delete_dataset(kb_id)
-            print(f"Deleted Fuseki dataset for KB {kb_id}")
-        except Exception as e:
-            print(f"Error deleting Fuseki dataset: {e}")
+    # 4. Delete Fuseki dataset (entire KB dataset)
+    try:
+        fuseki_client.delete_dataset(kb_id)
+        print(f"[KB Delete] Deleted Fuseki dataset for KB {kb_id}")
+    except Exception as e:
+        print(f"[KB Delete] Fuseki dataset deletion error: {e}")
 
-    # 5. Delete Neo4j data (if neo4j backend)
+    # 5. Delete Neo4j data (all nodes for this KB)
     if graph_backend == 'neo4j':
         try:
-            from app.services.retrieval.graph_backends.neo4j import Neo4jGraphBackend
-            neo4j_backend = Neo4jGraphBackend()
-            # Delete all nodes and relationships for this KB
-            delete_query = f"""
-            MATCH (n)
-            WHERE n.kb_id = '{kb_id}'
+            from app.core.neo4j_client import neo4j_client
+            delete_query = """
+            MATCH (n:Entity {kb_id: $kb_id})
             DETACH DELETE n
             """
-            neo4j_backend.driver.execute_query(delete_query)
-            print(f"Deleted Neo4j data for KB {kb_id}")
+            neo4j_client.execute_query(delete_query, {"kb_id": kb_id})
+            print(f"[KB Delete] Deleted all Neo4j nodes for KB {kb_id}")
         except Exception as e:
-            print(f"Error deleting Neo4j data: {e}")
+            print(f"[KB Delete] Neo4j cleanup error: {e}")
 
-    # 6. Delete TripleChunkMapping entries (SQLite)
+    # 6. Delete TripleChunkMapping entries (MongoDB)
     try:
         from app.models.triple_chunk_mapping import TripleChunkMapping
-        # Assuming Beanie/MongoDB or SQLAlchemy
-        # If it's a separate SQLite DB, need different approach
-        deleted_count = await TripleChunkMapping.find(
+        result = await TripleChunkMapping.find(
             TripleChunkMapping.kb_id == kb_id
         ).delete()
-        print(f"Deleted TripleChunkMapping entries for KB {kb_id}")
+        print(f"[KB Delete] Deleted TripleChunkMapping entries for KB {kb_id}")
     except Exception as e:
-        # May not exist in all setups
-        print(f"Note: TripleChunkMapping cleanup skipped or failed: {e}")
+        print(f"[KB Delete] TripleChunkMapping cleanup error: {e}")
 
-    # 7. Delete File System artifacts (doc2onto_out)
+    # 7. Delete shared storage files for this KB
+    try:
+        import glob
+        from app.core.config import settings
+        upload_path = settings.SHARED_STORAGE_PATH
+        # Find all files that might belong to this KB's documents
+        # Pattern: {doc_id}_{filename} - need doc IDs but we already deleted records
+        # Alternative: just log, or use a naming convention with kb_id
+        print(f"[KB Delete] Shared storage cleanup - files were deleted with documents")
+    except Exception as e:
+        print(f"[KB Delete] Shared storage cleanup error: {e}")
+
+    # 8. Delete File System artifacts (doc2onto_out - legacy)
     try:
         import shutil
         doc2onto_dir = Path(f"doc2onto_out/{kb_id}")
         if doc2onto_dir.exists() and doc2onto_dir.is_dir():
             shutil.rmtree(doc2onto_dir)
-            print(f"Deleted doc2onto_out directory for KB {kb_id}")
+            print(f"[KB Delete] Deleted doc2onto_out directory for KB {kb_id}")
     except Exception as e:
-        print(f"Error deleting file system artifacts: {e}")
+        print(f"[KB Delete] File system artifacts cleanup error: {e}")
 
-    print(f"[KB Delete] Completed cleanup for KB {kb_id}")
+    print(f"[KB Delete] Completed full cleanup for KB {kb_id}")
     return {"ok": True}
+
 
 
 # --- Prompt Management APIs (Updated for MongoDB) ---

@@ -14,20 +14,52 @@ class CleanupService:
     async def perform_cascading_deletion(self, kb_id: str, doc_id: str):
         """
         Executes removal of all data associated with a document (Graph -> Vector -> Relational).
-        This function is designed to be idempotent; safety to run multiple times.
         """
         print(f"[Cleanup] Starting cascading deletion for doc {doc_id} in KB {kb_id}")
         
-        # 1. Fuseki Cleanup (Graph)
+        # 0. Cancel ongoing Ingest Job if any
         try:
-            # Delete all triples where source matches doc_id prefix
+            from app.services.ingestion.ingest_client import ingest_client
+            # document record가 있는지 먼저 확인
+            doc = await Document.get(doc_id)
+            if doc and doc.status == "processing":
+                print(f"[Cleanup] Document {doc_id} is processing. Sending cancel request to Ingest Service...")
+                try:
+                    # Job ID는 doc_id와 동일하게 관리됨 (또는 doc.job_id 필드가 있다면 사용)
+                    await ingest_client.cancel_job(doc_id)
+                    print(f"[Cleanup] Cancel request sent for job {doc_id}")
+                except Exception as cancel_e:
+                    print(f"[Cleanup] Job cancel error (it might have finished): {cancel_e}")
+        except Exception as e:
+            print(f"[Cleanup] Error during job cancellation: {e}")
+
+        # 1. Fuseki Cleanup (Graph) - Named Graph 기반 삭제
+        try:
+            # New LlamaIndex architecture uses Named Graphs: urn:doc:{doc_id}
+            # Also support legacy triple-based cleanup for safety
+            dataset_name = f"kb_{kb_id.replace('-', '_')}"
+            graph_uri = f"urn:doc:{doc_id}"
+            
+            # 1.1 DELETE the Named Graph directly (GSP API)
+            try:
+                import requests
+                response = requests.delete(
+                    f"{fuseki_client.base_url}/{dataset_name}/data",
+                    params={"graph": graph_uri},
+                    auth=("admin", "admin")
+                )
+                if response.status_code in [200, 204]:
+                    print(f"[Cleanup] Fuseki Named Graph {graph_uri} deleted")
+                else:
+                    print(f"[Cleanup] No Named Graph found at {graph_uri} (or error: {response.status_code})")
+            except Exception as gsp_e:
+                 print(f"[Cleanup] GSP delete error: {gsp_e}")
+
+            # 1.2 Legacy fallback: SPARQL based cleanup
             source_prefix = f"http://rag.local/source/{doc_id}"
             delete_query = f"""
             PREFIX rel: <http://rag.local/relation/>
-            DELETE {{
-                ?s ?p ?o .
-                ?inv_s ?inv_p ?s . 
-            }}
+            DELETE {{ ?s ?p ?o . ?inv_s ?inv_p ?s . }}
             WHERE {{
                 ?s rel:hasSource ?src .
                 FILTER(STRSTARTS(STR(?src), "{source_prefix}")) .
@@ -35,11 +67,9 @@ class CleanupService:
                 OPTIONAL {{ ?inv_s ?inv_p ?s }}
             }}
             """
-            success = fuseki_client.update_sparql(kb_id, delete_query)
-            if success:
-                print(f"[Cleanup] Fuseki cleanup complete for doc {doc_id}")
-            else:
-                print(f"[Cleanup] Fuseki cleanup returned failure for doc {doc_id}")
+            fuseki_client.update_sparql(kb_id, delete_query)
+            print(f"[Cleanup] Fuseki legacy cleanup attempted for doc {doc_id}")
+            
         except Exception as e:
             print(f"[Cleanup] Fuseki cleanup error for {doc_id}: {e}")
 
@@ -97,21 +127,36 @@ class CleanupService:
 
 
         # 3. File System Cleanup (Artifacts)
+        # 3.1 Legacy doc2onto artifacts
         try:
-            # Match doc2onto.py logic: os.path.join(os.getcwd(), "doc2onto_out", kb_id, doc_id)
             target_path = os.path.abspath(os.path.join(os.getcwd(), "doc2onto_out", kb_id, doc_id))
             if os.path.exists(target_path):
                 shutil.rmtree(target_path)
-                print(f"[Cleanup] Deleted filesystem artifacts for {doc_id} at {target_path}")
-            else:
-                print(f"[Cleanup] No artifacts found at {target_path}")
-                # Try fallback for docker env if getcwd is weird
-                alt_path = f"/app/doc2onto_out/{kb_id}/{doc_id}"
-                if os.path.exists(alt_path):
-                    shutil.rmtree(alt_path)
-                    print(f"[Cleanup] Deleted artifacts at alternate path {alt_path}")
+                print(f"[Cleanup] Deleted doc2onto artifacts for {doc_id}")
+            alt_path = f"/app/doc2onto_out/{kb_id}/{doc_id}"
+            if os.path.exists(alt_path):
+                shutil.rmtree(alt_path)
+                print(f"[Cleanup] Deleted alt doc2onto artifacts for {doc_id}")
         except Exception as e:
-            print(f"[Cleanup] Filesystem cleanup error: {e}")
+            print(f"[Cleanup] doc2onto cleanup error: {e}")
+        
+        # 3.2 New Ingest Service shared storage files
+        try:
+            from app.core.config import settings
+            import glob
+            upload_path = settings.SHARED_STORAGE_PATH
+            # Pattern: {doc_id}_{filename}
+            pattern = os.path.join(upload_path, f"{doc_id}_*")
+            files = glob.glob(pattern)
+            for f in files:
+                try:
+                    os.remove(f)
+                    print(f"[Cleanup] Deleted shared storage file: {f}")
+                except Exception as file_e:
+                    print(f"[Cleanup] Error deleting file {f}: {file_e}")
+        except Exception as e:
+            print(f"[Cleanup] Shared storage cleanup error: {e}")
+
 
         # 4. MongoDB Cleanup (Final Step)
         try:
