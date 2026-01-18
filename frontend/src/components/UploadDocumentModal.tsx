@@ -1,7 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, FileText, X, Database, Info } from 'lucide-react';
+import { Upload, X, FileText, Settings, Database, AlertCircle, Check, Info } from 'lucide-react';
 import { docApi, kbApi } from '../services/api';
 import MessageDialog from './MessageDialog';
+import ExtractionExampleModal from './ExtractionExampleModal';
+import ExtractionPromptModal from './ExtractionPromptModal';
 
 interface UploadDocumentModalProps {
     isOpen: boolean;
@@ -73,6 +75,11 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
     const [file, setFile] = useState<File | null>(null);
     const [isUploading, setIsUploading] = useState(false);
     const [kbConfig, setKbConfig] = useState<any>(null);
+
+    // Modals state
+    const [showExampleModal, setShowExampleModal] = useState(false);
+    const [showPromptModal, setShowPromptModal] = useState(false);
+
     const [messageDialog, setMessageDialog] = useState<{ isOpen: boolean; title: string; message: string; type: 'info' | 'success' | 'error' }>({
         isOpen: false,
         title: '',
@@ -89,8 +96,10 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
         generate_inverse_relations: true,
         allowed_entity_types: [] as string[],
         allowed_relation_types: [] as string[],
-        enable_text_cleaning: false,  // 번호/불릿 등 형식 문자 제거
-        enable_inference: false,  // 규칙 기반 관계 추론
+        enable_text_cleaning: false,  // Format char removal
+        enable_inference: false,  // Rule-based inference
+        extraction_examples_yaml: '', // Few-Shot Examples (YAML)
+        custom_prompt: '', // Custom Extraction Prompt
     });
 
 
@@ -164,7 +173,7 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 zIndex: 50
             }} onClick={onClose}>
-                <div className="card" style={{ width: '100%', maxWidth: '710px', maxHeight: '90vh', overflow: 'auto' }} onClick={(e) => e.stopPropagation()}>
+                <div className="card" style={{ width: '100%', maxWidth: '600px', maxHeight: '90vh', overflow: 'auto' }} onClick={(e) => e.stopPropagation()}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
                         <h2 style={{ margin: 0 }}>Upload Document</h2>
                         <button className="btn" onClick={onClose} style={{ padding: '0.5rem' }}>
@@ -206,7 +215,7 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                         </div>
                     </div>
 
-                    {/* Graph Settings Section - LlamaIndex based */}
+                    {/* Graph Settings Section - 3 Column Layout */}
                     {isGraphEnabled && (
                         <div style={{ marginBottom: '1.5rem', background: '#f8fafc', padding: '1.25rem', borderRadius: '12px', border: '1px solid #e2e8f0' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1.25rem', color: '#3b82f6', fontWeight: 600 }}>
@@ -214,36 +223,28 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                                 <span>Graph Extraction Settings (LlamaIndex)</span>
                             </div>
 
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
-                                {/* Column 1: Extractor Type Selection */}
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem' }}>
+                                {/* Column 1: Config Parameters */}
                                 <div>
-                                    <LabelWithTooltip
-                                        label="Extractor Type"
-                                        tooltip="LlamaIndex 그래프 추출기 타입 선택"
-                                    />
+                                    <h4 style={{ margin: '0 0 1rem 0', fontSize: '0.9rem', color: '#475569' }}>Configuration</h4>
+
+                                    <LabelWithTooltip label="Extractor Type" tooltip="Select LlamaIndex extractor type" />
                                     <select
                                         className="input"
                                         value={graphParams.extractor_type}
                                         onChange={(e) => setGraphParams({ ...graphParams, extractor_type: e.target.value as 'simple' | 'dynamic' | 'schema' })}
-                                        style={{ width: '100%', padding: '0.5rem', fontSize: '0.85rem' }}
+                                        style={{ width: '100%', padding: '0.5rem', fontSize: '0.85rem', marginBottom: '1rem' }}
                                     >
-                                        <option value="simple">Simple LLM (기본)</option>
+                                        <option value="simple">Simple LLM (Default)</option>
                                         <option value="dynamic">Dynamic LLM</option>
                                         <option value="schema">Schema-based</option>
                                     </select>
 
-                                    {/* Extractor-specific settings */}
                                     {graphParams.extractor_type === 'simple' && (
-                                        <div style={{ marginTop: '1rem' }}>
-                                            <LabelWithTooltip
-                                                label={`Max Paths per Chunk: ${graphParams.max_paths_per_chunk}`}
-                                                tooltip="청크당 추출할 최대 트리플 수"
-                                            />
+                                        <div style={{ marginBottom: '1rem' }}>
+                                            <LabelWithTooltip label={`Max Paths: ${graphParams.max_paths_per_chunk}`} tooltip="Max triples per chunk" />
                                             <input
-                                                type="range"
-                                                min="5"
-                                                max="50"
-                                                step="5"
+                                                type="range" min="5" max="50" step="5"
                                                 value={graphParams.max_paths_per_chunk}
                                                 onChange={(e) => setGraphParams({ ...graphParams, max_paths_per_chunk: parseInt(e.target.value) })}
                                                 style={{ width: '100%', cursor: 'pointer', accentColor: '#3b82f6' }}
@@ -252,82 +253,97 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                                     )}
 
                                     {graphParams.extractor_type === 'dynamic' && (
-                                        <div style={{ marginTop: '1rem' }}>
-                                            <LabelWithTooltip
-                                                label={`Max Triplets per Chunk: ${graphParams.max_triplets_per_chunk}`}
-                                                tooltip="청크당 추출할 최대 트리플 수"
-                                            />
+                                        <div style={{ marginBottom: '1rem' }}>
+                                            <LabelWithTooltip label={`Max Triplets: ${graphParams.max_triplets_per_chunk}`} tooltip="Max triples per chunk" />
                                             <input
-                                                type="range"
-                                                min="10"
-                                                max="100"
-                                                step="10"
+                                                type="range" min="10" max="100" step="10"
                                                 value={graphParams.max_triplets_per_chunk}
                                                 onChange={(e) => setGraphParams({ ...graphParams, max_triplets_per_chunk: parseInt(e.target.value) })}
                                                 style={{ width: '100%', cursor: 'pointer', accentColor: '#3b82f6' }}
                                             />
                                         </div>
                                     )}
+
+                                    <div>
+                                        <LabelWithTooltip label={`Workers: ${graphParams.num_workers}`} tooltip="Number of parallel workers" />
+                                        <input
+                                            type="range" min="1" max="8" step="1"
+                                            value={graphParams.num_workers}
+                                            onChange={(e) => setGraphParams({ ...graphParams, num_workers: parseInt(e.target.value) })}
+                                            style={{ width: '100%', cursor: 'pointer', accentColor: '#3b82f6' }}
+                                        />
+                                    </div>
                                 </div>
 
-                                {/* Column 2: Common Settings */}
+                                {/* Column 2: Checkbox Options */}
                                 <div>
-                                    <LabelWithTooltip
-                                        label={`Workers: ${graphParams.num_workers}`}
-                                        tooltip="병렬 처리 워커 수"
-                                    />
-                                    <input
-                                        type="range"
-                                        min="1"
-                                        max="8"
-                                        step="1"
-                                        value={graphParams.num_workers}
-                                        onChange={(e) => setGraphParams({ ...graphParams, num_workers: parseInt(e.target.value) })}
-                                        style={{ width: '100%', cursor: 'pointer', accentColor: '#3b82f6', marginBottom: '1rem' }}
-                                    />
+                                    <h4 style={{ margin: '0 0 1rem 0', fontSize: '0.9rem', color: '#475569' }}>Options</h4>
 
-                                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', marginTop: '0.5rem' }}>
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', marginBottom: '1rem' }}>
                                         <input
                                             type="checkbox"
                                             checked={graphParams.generate_inverse_relations}
                                             onChange={(e) => setGraphParams({ ...graphParams, generate_inverse_relations: e.target.checked })}
-                                            style={{ width: '1rem', height: '1rem' }}
+                                            style={{ width: '1.1rem', height: '1.1rem' }}
                                         />
-                                        <span style={{ color: '#334155', fontWeight: 500 }}>역관계 자동 생성</span>
+                                        <div>
+                                            <span style={{ color: '#334155', fontWeight: 500, fontSize: '0.9rem' }}>Generate Inverse</span>
+                                            <div style={{ fontSize: '0.75rem', color: '#64748b' }}>e.g. Teacher → Student</div>
+                                        </div>
                                     </label>
 
-                                    <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '0.5rem', paddingLeft: '1.5rem' }}>
-                                        예: 스승 → 제자, Teacher → Student
-                                    </div>
-
-                                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', marginTop: '1rem' }}>
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', marginBottom: '1rem' }}>
                                         <input
                                             type="checkbox"
                                             checked={graphParams.enable_text_cleaning}
                                             onChange={(e) => setGraphParams({ ...graphParams, enable_text_cleaning: e.target.checked })}
-                                            style={{ width: '1rem', height: '1rem' }}
+                                            style={{ width: '1.1rem', height: '1.1rem' }}
                                         />
-                                        <span style={{ color: '#334155', fontWeight: 500 }}>텍스트 정제</span>
+                                        <div>
+                                            <span style={{ color: '#334155', fontWeight: 500, fontSize: '0.9rem' }}>Clean Text</span>
+                                            <div style={{ fontSize: '0.75rem', color: '#64748b' }}>Remove bullets, numbers</div>
+                                        </div>
                                     </label>
 
-                                    <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '0.5rem', paddingLeft: '1.5rem' }}>
-                                        번호, 불릿 등 형식 문자 제거
-                                    </div>
-
-                                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', marginTop: '1rem' }}>
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
                                         <input
                                             type="checkbox"
                                             checked={graphParams.enable_inference}
                                             onChange={(e) => setGraphParams({ ...graphParams, enable_inference: e.target.checked })}
-                                            style={{ width: '1rem', height: '1rem' }}
+                                            style={{ width: '1.1rem', height: '1.1rem' }}
                                         />
-                                        <span style={{ color: '#334155', fontWeight: 500 }}>추론 관계 생성</span>
+                                        <div>
+                                            <span style={{ color: '#334155', fontWeight: 500, fontSize: '0.9rem' }}>Inference</span>
+                                            <div style={{ fontSize: '0.75rem', color: '#64748b' }}>Apply reasoning rules</div>
+                                        </div>
                                     </label>
+                                </div>
 
-                                    <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '0.5rem', paddingLeft: '1.5rem' }}>
-                                        예: 스승→스승 = 사조 (Neo4j만)
+                                {/* Column 3: Customization Actions */}
+                                <div>
+                                    <h4 style={{ margin: '0 0 1rem 0', fontSize: '0.9rem', color: '#475569' }}>Customization</h4>
+
+                                    <button
+                                        className="btn"
+                                        style={{ width: '100%', marginBottom: '1rem', justifyContent: 'center', background: '#fff', border: '1px solid #cbd5e1' }}
+                                        onClick={() => setShowExampleModal(true)}
+                                    >
+                                        Manage Examples
+                                    </button>
+                                    <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '1.5rem', textAlign: 'center' }}>
+                                        {graphParams.extraction_examples_yaml ? '✅ Examples Added' : 'No examples configured'}
                                     </div>
 
+                                    <button
+                                        className="btn"
+                                        style={{ width: '100%', marginBottom: '1rem', justifyContent: 'center', background: '#fff', border: '1px solid #cbd5e1' }}
+                                        onClick={() => setShowPromptModal(true)}
+                                    >
+                                        Edit Extraction Prompt
+                                    </button>
+                                    <div style={{ fontSize: '0.75rem', color: '#64748b', textAlign: 'center' }}>
+                                        {graphParams.custom_prompt ? '✅ Custom Prompt Active' : 'Default Prompt Active'}
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -346,6 +362,20 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                     </div>
                 </div>
             </div>
+
+            <ExtractionExampleModal
+                isOpen={showExampleModal}
+                onClose={() => setShowExampleModal(false)}
+                initialYaml={graphParams.extraction_examples_yaml}
+                onSave={(yaml) => setGraphParams(prev => ({ ...prev, extraction_examples_yaml: yaml }))}
+            />
+
+            <ExtractionPromptModal
+                isOpen={showPromptModal}
+                onClose={() => setShowPromptModal(false)}
+                initialPrompt={graphParams.custom_prompt}
+                onSave={(prompt) => setGraphParams(prev => ({ ...prev, custom_prompt: prompt }))}
+            />
 
             <MessageDialog
                 isOpen={messageDialog.isOpen}

@@ -189,7 +189,9 @@ class IngestPipeline:
         self,
         nodes: List[BaseNode],
         extractor_type: GraphExtractorType,
-        config: Dict[str, Any]
+        config: Dict[str, Any],
+        examples: Optional[str] = None,
+        custom_prompt: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """노드에서 그래프 트리플 추출
         
@@ -206,14 +208,23 @@ class IngestPipeline:
         for node in nodes:
             try:
                 text = node.get_content()
-                if len(text.strip()) < 50:  # 너무 짧은 텍스트는 스킵
+                if len(text.strip()) < 10:  # 너무 짧은 텍스트는 스킵
                     continue
                 
                 # 간단한 프롬프트 기반 추출
-                prompt = f"""다음 텍스트에서 주요 엔티티와 관계를 추출하세요.
+                examples_text = ""
+                if examples:
+                    print(f"[Pipeline] Using Few-Shot Examples ({len(examples)} chars):\n{examples[:100]}...")
+                    examples_text = f"\n[참고 예제 (Few-Shot)]\n{examples}\n"
+
+                # 기본 프롬프트 또는 커스텀 프롬프트 사용
+                if custom_prompt:
+                    prompt = custom_prompt.format(text=text[:2000], examples=examples_text)
+                else:
+                    prompt = f"""다음 텍스트에서 주요 엔티티와 관계를 추출하세요.
 형식: (주체, 관계, 객체)
 최대 5개까지 추출하세요.
-
+{examples_text}
 텍스트:
 {text[:2000]}
 
@@ -255,6 +266,8 @@ class IngestPipeline:
         graph_extractor_type: GraphExtractorType = GraphExtractorType.NONE,
         graph_config: Dict[str, Any] = None,
         enable_text_cleaning: bool = False,
+        extraction_examples_yaml: Optional[str] = None,
+        custom_prompt: Optional[str] = None,
     ) -> Dict[str, Any]:
         """전체 인제스션 프로세스 실행"""
         
@@ -286,7 +299,7 @@ class IngestPipeline:
         triples = []
         if graph_extractor_type != GraphExtractorType.NONE:
             print(f"[Pipeline] Extracting graph using {graph_extractor_type}...")
-            triples = self.extract_graph(nodes, graph_extractor_type, graph_config)
+            triples = self.extract_graph(nodes, graph_extractor_type, graph_config, extraction_examples_yaml, custom_prompt)
             print(f"[Pipeline] Extracted {len(triples)} triples.")
             
             # 4. Entity Normalization (적재 직전)

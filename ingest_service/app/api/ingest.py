@@ -66,6 +66,8 @@ class IngestRequest(BaseModel):
     graph_store: str = "neo4j"  # "neo4j" or "fuseki"
     enable_text_cleaning: bool = False  # 번호/불릿 등 형식 문자 제거
     enable_inference: bool = False  # 규칙 기반 관계 추론
+    extraction_examples_yaml: Optional[str] = None
+    custom_prompt: Optional[str] = None
     callback_url: Optional[str] = None
 
 
@@ -144,6 +146,8 @@ async def process_ingest_job(job_id: str, request: IngestRequest):
             graph_extractor_type=request.graph.extractor_type,
             graph_config=graph_config,
             enable_text_cleaning=request.enable_text_cleaning,
+            extraction_examples_yaml=request.extraction_examples_yaml,
+            custom_prompt=request.custom_prompt
         )
         
         jobs[job_id]["progress"] = 80
@@ -194,19 +198,32 @@ async def process_ingest_job(job_id: str, request: IngestRequest):
         jobs[job_id]["progress"] = 100
         jobs[job_id]["status"] = JobStatus.COMPLETED
         
-        # 추론 관계 생성 (적재 이후, Neo4j만 지원)
+        # 추론 관계 생성 (적재 이후)
         inference_count = 0
-        if request.enable_inference and request.graph_store == "neo4j" and result["triples"]:
-            print(f"[IngestJob] Running inference engine for KB {request.kb_id}...")
-            try:
-                from app.core.inference_engine import inference_engine
-                inference_count = await inference_engine.run_inference(
-                    kb_id=request.kb_id,
-                    doc_id=request.doc_id
-                )
-                print(f"[IngestJob] Inference created {inference_count} new relations")
-            except Exception as e:
-                print(f"[IngestJob] Inference error: {e}")
+        if request.enable_inference and result["triples"]:
+            if request.graph_store == "neo4j":
+                print(f"[IngestJob] Running Neo4j inference engine for KB {request.kb_id}...")
+                try:
+                    from app.core.inference_engine import inference_engine
+                    inference_count = await inference_engine.run_inference(
+                        kb_id=request.kb_id,
+                        doc_id=request.doc_id
+                    )
+                    print(f"[IngestJob] Neo4j Inference created {inference_count} new relations")
+                except Exception as e:
+                    print(f"[IngestJob] Neo4j Inference error: {e}")
+            elif request.graph_store == "fuseki":
+                print(f"[IngestJob] Running Fuseki inference engine for KB {request.kb_id}...")
+                try:
+                    from app.core.fuseki_inference_engine import fuseki_inference_engine
+                    inference_count = await fuseki_inference_engine.run_inference(
+                        kb_id=request.kb_id,
+                        doc_id=request.doc_id
+                    )
+                    print(f"[IngestJob] Fuseki Inference applied {inference_count} rules")
+                except Exception as e:
+                    print(f"[IngestJob] Fuseki Inference error: {e}")
+
         
         jobs[job_id]["result"] = {
             "node_count": result["node_count"],

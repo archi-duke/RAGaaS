@@ -45,6 +45,10 @@ export const docApi = {
             if (config.enable_inference !== undefined) {
                 formData.append('enable_inference', String(config.enable_inference));
             }
+            // Send extraction_examples_yaml as separate form field
+            if (config.extraction_examples_yaml) {
+                formData.append('extraction_examples_yaml', config.extraction_examples_yaml);
+            }
         }
         return api.post(`/knowledge-bases/${kbId}/documents`, formData, {
             headers: {

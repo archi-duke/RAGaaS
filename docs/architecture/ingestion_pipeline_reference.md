@@ -129,7 +129,28 @@ graph TD
 
 ---
 
+## 🧹 Data Cleanup Principles (데이터 정리 원칙)
+
+데이터의 일관성을 유지하고 저장 공간 낭비를 방지하기 위해 다음 정리 원칙을 준수합니다.
+
+1.  **문서 삭제 시 연쇄 삭제 (Cascading Deletion)**:
+    - 사용자가 특정 문서를 삭제하면, 해당 문서와 관련된 모든 외부 저장소 데이터가 즉시 삭제되어야 합니다.
+    - **Vector DB (Milvus)**: `doc_id` 필터를 사용하여 해당 문서의 모든 벡터 삭제.
+    - **Graph DB (Neo4j/Fuseki)**: 해당 문서에서 추출된 모든 트리플 및 관계 삭제.
+    - **Shared Storage**: 업로드된 원본 파일 및 중간 가공물 삭제.
+    - **MongoDB**: `TripleChunkMapping` 등 보조 데이터 삭제.
+
+2.  **기록 보존 (Record Preservation)**:
+    - **Knowledge Base (MongoDB)**: KB 정보는 지식 베이스의 설정을 담고 있으므로, 내부의 모든 문서가 삭제되더라도 **사용자가 명시적으로 KB를 삭제하기 전까지는 유지**되어야 합니다.
+    - **Documents (MongoDB)**: 문서 레코드는 모든 외부 데이터 정리가 완료된 후 가장 마지막에 삭제됩니다.
+
+3.  **가비지 데이터 검증 (Garbage Verification)**:
+    - 삭제 후에는 `CleanupService._verify_cleanup`을 통해 각 저장소에 잔여 데이터가 없는지 재검증합니다.
+
+---
+
 ## 🔧 Extensibility (확장 가이드)
+
 
 *   **새로운 정제 규칙 추가**: `TextCleaner.clean()` 메서드에 정규식 추가.
 *   **새로운 추론 규칙 추가**: `InferenceEngine.DEFAULT_RULES` 리스트에 `InferenceRule` 객체 추가.

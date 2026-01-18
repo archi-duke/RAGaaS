@@ -17,7 +17,8 @@ async def upload_document(
     file: UploadFile = File(...),
     chunking_config: str = Form(None),
     enable_text_cleaning: bool = Form(False),
-    enable_inference: bool = Form(False)
+    enable_inference: bool = Form(False),
+    extraction_examples_yaml: str = Form(None)
 ):
     # Fetch Knowledge Base
     kb = await KBModel.get(kb_id)
@@ -122,6 +123,8 @@ async def upload_document(
                 graph_store="fuseki" if kb.graph_backend == "ontology" else "neo4j",
                 enable_text_cleaning=enable_text_cleaning,
                 enable_inference=enable_inference,
+                extraction_examples_yaml=extraction_examples_yaml,
+                custom_prompt=graph_extraction_prompt,
                 callback_url="http://backend:8000/api/knowledge-bases/ingest/callback"
             )
 

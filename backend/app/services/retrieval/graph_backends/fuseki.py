@@ -14,7 +14,7 @@ class FusekiBackend(GraphBackend):
         self.namespace_relation = "http://rag.local/relation/"
         self.generator = None
         try:
-            from app.doc2onto.qa.sparql_generator import SPARQLGenerator
+            from app.services.retrieval.sparql_generator import SPARQLGenerator
             from app.core.config import settings
             self.generator = SPARQLGenerator(api_key=settings.OPENAI_API_KEY)
             print("DEBUG: [Fuseki] Doc2Onto SPARQLGenerator initialized successfully")
@@ -49,7 +49,7 @@ class FusekiBackend(GraphBackend):
                 # Determine inverse relation mode
                 # Default: if not explicitly set, use 'auto'
                 inv_mode = kwargs.get("inverse_extraction_mode", "auto")
-                enable_inverse = kwargs.get("enable_inverse_search", False)  # 기본값 False로 변경
+                enable_inverse = kwargs.get("enable_inverse_search", True)  # 기본 ON으로 변경
                 
                 # If user explicitly disabled inverse search, override mode
                 if not enable_inverse:
@@ -265,6 +265,7 @@ class FusekiBackend(GraphBackend):
                         # If inverse search is disabled and LLM query returned no results,
                         # don't fall back to generic search - return empty results
                         # UNLESS it is a promoted KB (schema_info exists), then we want fallback to capture anything.
+                
                         if inv_mode == "none" and not schema_info:
                             return {
                                 "chunk_ids": [],
@@ -277,161 +278,19 @@ class FusekiBackend(GraphBackend):
             except Exception as e:
                 log_trace(f"[Fuseki] Error during SPARQL generation/execution: {e}")
                 # Fallback continues below
-
-        # Fallback / Default Logic (Original regex-based search)
         
-        if not entities:
-            return {"chunk_ids": [], "sparql_query": "", "triples": [], "trace_logs": trace_logs}
-
-        # Escape entities for SPARQL regex
-        # Replace '\ ' with ' ' because SPARQL regex doesn't support escaped spaces like Python does
-        safe_entities = [re.escape(e).replace(r"\ ", " ") for e in entities]
-        regex_pattern = "|".join(safe_entities)
+        # [MODIFIED] Fallback Logic Removed
+        # If we reached here, it means LLM failed or returned no results (and fallback is requested but we disabled regex fallback)
         
-        # Build relationship filter based on keywords
-        relationship_filter = ""
-        use_rel_filter = kwargs.get("use_relation_filter", True)
-        
-        if use_rel_filter and relationship_keywords:
-            rel_patterns = []
-            for kw in relationship_keywords:
-                if kw == "master":
-                    rel_patterns.extend(["master", "스승", "teacher", "mentor"])
-                elif kw == "student":
-                    rel_patterns.extend(["student", "제자", "학생", "disciple"])
-                elif kw == "전수":
-                    rel_patterns.extend(["전수", "teach", "learn", "inherit"])
-            
-            if rel_patterns:
-                # specific handling for spaces in SPARQL regex
-                rel_regex = "|".join([re.escape(p).replace(r"\ ", " ") for p in rel_patterns])
-                relationship_filter = f'|| regex(str(?pred), "({rel_regex})", "i") || regex(?predLabel, "({rel_regex})", "i")'
-        
-        # Build entity filter clauses for SPARQL
-        # For each entity, we want to check if it's in the label or in the URI
-        entity_filters = []
-        for entity in entities:
-            if not entity: continue
-            # Use CONTAINS which is often more reliable than REGEX for basic substring match
-            entity_filters.append(f'CONTAINS(LCASE(STR(?sLabel)), LCASE("{entity}"))')
-            entity_filters.append(f'CONTAINS(LCASE(STR(?oLabel)), LCASE("{entity}"))')
-            entity_filters.append(f'CONTAINS(LCASE(STR(?s)), LCASE("{entity}"))')
-            entity_filters.append(f'CONTAINS(LCASE(STR(?o)), LCASE("{entity}"))')
-        
-        filter_clause = " || ".join(entity_filters) if entity_filters else "1=1"
-
-        # Enhanced SPARQL query - Search Default Graph (where Fallback data lives)
-        sparql_query = f"""
-        PREFIX inst: <http://rag.local/inst/>
-        PREFIX rel: <http://rag.local/rel/>
-        PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-        PREFIX class: <http://rag.local/class/>
-        PREFIX prop: <http://rag.local/prop/>
-        
-        SELECT DISTINCT ?s ?p ?o ?sLabel ?oLabel ?chunkUri
-        WHERE {{
-            # Search triples matching filters
-            ?s ?p ?o .
-            
-            # Optional labels
-            OPTIONAL {{ ?s rdfs:label ?sLabel }}
-            OPTIONAL {{ ?o rdfs:label ?oLabel }}
-            
-            # Filter Logic
-            FILTER (
-                # Exclude internal types if needed, but keep it broad for now
-                ?p != <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> &&
-                ({filter_clause})
-            )
-            
-            # Try to find source chunks linked to Subject or Object via hasSource
-            OPTIONAL {{ ?s <http://rag.local/relation/hasSource> ?chunkUri }}
-            OPTIONAL {{ ?o <http://rag.local/relation/hasSource> ?chunkUri2 }}
-        }}
-        LIMIT 100
-        """
-        
-        results = fuseki_client.query_sparql(kb_id, sparql_query)
-        bindings = results.get("results", {}).get("bindings", [])
-
-        chunk_ids = []
-        triples = []
-        for binding in bindings:
-            uri = binding.get("chunkUri", {}).get("value", "")
-            
-            # Handle different chunk URI formats
-            if uri.startswith("http://rag.local/source/"):
-                chunk_ids.append(uri.split("/")[-1])
-            elif uri.startswith("urn:ragchunk:"):
-                # Extract info from urn:ragchunk:DOC_ID:v1:INDEX
-                # Example: urn:ragchunk:8e04471c-612b-4afb-a8fe-2e23c369378f:v1:0000
-                parts = uri.replace("urn:ragchunk:", "").split(":")
-                # print(f"DEBUG: [Fuseki] Found urn:ragchunk URI: {uri}, parts: {parts}")
-                if len(parts) >= 3:
-                    doc_id = parts[0]
-                    try:
-                        chunk_idx = int(parts[2])
-                        cid = f"{doc_id}_{chunk_idx}"
-                        chunk_ids.append(cid)
-                        # print(f"DEBUG: [Fuseki] Mapped to chunk_id: {cid}")
-                    except ValueError:
-                        chunk_ids.append(doc_id)
-                elif len(parts) > 0:
-                    chunk_ids.append(parts[0])
-            
-            # Also extract triples from results
-            s_uri = binding.get("s", {}).get("value", "")
-            p_uri = binding.get("p", {}).get("value", "")
-            o_val = binding.get("o", {}).get("value", "")
-            s_label = binding.get("sLabel", {}).get("value", "")
-            o_label = binding.get("oLabel", {}).get("value", "")
-            
-            # Skip metadata predicates (RDF schema, provenance, etc.)
-            if any(noise in p_uri for noise in [
-                "rdf-syntax-ns#",      # rdf:type 등
-                "rdf-schema#",         # rdfs:label, rdfs:comment 등
-                "prov#",               # provenance 정보
-                "evidence/",           # 증거 메타데이터
-                "owl#",                # OWL 온톨로지 메타데이터
-                "hasSource",           # 소스 링크 (내부용)
-            ]):
-                continue
-            
-            s_display = s_label if s_label else (urllib.parse.unquote(s_uri.split("/")[-1]).replace("_", " ") if s_uri else "[Unknown URI]")
-            o_display = o_label if o_label else (urllib.parse.unquote(o_val.split("/")[-1]).replace("_", " ") if o_val.startswith("http") else o_val) or "[Unknown Value]"
-
-            p_display = urllib.parse.unquote(p_uri.split("/")[-1].replace("_", " "))
-            
-            if s_display and p_display and o_display:
-                triples.append({
-                    "subject": s_display,
-                    "predicate": p_display,
-                    "object": o_display
-                })
-        
-        # Note: triples are already extracted in the main query loop above
-        # Deduplicate triples
-        seen = set()
-        unique_triples = []
-        for t in triples:
-            key = (t["subject"], t["predicate"], t["object"])
-            if key not in seen:
-                seen.add(key)
-                unique_triples.append(t)
-        
-        
-        # 오프셋 정보 첨부
-        triples_with_offset, discovered_chunk_ids = await self._attach_offsets_to_triples(kb_id, unique_triples)
-        
-        # 기존 chunk_ids와 오프셋에서 발견된 chunk_ids 합치기
-        all_chunk_ids = list(set(chunk_ids) | set(discovered_chunk_ids))
-                
+        log_trace("[Fuseki] Strict Mode: No fallback search performed.")
         return {
-            "chunk_ids": all_chunk_ids,
-            "sparql_query": sparql_query.strip(),
-            "triples": triples_with_offset,
+            "chunk_ids": [], 
+            "sparql_query": sparql_query.strip() if sparql_query else "No Results / Generation Failed", 
+            "triples": [], 
+            "found_entities": [],
             "trace_logs": trace_logs
         }
+
 
     async def _attach_offsets_to_triples(self, kb_id: str, triples: List[Dict]) -> Tuple[List[Dict], List[str]]:
         """MongoDB(Beanie)에서 트리플의 소스 오프셋 정보 조회하여 첨부"""
