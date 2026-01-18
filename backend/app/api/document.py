@@ -3,7 +3,6 @@ from typing import List
 from app.models.document import Document as DocModel, DocumentStatus
 from app.models.knowledge_base import KnowledgeBase as KBModel
 from app.schemas import Document
-from app.services.ingestion import ingestion_service
 import logging
 
 logger = logging.getLogger(__name__)
@@ -61,7 +60,7 @@ async def upload_document(
     # Read file content
     content = await file.read()
     
-    # Merge chunking config
+    # Merge chunking config from KB defaults and form override
     final_config = kb.chunking_config.copy() if kb.chunking_config else {}
     if chunking_config:
         try:
@@ -71,26 +70,34 @@ async def upload_document(
         except Exception as e:
             logger.error(f"Failed to parse chunking_config override: {e}")
 
-    # Feature flag: Use new Ingest Service or legacy processing
+    # === LlamaIndex Ingest Service (Only Path) ===
+    import os
     from app.core.config import settings
+    from app.services.ingestion.ingest_client import ingest_client
     
-    if settings.USE_INGEST_SERVICE:
-        # New LlamaIndex-based Ingest Service
-        import os
-        import json as json_lib
-        from app.services.ingestion.ingest_client import ingest_client
-        
-        # Save file to shared storage
-        shared_path = settings.SHARED_STORAGE_PATH
-        os.makedirs(shared_path, exist_ok=True)
-        file_path = os.path.join(shared_path, f"{doc.id}_{doc.filename}")
-        
-        with open(file_path, "wb") as f:
-            f.write(content)
-        
-        logger.info(f"[IngestService] File saved to {file_path}")
-        
-        # Build graph config from frontend params
+    # Save file to shared storage for Ingest Service to read
+    shared_path = settings.SHARED_STORAGE_PATH
+    os.makedirs(shared_path, exist_ok=True)
+    file_path = os.path.join(shared_path, f"{doc.id}_{doc.filename}")
+    
+    with open(file_path, "wb") as f:
+        f.write(content)
+    
+    logger.info(f"[Ingest] File saved to {file_path}")
+    
+    # Build chunking config for LlamaIndex
+    chunking_cfg = {
+        "strategy": kb.chunking_strategy or "fixed_size",
+        "chunk_size": final_config.get("chunk_size", 500),
+        "chunk_overlap": final_config.get("chunk_overlap", 100),
+        "window_size": final_config.get("window_size", 3),
+        "chunk_sizes": final_config.get("chunk_sizes", [2048, 512, 128]),
+        "breakpoint_threshold": final_config.get("breakpoint_threshold", 0.5),
+    }
+    
+    # Build graph config (only used if Graph RAG is enabled)
+    graph_config = {}
+    if kb.enable_graph_rag:
         graph_config = {
             "extractor_type": final_config.get("extractor_type", "simple"),
             "max_paths_per_chunk": final_config.get("max_paths_per_chunk", 10),
@@ -98,49 +105,28 @@ async def upload_document(
             "num_workers": final_config.get("num_workers", 4),
             "generate_inverse_relations": final_config.get("generate_inverse_relations", True),
         }
-        
-        # Build chunking config for LlamaIndex
-        chunking_cfg = {
-            "strategy": kb.chunking_strategy or "fixed_size",
-            "chunk_size": final_config.get("chunk_size", 500),
-            "chunk_overlap": final_config.get("chunk_overlap", 100),
-            "window_size": final_config.get("window_size", 3),
-            "chunk_sizes": final_config.get("chunk_sizes", [2048, 512, 128]),
-            "breakpoint_threshold": final_config.get("breakpoint_threshold", 0.5),
-        }
-        
-        # Call Ingest Service asynchronously
-        async def call_ingest_service():
-            try:
-                result = await ingest_client.create_ingest_job(
-                    kb_id=kb_id,
-                    doc_id=doc.id,
-                    file_path=file_path,
-                    chunking_config=chunking_cfg,
-                    graph_config=graph_config if kb.enable_graph_rag else {},
-                    callback_url=None  # TODO: Implement callback endpoint
-                )
-                logger.info(f"[IngestService] Job created: {result}")
-            except Exception as e:
-                logger.error(f"[IngestService] Failed to create job: {e}")
-                # Update document status to ERROR
-                doc_obj = await DocModel.get(doc.id)
-                if doc_obj:
-                    doc_obj.status = DocumentStatus.ERROR.value
-                    await doc_obj.save()
-        
-        background_tasks.add_task(call_ingest_service)
-    else:
-        # Legacy Doc2Onto-based processing
-        background_tasks.add_task(
-            ingestion_service.process_document,
-            kb_id,
-            doc.id,
-            doc.filename,
-            content,
-            kb.chunking_strategy,
-            final_config
-        )
+    
+    # Call Ingest Service asynchronously
+    async def call_ingest_service():
+        try:
+            result = await ingest_client.create_ingest_job(
+                kb_id=kb_id,
+                doc_id=doc.id,
+                file_path=file_path,
+                chunking_config=chunking_cfg,
+                graph_config=graph_config,
+                callback_url=None  # Ingest Service will update status directly
+            )
+            logger.info(f"[Ingest] Job created: {result}")
+        except Exception as e:
+            logger.error(f"[Ingest] Failed to create job: {e}")
+            # Update document status to ERROR
+            doc_obj = await DocModel.get(doc.id)
+            if doc_obj:
+                doc_obj.status = DocumentStatus.ERROR.value
+                await doc_obj.save()
+    
+    background_tasks.add_task(call_ingest_service)
     
     return doc
 
