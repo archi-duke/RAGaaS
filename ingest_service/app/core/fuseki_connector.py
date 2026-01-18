@@ -3,6 +3,7 @@ Fuseki SPARQL Store Connector
 
 기존 RAGaaS의 Fuseki에 RDF 트리플을 저장합니다.
 """
+import json
 from typing import List, Dict, Any, Optional
 import re
 import urllib.parse
@@ -34,24 +35,28 @@ class FusekiConnector:
         rdf_lines = []
         
         for t in triples:
-            subj = self._sanitize_uri(t.get("subject", ""))
-            pred = self._sanitize_uri(t.get("predicate", ""))
-            obj = self._sanitize_uri(t.get("object", ""))
+            subj_clean = self._sanitize_uri(t.get("subject", ""))
+            pred_clean = self._sanitize_uri(t.get("predicate", ""))
+            obj_clean = self._sanitize_uri(t.get("object", ""))
             
-            if not all([subj, pred, obj]):
+            if not all([subj_clean, pred_clean, obj_clean]):
                 continue
             
-            s_uri = f"<{self.namespace_entity}{subj}>"
-            p_uri = f"<{self.namespace_relation}{pred}>"
-            o_uri = f"<{self.namespace_entity}{obj}>"
+            s_uri = f"<{self.namespace_entity}{subj_clean}>"
+            p_uri = f"<{self.namespace_relation}{pred_clean}>"
+            o_uri = f"<{self.namespace_entity}{obj_clean}>"
             
             # 트리플 추가
             rdf_lines.append(f"{s_uri} {p_uri} {o_uri} .")
             
-            # Label 추가 (검색 성능 향상)
-            rdf_lines.append(f'{s_uri} <http://www.w3.org/2000/01/rdf-schema#label> "{t["subject"]}" .')
-            rdf_lines.append(f'{p_uri} <http://www.w3.org/2000/01/rdf-schema#label> "{t["predicate"]}" .')
-            rdf_lines.append(f'{o_uri} <http://www.w3.org/2000/01/rdf-schema#label> "{t["object"]}" .')
+            # Label 추가 (검색 성능 향상) - json.dumps로 안전하게 이스케이프
+            subj_label = json.dumps(t.get("subject", ""), ensure_ascii=False)
+            pred_label = json.dumps(t.get("predicate", ""), ensure_ascii=False)
+            obj_label = json.dumps(t.get("object", ""), ensure_ascii=False)
+            
+            rdf_lines.append(f'{s_uri} <http://www.w3.org/2000/01/rdf-schema#label> {subj_label} .')
+            rdf_lines.append(f'{p_uri} <http://www.w3.org/2000/01/rdf-schema#label> {pred_label} .')
+            rdf_lines.append(f'{o_uri} <http://www.w3.org/2000/01/rdf-schema#label> {obj_label} .')
         
         return rdf_lines
     

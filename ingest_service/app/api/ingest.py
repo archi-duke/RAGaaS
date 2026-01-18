@@ -13,6 +13,10 @@ from app.core.pipeline import (
     ChunkingStrategy,
     GraphExtractorType,
 )
+from app.core.milvus_connector import milvus_connector
+from app.core.neo4j_connector import neo4j_connector
+from app.core.fuseki_connector import fuseki_connector
+
 
 
 router = APIRouter()
@@ -59,6 +63,9 @@ class IngestRequest(BaseModel):
     file_path: str
     chunking: ChunkingConfig = ChunkingConfig()
     graph: GraphConfig = GraphConfig()
+    graph_store: str = "neo4j"  # "neo4j" or "fuseki"
+    enable_text_cleaning: bool = False  # 번호/불릿 등 형식 문자 제거
+    enable_inference: bool = False  # 규칙 기반 관계 추론
     callback_url: Optional[str] = None
 
 
@@ -85,14 +92,28 @@ class JobStatusResponse(BaseModel):
 async def process_ingest_job(job_id: str, request: IngestRequest):
     """백그라운드 인제스션 작업 처리"""
     try:
+        print(f"[IngestJob] Starting job {job_id} for doc {request.doc_id}")
         jobs[job_id]["status"] = JobStatus.PROCESSING
         jobs[job_id]["updated_at"] = datetime.utcnow().isoformat()
         
-        # 1. 파일 읽기
-        with open(request.file_path, "r", encoding="utf-8") as f:
-            text = f.read()
+        # 1. 파일 읽기 (PDF 또는 텍스트)
+        file_path = request.file_path
+        if file_path.lower().endswith('.pdf'):
+            from pypdf import PdfReader
+            import io
+            with open(file_path, "rb") as f:
+                pdf = PdfReader(io.BytesIO(f.read()))
+                text = ""
+                for page in pdf.pages:
+                    text += (page.extract_text() or "") + "\n"
+            print(f"[IngestJob] Read PDF: {len(text)} chars")
+        else:
+            with open(file_path, "r", encoding="utf-8") as f:
+                text = f.read()
+            print(f"[IngestJob] Read text file: {len(text)} chars")
         
         jobs[job_id]["progress"] = 10
+
         
         # 2. 청킹 설정 변환
         chunking_config = {
@@ -122,17 +143,25 @@ async def process_ingest_job(job_id: str, request: IngestRequest):
             chunking_config=chunking_config,
             graph_extractor_type=request.graph.extractor_type,
             graph_config=graph_config,
+            enable_text_cleaning=request.enable_text_cleaning,
         )
         
         jobs[job_id]["progress"] = 80
         
         # 5. 저장 (Milvus, Neo4j/Fuseki)
-        from app.core.milvus_connector import milvus_connector
-        from app.core.neo4j_connector import neo4j_connector
-        from app.core.fuseki_connector import fuseki_connector
+        print(f"[IngestJob] Saving to databases for doc {request.doc_id}...")
         
         # Milvus: 벡터 저장
+        print(f"[IngestJob] Calling Milvus connector.insert_chunks...")
+
+
+        
+        # Milvus: 벡터 저장
+        print(f"[IngestJob] Calling Milvus connector.insert_chunks...")
         chunks_data = [{"content": node.get_content(), "metadata": node.metadata} for node in result["nodes"]]
+        print(f"[IngestJob] Prepared {len(chunks_data)} chunks for Milvus")
+
+
         await milvus_connector.insert_chunks(
             request.kb_id,
             request.doc_id,
@@ -142,24 +171,52 @@ async def process_ingest_job(job_id: str, request: IngestRequest):
         
         jobs[job_id]["progress"] = 90
         
-        # Graph: 트리플 저장 (Neo4j 또는 Fuseki)
+        # Graph: 트리플 저장 (Neo4j 또는 Fuseki) - 선택적 저장
         if result["triples"]:
-            # 기본적으로 Neo4j 사용 (설정에 따라 Fuseki로 변경 가능)
-            await neo4j_connector.insert_triples(
-                request.kb_id,
-                request.doc_id,
-                result["triples"],
-                generate_inverse=request.graph.generate_inverse_relations
-            )
-
+            if request.graph_store == "fuseki":
+                print(f"[IngestJob] Saving to Fuseki for doc {request.doc_id}...")
+                await fuseki_connector.insert_triples(
+                    request.kb_id,
+                    request.doc_id,
+                    result["triples"],
+                    generate_inverse=request.graph.generate_inverse_relations
+                )
+            else:
+                # Default to Neo4j
+                print(f"[IngestJob] Saving to Neo4j for doc {request.doc_id}...")
+                await neo4j_connector.insert_triples(
+                    request.kb_id,
+                    request.doc_id,
+                    result["triples"],
+                    generate_inverse=request.graph.generate_inverse_relations
+                )
         
         jobs[job_id]["progress"] = 100
         jobs[job_id]["status"] = JobStatus.COMPLETED
+        
+        # 추론 관계 생성 (적재 이후, Neo4j만 지원)
+        inference_count = 0
+        if request.enable_inference and request.graph_store == "neo4j" and result["triples"]:
+            print(f"[IngestJob] Running inference engine for KB {request.kb_id}...")
+            try:
+                from app.core.inference_engine import inference_engine
+                inference_count = await inference_engine.run_inference(
+                    kb_id=request.kb_id,
+                    doc_id=request.doc_id
+                )
+                print(f"[IngestJob] Inference created {inference_count} new relations")
+            except Exception as e:
+                print(f"[IngestJob] Inference error: {e}")
+        
         jobs[job_id]["result"] = {
             "node_count": result["node_count"],
             "triple_count": result["triple_count"],
+            "inference_count": inference_count,
         }
         jobs[job_id]["updated_at"] = datetime.utcnow().isoformat()
+        print(f"[IngestJob] ✅ Job {job_id} COMPLETED for doc {request.doc_id}")
+
+
         
         # 6. 콜백 호출 (선택사항)
         if request.callback_url:
@@ -167,14 +224,20 @@ async def process_ingest_job(job_id: str, request: IngestRequest):
             async with httpx.AsyncClient() as client:
                 await client.post(request.callback_url, json={
                     "job_id": job_id,
+                    "doc_id": request.doc_id,
+                    "kb_id": request.kb_id,
                     "status": "completed",
                     "result": jobs[job_id]["result"],
                 })
         
     except Exception as e:
+        import traceback
+        print(f"[IngestJob] ❌ Job {job_id} FAILED: {e}")
+        traceback.print_exc()
         jobs[job_id]["status"] = JobStatus.FAILED
         jobs[job_id]["error"] = str(e)
         jobs[job_id]["updated_at"] = datetime.utcnow().isoformat()
+
 
 
 @router.post("/ingest", response_model=IngestResponse)

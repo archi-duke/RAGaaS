@@ -84,8 +84,11 @@ class MilvusConnector:
         data = [doc_ids, chunk_ids, contents, metadatas, embeddings]
         
         # Insert
+        print(f"[Milvus] Inserting {len(chunk_ids)} chunks for doc {doc_id} into {collection.name}...")
         collection.insert(data)
+        print(f"[Milvus] Flushing data...")
         collection.flush()
+        print(f"[Milvus] ✅ Inserted {len(chunks)} chunks.")
         
         return len(chunks)
     

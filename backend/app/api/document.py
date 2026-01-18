@@ -1,5 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, BackgroundTasks
-from typing import List
+from typing import List, Optional, Dict, Any
+from pydantic import BaseModel
+from datetime import datetime
 from app.models.document import Document as DocModel, DocumentStatus
 from app.models.knowledge_base import KnowledgeBase as KBModel
 from app.schemas import Document
@@ -13,7 +15,9 @@ async def upload_document(
     kb_id: str,
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    chunking_config: str = Form(None)
+    chunking_config: str = Form(None),
+    enable_text_cleaning: bool = Form(False),
+    enable_inference: bool = Form(False)
 ):
     # Fetch Knowledge Base
     kb = await KBModel.get(kb_id)
@@ -115,8 +119,12 @@ async def upload_document(
                 file_path=file_path,
                 chunking_config=chunking_cfg,
                 graph_config=graph_config,
-                callback_url=None  # Ingest Service will update status directly
+                graph_store="fuseki" if kb.graph_backend == "ontology" else "neo4j",
+                enable_text_cleaning=enable_text_cleaning,
+                enable_inference=enable_inference,
+                callback_url="http://backend:8000/api/knowledge-bases/ingest/callback"
             )
+
             logger.info(f"[Ingest] Job created: {result}")
         except Exception as e:
             logger.error(f"[Ingest] Failed to create job: {e}")
@@ -336,3 +344,35 @@ async def update_chunk(
         print(f"Error updating chunk: {e}")
         print(error_details)
         raise HTTPException(status_code=500, detail=f"Failed to update chunk: {str(e)}")
+
+
+class IngestCallback(BaseModel):
+    job_id: str
+    doc_id: str
+    kb_id: str
+    status: str
+    result: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+
+@router.post("/ingest/callback")
+async def ingest_callback(payload: IngestCallback):
+    """Callback from Ingest Service"""
+    logger.info(f"Received ingest callback: {payload}")
+    
+    doc = await DocModel.find_one(DocModel.id == payload.doc_id, DocModel.kb_id == payload.kb_id)
+    if not doc:
+        logger.error(f"Document not found for callback: {payload.doc_id}")
+        # Return 200 even if not found to stop retries from ingest service if any
+        return {"ok": False, "error": "Document not found"}
+    
+    if payload.status == "completed":
+        doc.status = DocumentStatus.COMPLETED.value
+        doc.updated_at = datetime.utcnow()
+        logger.info(f"Document {doc.id} marked as COMPLETED")
+    elif payload.status == "failed":
+        doc.status = DocumentStatus.ERROR.value
+        doc.error_message = payload.error
+        logger.info(f"Document {doc.id} marked as ERROR: {payload.error}")
+    
+    await doc.save()
+    return {"ok": True}

@@ -144,6 +144,7 @@ services:
       context: ./ingest_service
       dockerfile: Dockerfile
     environment:
+      - PYTHONUNBUFFERED=1
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - REDIS_URL=redis://redis:6379/0
       - MILVUS_HOST=standalone

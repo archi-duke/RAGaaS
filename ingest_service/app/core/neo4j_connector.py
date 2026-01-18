@@ -48,8 +48,9 @@ class Neo4jConnector:
     ) -> int:
         """트리플 삽입 (APOC 사용)"""
         self.connect()
-        
+        print(f"[Neo4j] Inserting {len(triples)} triples for doc {doc_id}...")
         inserted_count = 0
+        total_to_insert = len(triples)
         
         for triple in triples:
             subject = triple.get("subject", "")
@@ -105,10 +106,14 @@ class Neo4jConnector:
                         })
                         inserted_count += 1
                 
+                if (inserted_count % 10 == 0):
+                    print(f"[Neo4j] Progress: {inserted_count} relationships created...")
+                
             except Exception as e:
                 print(f"Error inserting triple: {e}")
                 continue
         
+        print(f"[Neo4j] ✅ Successfully inserted {inserted_count} relationships.")
         return inserted_count
     
     def _get_inverse_predicate(self, predicate: str) -> Optional[str]:

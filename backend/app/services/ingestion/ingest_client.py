@@ -24,6 +24,9 @@ class IngestServiceClient:
         file_path: str,
         chunking_config: Dict[str, Any],
         graph_config: Dict[str, Any],
+        graph_store: str = "neo4j",
+        enable_text_cleaning: bool = False,
+        enable_inference: bool = False,
         callback_url: Optional[str] = None
     ) -> Dict[str, Any]:
         """인제스션 작업 생성"""
@@ -33,8 +36,12 @@ class IngestServiceClient:
             "file_path": file_path,
             "chunking": chunking_config,
             "graph": graph_config,
+            "graph_store": graph_store,
+            "enable_text_cleaning": enable_text_cleaning,
+            "enable_inference": enable_inference,
             "callback_url": callback_url
         }
+
         
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(

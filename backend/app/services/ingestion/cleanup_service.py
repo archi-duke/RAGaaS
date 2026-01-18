@@ -76,38 +76,32 @@ class CleanupService:
         # 1.5. Neo4j Cleanup (Graph)
         try:
             from app.core.neo4j_client import neo4j_client
-            # TripleChunkMapping에서 해당 doc_id의 트리플을 찾아서 삭제
-            triples_to_delete = await TripleChunkMapping.find(
-                TripleChunkMapping.doc_id == doc_id
-            ).to_list()
             
-            if triples_to_delete:
-                for mapping in triples_to_delete:
-                    try:
-                        # 정확히 일치하는 관계만 삭제
-                        delete_query = """
-                        MATCH (s:Entity {name: $subj, kb_id: $kb_id})-[r]->(o:Entity {name: $obj, kb_id: $kb_id})
-                        WHERE type(r) = $pred
-                        DELETE r
-                        """
-                        neo4j_client.execute_query(delete_query, {
-                            "subj": mapping.subject,
-                            "obj": mapping.object,
-                            "pred": mapping.predicate,
-                            "kb_id": kb_id
-                        })
-                    except Exception as rel_e:
-                        print(f"[Cleanup] Neo4j relation delete error: {rel_e}")
+            # Delete relationships with specific doc_id property
+            # This works for both legacy and new Ingest Service as long as doc_id is stored on relationship
+            delete_query = """
+            MATCH ()-[r]->()
+            WHERE r.doc_id = $doc_id
+            DELETE r
+            RETURN count(r) as deleted_count
+            """
+            
+            results = neo4j_client.execute_query(delete_query, {"doc_id": doc_id})
+            deleted_count = 0
+            if results and len(results) > 0:
+                deleted_count = results[0].get("deleted_count", 0)
+            
+            print(f"[Cleanup] Deleted {deleted_count} relationships in Neo4j for doc {doc_id}")
                 
-                # 고아 노드 정리 (관계가 없는 노드 삭제)
-                orphan_query = """
-                MATCH (n:Entity {kb_id: $kb_id})
-                WHERE NOT (n)--()
-                DELETE n
-                """
-                neo4j_client.execute_query(orphan_query, {"kb_id": kb_id})
-                
-                print(f"[Cleanup] Neo4j cleanup complete for doc {doc_id}")
+            # 고아 노드 정리 (관계가 없는 노드 삭제)
+            orphan_query = """
+            MATCH (n:Entity {kb_id: $kb_id})
+            WHERE NOT (n)--()
+            DELETE n
+            """
+            neo4j_client.execute_query(orphan_query, {"kb_id": kb_id})
+            
+            print(f"[Cleanup] Neo4j cleanup complete for doc {doc_id}")
         except Exception as e:
             print(f"[Cleanup] Neo4j cleanup error for {doc_id}: {e}")
 
@@ -192,4 +186,49 @@ class CleanupService:
             import traceback
             traceback.print_exc()
 
+        # 5. Garbage Verification (삭제 후 검증)
+        await self._verify_cleanup(kb_id, doc_id)
+
+    async def _verify_cleanup(self, kb_id: str, doc_id: str):
+        """삭제 후 가비지 데이터 검증"""
+        garbage_found = []
+        
+        # Check Milvus
+        try:
+            collection = create_collection(kb_id)
+            collection.load()
+            expr = f'doc_id == "{doc_id}"'
+            results = collection.query(expr=expr, output_fields=["chunk_id"], limit=1)
+            if results:
+                garbage_found.append(f"Milvus: {len(results)} chunks")
+        except Exception:
+            pass
+        
+        # Check Neo4j (via TripleChunkMapping)
+        try:
+            remaining = await TripleChunkMapping.find(
+                TripleChunkMapping.doc_id == doc_id
+            ).count()
+            if remaining > 0:
+                garbage_found.append(f"TripleChunkMapping: {remaining} entries")
+        except Exception:
+            pass
+        
+        # Check shared storage files
+        try:
+            from app.core.config import settings
+            import glob
+            pattern = os.path.join(settings.SHARED_STORAGE_PATH, f"{doc_id}_*")
+            files = glob.glob(pattern)
+            if files:
+                garbage_found.append(f"Storage: {len(files)} files")
+        except Exception:
+            pass
+        
+        if garbage_found:
+            print(f"[Cleanup] ⚠️ GARBAGE DETECTED for {doc_id}: {', '.join(garbage_found)}")
+        else:
+            print(f"[Cleanup] ✅ Verification passed - no garbage for {doc_id}")
+
 cleanup_service = CleanupService()
+

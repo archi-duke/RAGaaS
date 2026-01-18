@@ -89,6 +89,8 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
         generate_inverse_relations: true,
         allowed_entity_types: [] as string[],
         allowed_relation_types: [] as string[],
+        enable_text_cleaning: false,  // 번호/불릿 등 형식 문자 제거
+        enable_inference: false,  // 규칙 기반 관계 추론
     });
 
 
@@ -297,6 +299,35 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                                     <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '0.5rem', paddingLeft: '1.5rem' }}>
                                         예: 스승 → 제자, Teacher → Student
                                     </div>
+
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', marginTop: '1rem' }}>
+                                        <input
+                                            type="checkbox"
+                                            checked={graphParams.enable_text_cleaning}
+                                            onChange={(e) => setGraphParams({ ...graphParams, enable_text_cleaning: e.target.checked })}
+                                            style={{ width: '1rem', height: '1rem' }}
+                                        />
+                                        <span style={{ color: '#334155', fontWeight: 500 }}>텍스트 정제</span>
+                                    </label>
+
+                                    <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '0.5rem', paddingLeft: '1.5rem' }}>
+                                        번호, 불릿 등 형식 문자 제거
+                                    </div>
+
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', marginTop: '1rem' }}>
+                                        <input
+                                            type="checkbox"
+                                            checked={graphParams.enable_inference}
+                                            onChange={(e) => setGraphParams({ ...graphParams, enable_inference: e.target.checked })}
+                                            style={{ width: '1rem', height: '1rem' }}
+                                        />
+                                        <span style={{ color: '#334155', fontWeight: 500 }}>추론 관계 생성</span>
+                                    </label>
+
+                                    <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '0.5rem', paddingLeft: '1.5rem' }}>
+                                        예: 스승→스승 = 사조 (Neo4j만)
+                                    </div>
+
                                 </div>
                             </div>
                         </div>

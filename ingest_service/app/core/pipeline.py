@@ -191,38 +191,61 @@ class IngestPipeline:
         extractor_type: GraphExtractorType,
         config: Dict[str, Any]
     ) -> List[Dict[str, Any]]:
-        """노드에서 그래프 트리플 추출"""
+        """노드에서 그래프 트리플 추출
         
-        extractor = self.get_graph_extractor(extractor_type, config)
+        Note: LlamaIndex의 Path Extractor들은 PropertyGraphIndex와 함께 사용되도록 설계됨.
+        여기서는 직접 LLM을 호출하여 트리플을 추출하는 간소화된 방식 사용.
+        """
         
-        if extractor is None:
+        if extractor_type == GraphExtractorType.NONE:
             return []
         
-        # Extract paths from nodes
         all_triples = []
         
+        # 간소화된 LLM 기반 트리플 추출
         for node in nodes:
             try:
-                # SimpleLLMPathExtractor와 다른 추출기들은 
-                # extract() 또는 __call__() 메서드를 통해 추출
-                # 실제 구현 시 PropertyGraphIndex를 사용하는 것이 더 적합
-                extracted = extractor.extract([node])
+                text = node.get_content()
+                if len(text.strip()) < 50:  # 너무 짧은 텍스트는 스킵
+                    continue
                 
-                for path in extracted:
-                    # path는 (entity1, relation, entity2) 형태
-                    if hasattr(path, 'subj') and hasattr(path, 'obj'):
-                        triple = {
-                            "subject": str(path.subj),
-                            "predicate": str(path.rel),
-                            "object": str(path.obj),
-                            "source_node_id": node.node_id,
-                        }
-                        all_triples.append(triple)
+                # 간단한 프롬프트 기반 추출
+                prompt = f"""다음 텍스트에서 주요 엔티티와 관계를 추출하세요.
+형식: (주체, 관계, 객체)
+최대 5개까지 추출하세요.
+
+텍스트:
+{text[:2000]}
+
+트리플 (한 줄에 하나씩, 형식: 주체|관계|객체):"""
+                
+                response = self.llm.complete(prompt)
+                response_text = response.text.strip()
+                
+                # 응답 파싱
+                for line in response_text.split('\n'):
+                    line = line.strip()
+                    if '|' in line:
+                        parts = line.split('|')
+                        if len(parts) >= 3:
+                            triple = {
+                                "subject": parts[0].strip(),
+                                "predicate": parts[1].strip(),
+                                "object": parts[2].strip(),
+                                "source_node_id": node.node_id,
+                            }
+                            all_triples.append(triple)
+                            
             except Exception as e:
                 print(f"Error extracting from node {node.node_id}: {e}")
                 continue
+            
+            if len(all_triples) > 0 and len(all_triples) % 5 == 0:
+                print(f"[Pipeline] Extraction progress: {len(all_triples)} triples extracted so far...")
+
         
         return all_triples
+
     
     async def process(
         self,
@@ -231,24 +254,48 @@ class IngestPipeline:
         chunking_config: Dict[str, Any],
         graph_extractor_type: GraphExtractorType = GraphExtractorType.NONE,
         graph_config: Dict[str, Any] = None,
+        enable_text_cleaning: bool = False,
     ) -> Dict[str, Any]:
         """전체 인제스션 프로세스 실행"""
         
         graph_config = graph_config or {}
         
+        # 0. Text Cleaning (청크 가공 전 정제)
+        if enable_text_cleaning:
+            from app.core.text_cleaner import text_cleaner
+            original_len = len(text)
+            text = text_cleaner.clean(text)
+            print(f"[Pipeline] Text cleaned: {original_len} -> {len(text)} chars")
+        
         # 1. Chunk document
+        print(f"[Pipeline] Chunking document ({len(text)} chars)...")
         nodes = self.chunk_document(text, chunking_strategy, chunking_config)
+        print(f"[Pipeline] Created {len(nodes)} nodes.")
+
         
         # 2. Generate embeddings
+        print(f"[Pipeline] Generating embeddings for {len(nodes)} nodes...")
         embeddings = []
-        for node in nodes:
+        for i, node in enumerate(nodes):
             embedding = await self.embed_model.aget_text_embedding(node.get_content())
             embeddings.append(embedding)
+            if (i + 1) % 5 == 0:
+                print(f"[Pipeline] Embedded {i+1}/{len(nodes)} nodes...")
         
         # 3. Extract graph (if enabled)
         triples = []
         if graph_extractor_type != GraphExtractorType.NONE:
+            print(f"[Pipeline] Extracting graph using {graph_extractor_type}...")
             triples = self.extract_graph(nodes, graph_extractor_type, graph_config)
+            print(f"[Pipeline] Extracted {len(triples)} triples.")
+            
+            # 4. Entity Normalization (적재 직전)
+            if graph_config.get("enable_entity_normalization", True):
+                from app.core.entity_normalizer import entity_normalizer
+                original_count = len(triples)
+                triples = entity_normalizer.normalize_triples(triples)
+                triples = entity_normalizer.resolve_duplicates(triples)
+                print(f"[Pipeline] Entity normalized: {original_count} -> {len(triples)} triples")
         
         return {
             "nodes": nodes,
@@ -257,6 +304,8 @@ class IngestPipeline:
             "node_count": len(nodes),
             "triple_count": len(triples),
         }
+
+
 
 
 # Singleton instance

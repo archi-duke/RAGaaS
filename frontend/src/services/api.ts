@@ -37,6 +37,14 @@ export const docApi = {
         formData.append('file', file);
         if (config) {
             formData.append('chunking_config', JSON.stringify(config));
+            // Send enable_text_cleaning as separate form field
+            if (config.enable_text_cleaning !== undefined) {
+                formData.append('enable_text_cleaning', String(config.enable_text_cleaning));
+            }
+            // Send enable_inference as separate form field
+            if (config.enable_inference !== undefined) {
+                formData.append('enable_inference', String(config.enable_inference));
+            }
         }
         return api.post(`/knowledge-bases/${kbId}/documents`, formData, {
             headers: {
@@ -44,6 +52,7 @@ export const docApi = {
             },
         });
     },
+
     delete: (kbId: string, docId: string) => api.delete(`/knowledge-bases/${kbId}/documents/${docId}`),
     getChunks: (kbId: string, docId: string) => api.get(`/knowledge-bases/${kbId}/documents/${docId}/chunks`),
     updateChunk: (kbId: string, docId: string, chunkId: string, content: string) => {
