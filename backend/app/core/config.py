@@ -26,8 +26,10 @@ class Settings(BaseSettings):
 
     # Ingest Service (LlamaIndex based)
     INGEST_SERVICE_URL: str = "http://ingest-service:8001"
+    USE_INGEST_SERVICE: bool = False  # Feature flag: True = new LlamaIndex, False = legacy Doc2Onto
+    SHARED_STORAGE_PATH: str = "/data/uploads"  # Shared volume for file exchange
     
-    # Doc2Onto (Legacy - will be removed)
+    # Doc2Onto (Legacy - will be removed when USE_INGEST_SERVICE=True is stable)
     DOC2ONTO_CONFIG_PATH: str = "doc2onto_config.yaml"
 
     

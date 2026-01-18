@@ -71,18 +71,79 @@ async def upload_document(
         except Exception as e:
             logger.error(f"Failed to parse chunking_config override: {e}")
 
-    # Start background task
-    background_tasks.add_task(
-        ingestion_service.process_document,
-        kb_id,
-        doc.id,
-        doc.filename,
-        content,
-        kb.chunking_strategy,
-        final_config
-    )
+    # Feature flag: Use new Ingest Service or legacy processing
+    from app.core.config import settings
+    
+    if settings.USE_INGEST_SERVICE:
+        # New LlamaIndex-based Ingest Service
+        import os
+        import json as json_lib
+        from app.services.ingestion.ingest_client import ingest_client
+        
+        # Save file to shared storage
+        shared_path = settings.SHARED_STORAGE_PATH
+        os.makedirs(shared_path, exist_ok=True)
+        file_path = os.path.join(shared_path, f"{doc.id}_{doc.filename}")
+        
+        with open(file_path, "wb") as f:
+            f.write(content)
+        
+        logger.info(f"[IngestService] File saved to {file_path}")
+        
+        # Build graph config from frontend params
+        graph_config = {
+            "extractor_type": final_config.get("extractor_type", "simple"),
+            "max_paths_per_chunk": final_config.get("max_paths_per_chunk", 10),
+            "max_triplets_per_chunk": final_config.get("max_triplets_per_chunk", 20),
+            "num_workers": final_config.get("num_workers", 4),
+            "generate_inverse_relations": final_config.get("generate_inverse_relations", True),
+        }
+        
+        # Build chunking config for LlamaIndex
+        chunking_cfg = {
+            "strategy": kb.chunking_strategy or "fixed_size",
+            "chunk_size": final_config.get("chunk_size", 500),
+            "chunk_overlap": final_config.get("chunk_overlap", 100),
+            "window_size": final_config.get("window_size", 3),
+            "chunk_sizes": final_config.get("chunk_sizes", [2048, 512, 128]),
+            "breakpoint_threshold": final_config.get("breakpoint_threshold", 0.5),
+        }
+        
+        # Call Ingest Service asynchronously
+        async def call_ingest_service():
+            try:
+                result = await ingest_client.create_ingest_job(
+                    kb_id=kb_id,
+                    doc_id=doc.id,
+                    file_path=file_path,
+                    chunking_config=chunking_cfg,
+                    graph_config=graph_config if kb.enable_graph_rag else {},
+                    callback_url=None  # TODO: Implement callback endpoint
+                )
+                logger.info(f"[IngestService] Job created: {result}")
+            except Exception as e:
+                logger.error(f"[IngestService] Failed to create job: {e}")
+                # Update document status to ERROR
+                doc_obj = await DocModel.get(doc.id)
+                if doc_obj:
+                    doc_obj.status = DocumentStatus.ERROR.value
+                    await doc_obj.save()
+        
+        background_tasks.add_task(call_ingest_service)
+    else:
+        # Legacy Doc2Onto-based processing
+        background_tasks.add_task(
+            ingestion_service.process_document,
+            kb_id,
+            doc.id,
+            doc.filename,
+            content,
+            kb.chunking_strategy,
+            final_config
+        )
     
     return doc
+
 
 @router.get("/{kb_id}/documents", response_model=List[Document])
 async def list_documents(kb_id: str):
