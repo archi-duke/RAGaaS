@@ -24,8 +24,12 @@ class Settings(BaseSettings):
     # OpenAI
     OPENAI_API_KEY: str = ""
 
-    # Doc2Onto
+    # Ingest Service (LlamaIndex based)
+    INGEST_SERVICE_URL: str = "http://ingest-service:8001"
+    
+    # Doc2Onto (Legacy - will be removed)
     DOC2ONTO_CONFIG_PATH: str = "doc2onto_config.yaml"
+
     
     class Config:
         env_file = ".env"

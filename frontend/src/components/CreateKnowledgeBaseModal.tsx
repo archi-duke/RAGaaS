@@ -59,10 +59,18 @@ const LabelWithTooltip = ({ label, tooltip }: { label: string, tooltip: string }
 export default function CreateKnowledgeBaseModal({ isOpen, onClose, onCreateComplete }: CreateKnowledgeBaseModalProps) {
     const [name, setName] = useState('');
     const [description, setDescription] = useState('');
-    const [strategy, setStrategy] = useState('size');
+    const [strategy, setStrategy] = useState('fixed_size');
     const [config, setConfig] = useState({
-        chunk_size: 500,
-        overlap: 100,
+        chunk_size: 1024,
+        chunk_overlap: 20,
+        // Sliding Window
+        window_size: 3,
+        // Hierarchical
+        chunk_sizes: [2048, 512, 128],
+        // Semantic
+        buffer_size: 1,
+        breakpoint_threshold: 95,
+        // Legacy (for backward compatibility)
         parent_size: 2000,
         child_size: 500,
         parent_overlap: 0,
@@ -71,7 +79,6 @@ export default function CreateKnowledgeBaseModal({ isOpen, onClose, onCreateComp
         h2: true,
         h3: true,
         semantic_mode: false,
-        buffer_size: 1,
         breakpoint_type: 'percentile',
         breakpoint_amount: 95,
         // Graph RAG settings
@@ -83,6 +90,7 @@ export default function CreateKnowledgeBaseModal({ isOpen, onClose, onCreateComp
     const [isCreating, setIsCreating] = useState(false);
 
     if (!isOpen) return null;
+
 
     const handleCreate = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -113,24 +121,43 @@ export default function CreateKnowledgeBaseModal({ isOpen, onClose, onCreateComp
 
     const strategies = [
         {
-            id: 'size',
+            id: 'fixed_size',
             name: 'Fixed Size',
-            description: 'Chunks text into fixed-size segments with overlap.',
+            description: 'SentenceSplitter - 고정 크기로 문장 경계를 유지하며 분할',
             icon: <FileText size={20} />
         },
         {
-            id: 'parent_child',
-            name: 'Parent-Child',
-            description: 'Creates large parent chunks for context and small child chunks for retrieval.',
+            id: 'sliding_window',
+            name: 'Sliding Window',
+            description: 'SentenceWindowNodeParser - 문장 주변 윈도우 컨텍스트 포함',
             icon: <Settings size={20} />
         },
         {
-            id: 'context_aware',
-            name: 'Context Aware',
-            description: 'Splits text based on document structure (headers, markdown).',
+            id: 'hierarchical',
+            name: 'Hierarchical',
+            description: 'HierarchicalNodeParser - 다층 계층 구조로 분할 (2048→512→128)',
+            icon: <Settings size={20} />
+        },
+        {
+            id: 'semantic',
+            name: 'Semantic',
+            description: 'SemanticSplitterNodeParser - 의미적 유사도 기반 분할',
             icon: <FileText size={20} />
+        },
+        {
+            id: 'markdown',
+            name: 'Markdown / Section',
+            description: 'MarkdownNodeParser - 문서 구조(헤더) 기반 분할',
+            icon: <FileText size={20} />
+        },
+        {
+            id: 'hybrid',
+            name: 'Hybrid',
+            description: 'Markdown + Fixed Size 복합 전략',
+            icon: <Settings size={20} />
         }
     ];
+
 
     return (
         <div style={{
@@ -339,12 +366,12 @@ export default function CreateKnowledgeBaseModal({ isOpen, onClose, onCreateComp
                                                 {s.name} Settings
                                             </h4>
 
-                                            {s.id === 'size' && (
+                                            {s.id === 'fixed_size' && (
                                                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
                                                     <div>
                                                         <LabelWithTooltip
                                                             label="Chunk Size"
-                                                            tooltip="The maximum number of characters in each chunk."
+                                                            tooltip="청크당 최대 문자 수"
                                                         />
                                                         <input
                                                             type="number"
@@ -355,170 +382,136 @@ export default function CreateKnowledgeBaseModal({ isOpen, onClose, onCreateComp
                                                     </div>
                                                     <div>
                                                         <LabelWithTooltip
-                                                            label="Overlap"
-                                                            tooltip="The number of characters to overlap between chunks to maintain context."
+                                                            label="Chunk Overlap"
+                                                            tooltip="청크 간 겹치는 문자 수"
                                                         />
                                                         <input
                                                             type="number"
                                                             className="input"
-                                                            value={config.overlap}
-                                                            onChange={(e) => setConfig({ ...config, overlap: parseInt(e.target.value) })}
+                                                            value={config.chunk_overlap}
+                                                            onChange={(e) => setConfig({ ...config, chunk_overlap: parseInt(e.target.value) })}
                                                         />
                                                     </div>
                                                 </div>
                                             )}
 
-                                            {s.id === 'parent_child' && (
+                                            {s.id === 'sliding_window' && (
+                                                <div>
+                                                    <LabelWithTooltip
+                                                        label="Window Size"
+                                                        tooltip="각 문장 주변에 포함할 문장 수 (기본: 3)"
+                                                    />
+                                                    <input
+                                                        type="number"
+                                                        className="input"
+                                                        value={config.window_size}
+                                                        onChange={(e) => setConfig({ ...config, window_size: parseInt(e.target.value) })}
+                                                        min={1}
+                                                        max={10}
+                                                    />
+                                                </div>
+                                            )}
+
+                                            {s.id === 'hierarchical' && (
+                                                <div>
+                                                    <LabelWithTooltip
+                                                        label="Chunk Sizes (계층별)"
+                                                        tooltip="계층별 청크 크기 (예: 2048, 512, 128)"
+                                                    />
+                                                    <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                                        <input
+                                                            type="number"
+                                                            className="input"
+                                                            value={config.chunk_sizes[0]}
+                                                            onChange={(e) => setConfig({ ...config, chunk_sizes: [parseInt(e.target.value), config.chunk_sizes[1], config.chunk_sizes[2]] })}
+                                                            placeholder="Level 1"
+                                                        />
+                                                        <input
+                                                            type="number"
+                                                            className="input"
+                                                            value={config.chunk_sizes[1]}
+                                                            onChange={(e) => setConfig({ ...config, chunk_sizes: [config.chunk_sizes[0], parseInt(e.target.value), config.chunk_sizes[2]] })}
+                                                            placeholder="Level 2"
+                                                        />
+                                                        <input
+                                                            type="number"
+                                                            className="input"
+                                                            value={config.chunk_sizes[2]}
+                                                            onChange={(e) => setConfig({ ...config, chunk_sizes: [config.chunk_sizes[0], config.chunk_sizes[1], parseInt(e.target.value)] })}
+                                                            placeholder="Level 3"
+                                                        />
+                                                    </div>
+                                                </div>
+                                            )}
+
+                                            {s.id === 'semantic' && (
                                                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
                                                     <div>
                                                         <LabelWithTooltip
-                                                            label="Parent Chunk Size"
-                                                            tooltip="Size of the larger parent chunks used for context retrieval."
+                                                            label="Buffer Size"
+                                                            tooltip="비교를 위해 그룹화할 문장 수"
                                                         />
                                                         <input
                                                             type="number"
                                                             className="input"
-                                                            value={config.parent_size}
-                                                            onChange={(e) => setConfig({ ...config, parent_size: parseInt(e.target.value) })}
+                                                            value={config.buffer_size}
+                                                            onChange={(e) => setConfig({ ...config, buffer_size: parseInt(e.target.value) })}
+                                                            min={1}
+                                                            max={5}
                                                         />
                                                     </div>
                                                     <div>
                                                         <LabelWithTooltip
-                                                            label="Child Chunk Size"
-                                                            tooltip="Size of the smaller child chunks used for precise matching."
+                                                            label="Breakpoint Threshold"
+                                                            tooltip="분할 포인트 결정 임계값 (50-99)"
                                                         />
                                                         <input
                                                             type="number"
                                                             className="input"
-                                                            value={config.child_size}
-                                                            onChange={(e) => setConfig({ ...config, child_size: parseInt(e.target.value) })}
-                                                        />
-                                                    </div>
-                                                    <div>
-                                                        <LabelWithTooltip
-                                                            label="Parent Overlap"
-                                                            tooltip="Overlap for parent chunks."
-                                                        />
-                                                        <input
-                                                            type="number"
-                                                            className="input"
-                                                            value={config.parent_overlap}
-                                                            onChange={(e) => setConfig({ ...config, parent_overlap: parseInt(e.target.value) })}
-                                                        />
-                                                    </div>
-                                                    <div>
-                                                        <LabelWithTooltip
-                                                            label="Child Overlap"
-                                                            tooltip="Overlap for child chunks."
-                                                        />
-                                                        <input
-                                                            type="number"
-                                                            className="input"
-                                                            value={config.child_overlap}
-                                                            onChange={(e) => setConfig({ ...config, child_overlap: parseInt(e.target.value) })}
+                                                            value={config.breakpoint_threshold}
+                                                            onChange={(e) => setConfig({ ...config, breakpoint_threshold: parseInt(e.target.value) })}
+                                                            min={50}
+                                                            max={99}
                                                         />
                                                     </div>
                                                 </div>
                                             )}
 
-                                            {s.id === 'context_aware' && (
-                                                <div>
-                                                    <div style={{ marginBottom: '1rem', display: 'flex', gap: '1rem' }}>
-                                                        <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
-                                                            <input
-                                                                type="radio"
-                                                                name="context_mode"
-                                                                checked={!config.semantic_mode}
-                                                                onChange={() => setConfig({ ...config, semantic_mode: false })}
-                                                            />
-                                                            Split by Headers
-                                                        </label>
-                                                        <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
-                                                            <input
-                                                                type="radio"
-                                                                name="context_mode"
-                                                                checked={config.semantic_mode}
-                                                                onChange={() => setConfig({ ...config, semantic_mode: true })}
-                                                            />
-                                                            Semantic Split (LLM)
-                                                        </label>
-                                                    </div>
-
-                                                    {!config.semantic_mode ? (
-                                                        <div>
-                                                            <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem' }}>Header Levels</label>
-                                                            <div style={{ display: 'flex', gap: '1.5rem' }}>
-                                                                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
-                                                                    <input
-                                                                        type="checkbox"
-                                                                        checked={config.h1}
-                                                                        onChange={(e) => setConfig({ ...config, h1: e.target.checked })}
-                                                                    />
-                                                                    H1 (#)
-                                                                </label>
-                                                                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
-                                                                    <input
-                                                                        type="checkbox"
-                                                                        checked={config.h2}
-                                                                        onChange={(e) => setConfig({ ...config, h2: e.target.checked })}
-                                                                    />
-                                                                    H2 (##)
-                                                                </label>
-                                                                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
-                                                                    <input
-                                                                        type="checkbox"
-                                                                        checked={config.h3}
-                                                                        onChange={(e) => setConfig({ ...config, h3: e.target.checked })}
-                                                                    />
-                                                                    H3 (###)
-                                                                </label>
-                                                            </div>
-                                                        </div>
-                                                    ) : (
-                                                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-                                                            <div>
-                                                                <LabelWithTooltip
-                                                                    label="Buffer Size"
-                                                                    tooltip="Number of sentences to group together for comparison. Larger buffer reduces noise."
-                                                                />
-                                                                <input
-                                                                    type="number"
-                                                                    className="input"
-                                                                    value={config.buffer_size}
-                                                                    onChange={(e) => setConfig({ ...config, buffer_size: parseInt(e.target.value) })}
-                                                                />
-                                                            </div>
-                                                            <div>
-                                                                <LabelWithTooltip
-                                                                    label="Threshold Type"
-                                                                    tooltip="Method to determine the split point based on semantic similarity."
-                                                                />
-                                                                <select
-                                                                    className="input"
-                                                                    value={config.breakpoint_type}
-                                                                    onChange={(e) => setConfig({ ...config, breakpoint_type: e.target.value })}
-                                                                >
-                                                                    <option value="percentile">Percentile</option>
-                                                                    <option value="standard_deviation">Standard Deviation</option>
-                                                                    <option value="interquartile">Interquartile</option>
-                                                                </select>
-                                                            </div>
-                                                            <div>
-                                                                <LabelWithTooltip
-                                                                    label="Threshold Amount"
-                                                                    tooltip="Sensitivity of the split. Higher values create smaller, more granular chunks."
-                                                                />
-                                                                <input
-                                                                    type="number"
-                                                                    className="input"
-                                                                    value={config.breakpoint_amount}
-                                                                    onChange={(e) => setConfig({ ...config, breakpoint_amount: parseFloat(e.target.value) })}
-                                                                />
-                                                            </div>
-                                                        </div>
-                                                    )}
+                                            {s.id === 'markdown' && (
+                                                <div style={{ padding: '0.5rem', background: '#e2e8f0', borderRadius: '4px', fontSize: '0.85rem', color: '#475569' }}>
+                                                    Markdown 문서의 헤더 구조를 기반으로 자동 분할됩니다. 추가 설정이 필요 없습니다.
                                                 </div>
                                             )}
+
+                                            {s.id === 'hybrid' && (
+                                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                                                    <div>
+                                                        <LabelWithTooltip
+                                                            label="Chunk Size"
+                                                            tooltip="Markdown 분할 후 큰 섹션에 적용할 최대 청크 크기"
+                                                        />
+                                                        <input
+                                                            type="number"
+                                                            className="input"
+                                                            value={config.chunk_size}
+                                                            onChange={(e) => setConfig({ ...config, chunk_size: parseInt(e.target.value) })}
+                                                        />
+                                                    </div>
+                                                    <div>
+                                                        <LabelWithTooltip
+                                                            label="Chunk Overlap"
+                                                            tooltip="청크 간 겹치는 문자 수"
+                                                        />
+                                                        <input
+                                                            type="number"
+                                                            className="input"
+                                                            value={config.chunk_overlap}
+                                                            onChange={(e) => setConfig({ ...config, chunk_overlap: parseInt(e.target.value) })}
+                                                        />
+                                                    </div>
+                                                </div>
+                                            )}
+
                                         </div>
                                     )}
                                 </div>
