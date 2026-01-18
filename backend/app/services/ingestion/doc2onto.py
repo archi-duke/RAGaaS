@@ -135,6 +135,9 @@ class Doc2OntoProcessor:
                 # RAGaaS: Create Entity-Chunk connections for Fuseki as well
                 await self._link_entities_to_chunks_fuseki(output_dir, kb_id, doc_id)
             
+            # RAGaaS: Always save triple-chunk mappings to MongoDB for retrieval mapping
+            await self._save_triple_mappings(output_dir, kb_id, doc_id)
+            
             # Note: Milvus loading in Doc2Onto is redundant when using RAGaaS hybrid approach.
             # Chunks are already indexed by RAGaaS before calling Doc2Onto.
             # chunks_path = os.path.join(output_dir, "chunks.jsonl")
@@ -175,14 +178,16 @@ class Doc2OntoProcessor:
         from requests.auth import HTTPBasicAuth
         import re
         
+        print(f"[Doc2Onto] Entering _load_to_fuseki with output_dir: {output_dir}", flush=True)
+        
         base_trig = os.path.join(output_dir, "base.trig")
         evidence_trig = os.path.join(output_dir, "evidence.trig")
         
-        print(f"[Doc2Onto] Checking for output files in {output_dir}:")
+        print(f"[Doc2Onto] Checking for output files:", flush=True)
         if os.path.exists(output_dir):
-             print(f"[Doc2Onto] Files: {os.listdir(output_dir)}")
+             print(f"[Doc2Onto] Output Dir Exists. Contents: {os.listdir(output_dir)}", flush=True)
         else:
-             print(f"[Doc2Onto] Output dir {output_dir} does NOT exist!")
+             print(f"[Doc2Onto] Output dir {output_dir} does NOT exist! Current CWD: {os.getcwd()}", flush=True)
         
         # Use RAGaaS naming convention (kb_ prefix)
         safe_name = f"kb_{kb_id.replace('-', '_')}"
@@ -194,99 +199,100 @@ class Doc2OntoProcessor:
         gsp_url = f"{settings.FUSEKI_URL}/{safe_name}/data"
         auth = HTTPBasicAuth("admin", "admin")
         
-        print(f"[Doc2Onto] Uploading to Fuseki dataset: {safe_name} via {gsp_url}")
+        print(f"[Doc2Onto] Uploading to Fuseki dataset: {safe_name} via {gsp_url}", flush=True)
         
         for trig_path in [base_trig, evidence_trig]:
             if os.path.exists(trig_path):
                 try:
                     # Check file size
-                    print(f"[Doc2Onto] Found {os.path.basename(trig_path)} ({os.path.getsize(trig_path)} bytes)")
+                    print(f"[Doc2Onto] Found {os.path.basename(trig_path)} ({os.path.getsize(trig_path)} bytes)", flush=True)
                     
                     with open(trig_path, "r", encoding="utf-8") as f:
                         content = f.read()
                     
                     if not content.strip():
-                        print(f"[Doc2Onto] SKIPPING {os.path.basename(trig_path)}: File is empty.")
+                        print(f"[Doc2Onto] SKIPPING {os.path.basename(trig_path)}: File is empty.", flush=True)
                         continue
 
                     # --- NORMALIZATION LOGIC ---
                     if os.path.basename(trig_path) == "base.trig":
-                        print("[Doc2Onto] Applying Entity Normalization to base.trig...")
+                        print("[Doc2Onto] Applying Entity Normalization to base.trig...", flush=True)
                         normalized_lines = []
                         
-                        # Regex to capture local names in URIs: <.../inst/NAME> or <.../class/NAME>
-                        # We focus on 'inst' (instances) mainly.
-                        # Pattern: <http://example.org/onto/inst/OriginalName>
-                        uri_pattern = re.compile(r'<(http://example.org/onto/inst/)([^>]+)>')
+                        # Regex to capture ANY http URI ending with a name
+                        # We force standard prefix: <http://rag.local/entity/>
+                        # Pattern captures: 1) The whole match (implicit) 2) The local name (last part)
+                        # We ignore the original prefix and force our own.
+                        uri_pattern = re.compile(r'<(http://[^>]+/[^>/]+)>')
                         
                         # Track aliases to add: {normalized_uri: {set of aliases}}
                         aliases_to_add = {}
+
+                        standard_prefix = "http://rag.local/entity/"
 
                         lines = content.split('\n')
                         for line in lines:
                             # Function to replace and track
                             def replace_and_track(match):
-                                prefix = match.group(1)
-                                original_local = match.group(2)
+                                original_uri = match.group(1)
+                                # Extract local name (after last / or #)
+                                if '#' in original_uri:
+                                    original_local = original_uri.split('#')[-1]
+                                else:
+                                    original_local = original_uri.split('/')[-1]
                                 
-                                # Decode if it's percent encoded? Usually it's not in trig file text unless written so.
-                                # But TrigBuilder usually writes readable chars if not strict.
-                                # Let's assume it's readable.
+                                # Skip if it looks like a standard schema term (rdf, rdfs, owl, etc.)
+                                # simple heuristic: if prefix is w3.org, skip
+                                if "w3.org" in original_uri:
+                                    return match.group(0)
+
                                 import urllib.parse
                                 decoded_name = urllib.parse.unquote(original_local)
                                 
                                 normalized_name = self.normalize_entity_name(decoded_name)
                                 
-                                # If changed, track alias
+                                # Force new URI
+                                new_uri = f"{standard_prefix}{normalized_name}"
+                                
+                                # Add alias to 'aliases_to_add' if name was changed
                                 if normalized_name != decoded_name:
-                                    norm_uri = f"{prefix}{normalized_name}"
-                                    if norm_uri not in aliases_to_add:
-                                        aliases_to_add[norm_uri] = set()
-                                    aliases_to_add[norm_uri].add(decoded_name)
-                                    return f"<{prefix}{normalized_name}>"
-                                else:
-                                    return match.group(0)
+                                    if new_uri not in aliases_to_add:
+                                        aliases_to_add[new_uri] = set()
+                                    aliases_to_add[new_uri].add(decoded_name)
+                                
+                                return f"<{new_uri}>"
 
                             new_line = uri_pattern.sub(replace_and_track, line)
                             normalized_lines.append(new_line)
                         
                         # Add Aliases (skos:altLabel)
                         if aliases_to_add:
-                            print(f"[Doc2Onto] Adding {len(aliases_to_add)} normalized entities with aliases.")
-                            # Ensure prefixes are available if not present
-                            # Usually base.trig has prefixes at top. We append at end or inside graph block?
-                            # Trig structure is: PREFIX ... { GRAPH ... { ... } }
-                            # Simpler: Just append to the main graph block if possible, or use INSERT DATA later?
-                            # Parsing Trig relies on brackets.
-                            # EASIER: Just append simple triples at the end if it's Turtle, but Trig is named graphs.
-                            # We should insert aliases into the SAME lines if we can, or just append to content before last '}'
-                            
-                            # Let's try to inject into the default graph or the specific named graph.
-                            # Doc2Onto uses: GRAPH <urn:onto:base> { ... }
-                            # We can find the closing brace of that graph?
-                            # Or simpler: Just send a separate SPARQL UPDATE for aliases after file upload.
-                            # Changing file content is risky for brackets.
-                            # STRATEGY: 
-                            # 1. Upload normalized content (modified file).
-                            # 2. Perform SPARQL Update for aliases.
+                            print(f"[Doc2Onto] Adding {len(aliases_to_add)} normalized entities with aliases.", flush=True)
                             
                             content = '\n'.join(normalized_lines)
                         
                         # Upload normalized content
-                        response = requests.post(
-                            gsp_url,
-                            data=content.encode("utf-8"),
-                            headers={"Content-Type": "application/trig"},
-                            auth=auth,
-                            timeout=60
-                        )
+                        print(f"[Doc2Onto] Sending Request to {gsp_url}...", flush=True)
+                        try:
+                            response = requests.post(
+                                gsp_url,
+                                data=content.encode("utf-8"),
+                                headers={"Content-Type": "application/trig"},
+                                auth=auth,
+                                timeout=60
+                            )
+                        except Exception as req_err:
+                            print(f"[Doc2Onto] REQUEST FAILED: {req_err}", flush=True)
+                            import traceback
+                            traceback.print_exc()
+                            continue
                         
                         if response.status_code in [200, 201, 204]:
-                            print(f"[Doc2Onto] SUCCESS: Uploaded normalized base.trig")
+                            print(f"[Doc2Onto] SUCCESS: Uploaded normalized base.trig", flush=True)
                             
                             # Insert Aliases via SPARQL Update
                             if aliases_to_add:
-                                print(f"[Doc2Onto] Inserting aliases for normalized entities...")
+                                print(f"[Doc2Onto] Inserting aliases for normalized entities...", flush=True)
                                 update_query = "PREFIX skos: <http://www.w3.org/2004/02/skos/core#>\nINSERT DATA { GRAPH <urn:onto:base> {\n"
                                 for uri, alias_set in aliases_to_add.items():
                                     for alias in alias_set:
@@ -297,30 +303,38 @@ class Doc2OntoProcessor:
                                 
                                 update_endpoint = f"{settings.FUSEKI_URL}/{safe_name}/update"
                                 try:
-                                    requests.post(update_endpoint, data={"update": update_query}, auth=auth)
-                                    print("[Doc2Onto] Aliases inserted successfully.")
+                                    requests.post(update_endpoint, data={"update": update_query}, auth=auth, timeout=30)
+                                    print("[Doc2Onto] Aliases inserted successfully.", flush=True)
                                 except Exception as e:
-                                    print(f"[Doc2Onto] Failed to insert aliases: {e}")
+                                    print(f"[Doc2Onto] Failed to insert aliases: {e}", flush=True)
                                     
                         else:
-                            print(f"[Doc2Onto] ERROR: Failed to upload normalized base.trig: {response.status_code} {response.text}")
+                            print(f"[Doc2Onto] ERROR: Failed to upload normalized base.trig: {response.status_code} {response.text}", flush=True)
 
                     else:
                         # EVIDENCE TRIG (Usually metadata, no normalization needed or safer not to touch)
-                        response = requests.post(
-                            gsp_url,
-                            data=content.encode("utf-8"),
-                            headers={"Content-Type": "application/trig"},
-                            auth=auth,
-                            timeout=60
-                        )
+                        print(f"[Doc2Onto] Uploading evidence.trig to {gsp_url}...", flush=True)
+                        try:
+                            response = requests.post(
+                                gsp_url,
+                                data=content.encode("utf-8"),
+                                headers={"Content-Type": "application/trig"},
+                                auth=auth,
+                                timeout=60
+                            )
+                        except Exception as req_err:
+                            print(f"[Doc2Onto] REQUEST FAILED (Evidence): {req_err}", flush=True)
+                            continue
+
                         if response.status_code in [200, 201, 204]:
-                            print(f"[Doc2Onto] SUCCESS: Uploaded {os.path.basename(trig_path)}")
+                            print(f"[Doc2Onto] SUCCESS: Uploaded {os.path.basename(trig_path)}", flush=True)
                         else:
-                            print(f"[Doc2Onto] ERROR: Failed to upload {os.path.basename(trig_path)}: {response.status_code}")
+                            print(f"[Doc2Onto] ERROR: Failed to upload {os.path.basename(trig_path)}: {response.status_code}", flush=True)
 
                 except Exception as e:
-                    print(f"[Doc2Onto] EXCEPTION uploading {trig_path}: {e}")
+                    print(f"[Doc2Onto] EXCEPTION uploading {trig_path}: {e}", flush=True)
+                    import traceback
+                    traceback.print_exc()
             else:
                 print(f"[Doc2Onto] MISSING: {trig_path} not found.")
 
@@ -617,6 +631,209 @@ class Doc2OntoProcessor:
                 print(f"[Doc2Onto] Failed to insert triple: {e}")
 
         print(f"[Doc2Onto] Inserted {count} triples to Neo4j")
+
+    async def _save_triple_mappings(self, output_dir: str, kb_id: str, doc_id: str):
+        """Save triple-chunk mappings from candidates file to MongoDB for retrieval."""
+        print(f"[Doc2Onto] _save_triple_mappings called: output_dir={output_dir}, kb_id={kb_id}, doc_id={doc_id}")
+        
+        try:
+            from app.models.triple_chunk_mapping import TripleChunkMapping, compute_triple_hash
+            from pymilvus import Collection
+            from app.core.milvus import connect_milvus
+        except Exception as e:
+            print(f"[Doc2Onto] ERROR importing dependencies: {e}")
+            import traceback
+            traceback.print_exc()
+            return
+        
+        candidates_path = os.path.join(output_dir, "candidates_filtered.jsonl")
+        doc2onto_chunks_path = os.path.join(output_dir, "chunks.jsonl")
+        
+        print(f"[Doc2Onto] Checking files: candidates={os.path.exists(candidates_path)}, chunks={os.path.exists(doc2onto_chunks_path)}")
+        
+        if not os.path.exists(candidates_path):
+            print(f"[Doc2Onto] No candidates file for triple-chunk mapping")
+            return
+
+        # Load Doc2Onto sections (chunks)
+        doc2onto_sections = {}
+        if os.path.exists(doc2onto_chunks_path):
+            with open(doc2onto_chunks_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    if not line.strip(): continue
+                    try:
+                        section = json.loads(line)
+                        chunk_idx = section.get("chunk_idx")
+                        text = section.get("text", "")
+                        doc2onto_sections[chunk_idx] = text
+                    except:
+                        continue
+            print(f"[Doc2Onto] Loaded {len(doc2onto_sections)} Doc2Onto sections")
+        
+        # Connect to Milvus to get RAGaaS chunks
+        try:
+            connect_milvus()
+            collection_name = f"kb_{kb_id.replace('-', '_')}"
+            collection = Collection(collection_name)
+            collection.load()
+            
+            ragaas_chunks = collection.query(
+                expr=f'doc_id == "{doc_id}"',
+                output_fields=['chunk_id', 'content'],
+                limit=1000
+            )
+            print(f"[Doc2Onto] Loaded {len(ragaas_chunks)} RAGaaS chunks from Milvus")
+        except Exception as e:
+            print(f"[Doc2Onto] ERROR loading Milvus collection: {e}")
+            ragaas_chunks = []
+        
+        # Build section -> RAGaaS chunks mapping
+        section_to_chunks = {}
+        for section_idx, section_text in doc2onto_sections.items():
+            section_to_chunks[section_idx] = []
+            section_text_lower = section_text.lower().strip()
+            
+            for ragaas_chunk in ragaas_chunks:
+                chunk_content = ragaas_chunk['content'].lower().strip()
+                
+                # Check if section text is contained in chunk or vice versa
+                # Or check for significant overlap
+                if section_text_lower in chunk_content or chunk_content in section_text_lower:
+                    section_to_chunks[section_idx].append(ragaas_chunk['chunk_id'])
+                elif len(section_text_lower) > 50 and len(chunk_content) > 50:
+                    # Check for substring overlap (at least 50 chars)
+                    common_len = 0
+                    for i in range(min(len(section_text_lower), len(chunk_content))):
+                        if section_text_lower[i:i+50] == chunk_content[i:i+50]:
+                            common_len = 50
+                            break
+                    if common_len > 0:
+                        section_to_chunks[section_idx].append(ragaas_chunk['chunk_id'])
+        
+        print(f"[Doc2Onto] Mapped {len(section_to_chunks)} sections to RAGaaS chunks")
+
+        print(f"[Doc2Onto] Saving triple-chunk mappings to MongoDB...")
+        
+        count = 0
+        saved_hashes = set()  # prevent duplicate triples for same doc
+        
+        try:
+            with open(candidates_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    if not line.strip(): continue
+                    try:
+                        record = json.loads(line)
+                    except:
+                        continue
+                        
+                    triples_to_map = record.get("triples", [])
+                    
+                    for triple in triples_to_map:
+                        subj = triple.get("subject", "")
+                        pred = triple.get("predicate", "")
+                        obj = triple.get("object", "")
+                        
+                        if not subj or not obj: continue
+                        if subj == "Unknown" or obj == "Unknown": continue
+                        
+                        # Normalize names
+                        norm_subj = self.normalize_entity_name(subj)
+                        norm_obj = self.normalize_entity_name(obj)
+                        
+                        # Unique Identifier for this triple in this document
+                        t_hash = compute_triple_hash(norm_subj, pred, norm_obj)
+                        
+                        # Check duplicate
+                        if t_hash in saved_hashes:
+                            continue
+                        saved_hashes.add(t_hash)
+                        
+                        # Get section index from source_chunk_id
+                        source_chunk_id = triple.get("source_chunk_id", "")
+                        section_idx = None
+                        if isinstance(source_chunk_id, str) and '|' in source_chunk_id:
+                            try:
+                                section_idx = int(source_chunk_id.split('|')[-1])
+                            except:
+                                pass
+                        
+                        # 1. Try Section-based Mapping
+                        mapped_chunks = []
+                        if section_idx is not None:
+                             mapped_chunks = list(section_to_chunks.get(section_idx, []))
+                        
+                        # 2. Fallback: Entity-based Mapping (If section mapping failed OR yields no chunks)
+                        if not mapped_chunks:
+                            # Try to find chunks containing BOTH subject and object
+                            for ragaas_chunk in ragaas_chunks:
+                                content = ragaas_chunk['content']
+                                # Normalize content for check
+                                norm_content = content.lower()
+                                ns_lower = norm_subj.lower()
+                                no_lower = norm_obj.lower()
+                                s_lower = subj.lower()
+                                o_lower = obj.lower()
+                                
+                                has_subj = ns_lower in norm_content or s_lower in norm_content
+                                has_obj = no_lower in norm_content or o_lower in norm_content
+                                
+                                if has_subj and has_obj:
+                                    mapped_chunks.append(ragaas_chunk['chunk_id'])
+                        
+                        # 3. Last Resort: Subject OR Object match (if strict match failed)
+                        if not mapped_chunks:
+                             for ragaas_chunk in ragaas_chunks:
+                                content = ragaas_chunk['content']
+                                norm_content = content.lower()
+                                ns_lower = norm_subj.lower()
+                                s_lower = subj.lower()
+                                
+                                # Just Subject match is often enough for 'context'
+                                if ns_lower in norm_content or s_lower in norm_content:
+                                    mapped_chunks.append(ragaas_chunk['chunk_id'])
+
+                        # Save mapping for each matching chunk
+                        if mapped_chunks:
+                            # Limit to top 3 relevant chunks to avoid explosion
+                            for chunk_id in list(set(mapped_chunks))[:3]:
+                                mapping = TripleChunkMapping(
+                                    kb_id=kb_id,
+                                    doc_id=doc_id,
+                                    chunk_id=chunk_id,
+                                    triple_hash=t_hash,
+                                    subject=norm_subj,
+                                    predicate=pred,
+                                    object=norm_obj,
+                                    source_start=0,
+                                    source_end=1000
+                                )
+                                await mapping.insert()
+                                count += 1
+                        else:
+                            # Fallback: use section index as chunk index (even if not in Milvus)
+                            # This ensures the button at least appears, even if broken
+                            cid = f"{doc_id}_{section_idx if section_idx is not None else 0}"
+                            mapping = TripleChunkMapping(
+                                kb_id=kb_id,
+                                doc_id=doc_id,
+                                chunk_id=cid,
+                                triple_hash=t_hash,
+                                subject=norm_subj,
+                                predicate=pred,
+                                object=norm_obj,
+                                source_start=0,
+                                source_end=1000
+                            )
+                            await mapping.insert()
+                            count += 1
+
+            
+            print(f"[Doc2Onto] Saved {count} triple mappings to MongoDB")
+        except Exception as e:
+            print(f"[Doc2Onto] ERROR saving triple mappings: {e}")
+            import traceback
+            traceback.print_exc()
+
 
     async def _load_chunks_to_milvus_adapter(self, jsonl_path: str, kb_id: str, doc_id: str):
         print(f"[Doc2Onto] Loading chunks to Milvus for KB: {kb_id}")

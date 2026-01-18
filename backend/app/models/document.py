@@ -1,7 +1,8 @@
-from sqlalchemy import Column, String, DateTime, ForeignKey, Enum
-from app.core.database import Base
-import uuid
 from datetime import datetime
+from typing import Optional
+from beanie import Document
+from pydantic import Field
+import uuid
 import enum
 
 class DocumentStatus(str, enum.Enum):
@@ -11,15 +12,18 @@ class DocumentStatus(str, enum.Enum):
     ERROR = "error"
     DELETING = "deleting"
 
+class Document(Document):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    kb_id: str
+    filename: str
+    file_type: str
+    status: str = DocumentStatus.PENDING.value
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
 
-class Document(Base):
-    __tablename__ = "documents"
-
-    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    kb_id = Column(String, ForeignKey("knowledge_bases.id"))
-    filename = Column(String)
-    file_type = Column(String)
-    status = Column(String, default=DocumentStatus.PENDING.value)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=True)
-
+    class Settings:
+        name = "documents"
+        indexes = [
+            "kb_id",
+            "status"
+        ]

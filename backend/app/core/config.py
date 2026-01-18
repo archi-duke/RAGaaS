@@ -5,7 +5,8 @@ class Settings(BaseSettings):
     API_V1_STR: str = "/api"
     
     # Database
-    DATABASE_URL: str = "sqlite+aiosqlite:////app/data/rag_system.db"
+    MONGO_URI: str = "mongodb://root:example@mongo:27017"
+    MONGO_DB: str = "ragaas"
     
     # Milvus
     MILVUS_HOST: str = "localhost"

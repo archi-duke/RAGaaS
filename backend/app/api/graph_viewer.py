@@ -3,8 +3,6 @@ from typing import List, Dict, Any, Optional
 from pydantic import BaseModel
 from app.core.neo4j_client import neo4j_client
 from app.core.fuseki import fuseki_client
-from app.core.database import get_db
-from sqlalchemy.ext.asyncio import AsyncSession
 import urllib.parse
 
 router = APIRouter()
@@ -113,6 +111,7 @@ async def expand_graph(
         sparql = f"""
         PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
         SELECT DISTINCT ?s ?p ?o ?sLabel ?oLabel
+        FROM <urn:x-arq:UnionGraph>
         WHERE {{
             {{ 
                 ?s ?p ?o . 

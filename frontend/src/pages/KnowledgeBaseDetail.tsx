@@ -143,13 +143,17 @@ export default function KnowledgeBaseDetail() {
             const data = JSON.parse(event.data);
             if (data.type === 'document_status_update') {
                 console.log("Updating doc status:", data);
-                setDocuments((prevDocs) =>
-                    prevDocs.map((doc) =>
-                        doc.id === data.doc_id
-                            ? { ...doc, status: data.status }
-                            : doc
-                    )
-                );
+                if (data.status === 'deleted') {
+                    setDocuments((prevDocs) => prevDocs.filter((doc) => doc.id !== data.doc_id));
+                } else {
+                    setDocuments((prevDocs) =>
+                        prevDocs.map((doc) =>
+                            doc.id === data.doc_id
+                                ? { ...doc, status: data.status }
+                                : doc
+                        )
+                    );
+                }
             }
         };
 

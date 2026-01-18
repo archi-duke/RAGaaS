@@ -260,6 +260,8 @@ class PipelineExecutor:
         custom_query_prompt = params.get("custom_query_prompt", "")
         merge_mode = params.get("merge_mode", "union")
         enable_entity_expansion = params.get("enable_entity_expansion", False)
+        # [NEW] Extract Prompt from Pipeline Params ensures it acts like a parameter
+        sparql_prompt_template = params.get("sparql_prompt_template", None)
         
         strategy = retrieval_factory.get_strategy("hybrid_graph")
         new_results = await strategy.search(
@@ -276,7 +278,9 @@ class PipelineExecutor:
             use_schema_mode=use_schema_mode,
             use_dynamic_schema=use_dynamic_schema,
             custom_query_prompt=custom_query_prompt,
-            enable_entity_expansion=enable_entity_expansion
+            enable_entity_expansion=enable_entity_expansion,
+            # Pass the pipeline parameter prompt
+            sparql_prompt_template=sparql_prompt_template
         )
         
         ctx.results = self._update_results_with_history(ctx.results, new_results, "Graph", merge_mode)

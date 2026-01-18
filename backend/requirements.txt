@@ -2,15 +2,12 @@ fastapi
 uvicorn[standard]
 pymilvus
 python-multipart
-sqlalchemy
-aiosqlite
 openai
 pydantic-settings
 langchain-text-splitters
 pypdf
 tiktoken
 sentence-transformers
-greenlet
 langchain-experimental
 langchain-openai
 rank-bm25
@@ -22,3 +19,7 @@ SPARQLWrapper
 rdflib>=7.0.0
 pyyaml>=6.0
 owlrl
+
+# MongoDB ODM
+motor
+beanie

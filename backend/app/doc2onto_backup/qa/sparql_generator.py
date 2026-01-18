@@ -16,39 +16,39 @@ class SPARQLGenerator:
    - rdfs: <http://www.w3.org/2000/01/rdf-schema#>
    - owl: <http://www.w3.org/2002/07/owl#>
    - xsd: <http://www.w3.org/2001/XMLSchema#>
-   - inst: <http://example.org/onto/inst/>  (인스턴스)
-   - rel: <http://example.org/onto/rel/>    (관계/Predicate)
-   - prop: <http://example.org/onto/prop/>  (속성/Property)
+   - inst: <http://rag.local/inst/>  (인스턴스)
+   - rel: <http://rag.local/rel/>    (관계/Predicate)
+   - prop: <http://rag.local/prop/>  (속성/Property)
+   - class: <http://rag.local/class/> (클래스)
 
-2. 주요 구조:
+2. 주요 구조 및 규칙:
    - 모든 엔티티는 URI를 가집니다 (예: inst:성기훈).
-   - 엔티티의 이름(Label)은 `rdfs:label` 속성에 저장됩니다 (문자열 리터럴, @ko 언어 태그 권장).
-   - 예: `?s rdfs:label "성기훈"@ko`
+   - 엔티티의 이름(Label)은 `rdfs:label` 속성에 저장됩니다 (문자열 리터럴).
+   - 예: `?s rdfs:label "성기훈"`
+   - **관계 방향성 중요**: 
+     - `rel:제자` (is student of): `[학생] rel:제자 [스승]` -> 학생이 주어(Subject), 스승이 목적어(Object)
+     - `rel:스승` (is teacher of): `[스승] rel:스승 [학생]` -> 스승이 주어(Subject), 학생이 목적어(Object)
+     - **스승을 찾을 때**: `?student rel:제자 ?teacher` 또는 `?teacher rel:스승 ?student` 또는 `?student ^rel:스승 ?teacher`
 
-3. 관계 (Relationships):
-   - 관계(Predicate)는 주로 `rel:` 네임스페이스를 사용합니다.
-   - 예: `?s rel:스승 ?o`, `?s rel:사용 ?o`
-   - 관계 방향이 모호할 경우, 양방향 혹은 Property Path(`|` 또는 `^`)를 고려하세요.
+3. 관계 탐색:
+   - 질문의 의도를 파악하여 적절한 `rel:관계명`을 추론하세요.
+   - 방향 무관 탐색이 필요할 경우 Property Path(`|` 또는 `^`)를 사용하세요. 
+     - 예: 스승을 찾기 위해 `(rel:제자|^rel:스승)` 사용 가능.
 
 [작성 원칙]
 1. **PREFIX 필수 포함**: 쿼리 시작 부분에 위 Namespaces를 모두 정의하세요.
-2. **엔티티 매칭**: 이름으로 찾을 때는 `rdfs:label`을 사용하세요. 정확한 이름이 아닐 경우 `CONTAINS`나 `REGEX`를 사용할 수 있지만 가능하면 정확한 매칭을 선호하세요.
-3. **관계 탐색**:
-   - 질문의 의도를 파악하여 적절한 `rel:관계명`을 추론하세요.
-   - **Inverse Relation (역방향 관계)**: '스승'을 찾으라는 질문은 '제자' 관계의 역방향일 수도 있습니다.
-   - Property Path 사용 권장: `(rel:스승|^rel:제자)` 와 같이 작성하면 방향 무관하게 탐색 가능합니다.
-4. **결과 반환**:
-   - 가능한 `DISTINCT`를 사용하세요.
-   - 찾고자 하는 대상의 URI와 Label을 함께 반환하거나, 명확한 변수명을 사용하세요.
+2. **엔티티 매칭**: 이름으로 찾을 때는 `rdfs:label`을 사용하세요. `FILTER(STR(?label) = "이름")` 형식을 권장합니다.
+3. **결과 반환**: 가능한 `DISTINCT`를 사용하세요.
 
 [예시]
 질문: "성기훈의 스승은 누구야?"
 SPARQL:
 PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-PREFIX rel: <http://example.org/onto/rel/>
+PREFIX rel: <http://rag.local/rel/>
 SELECT DISTINCT ?teacherLabel WHERE {
-  ?s rdfs:label "성기훈"@ko .
-  ?s (rel:스승|^rel:제자) ?teacher .
+  ?s rdfs:label ?sLabel .
+  FILTER(STR(?sLabel) = "성기훈") .
+  ?s (rel:제자|^rel:스승) ?teacher .
   ?teacher rdfs:label ?teacherLabel .
 }
 

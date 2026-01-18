@@ -1,22 +1,24 @@
-from sqlalchemy import Column, String, DateTime, Boolean
-from sqlalchemy.dialects.sqlite import JSON
-from app.core.database import Base
-import uuid
+from typing import Optional, List, Dict, Any
 from datetime import datetime
+from beanie import Document
+from pydantic import Field
+import uuid
 
-class KnowledgeBase(Base):
-    __tablename__ = "knowledge_bases"
+class KnowledgeBase(Document):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    name: str
+    description: Optional[str] = None
+    chunking_strategy: str = "size"
+    chunking_config: Dict[str, Any] = {}
+    metric_type: str = "COSINE"
+    enable_graph_rag: bool = False
+    graph_backend: Optional[str] = "ontology"
+    is_promoted: bool = False
+    promotion_metadata: Dict[str, Any] = {}
+    sparql_prompt_template: Optional[str] = None
+    pipeline_config: Dict[str, Any] = Field(default_factory=lambda: {"stages": []})
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
 
-    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    name = Column(String, index=True)
-    description = Column(String, nullable=True)
-    chunking_strategy = Column(String, default="size")
-    chunking_config = Column(JSON, default={})
-    metric_type = Column(String, default="COSINE")  # COSINE or IP
-    enable_graph_rag = Column(Boolean, default=False)
-    graph_backend = Column(String, default="ontology", nullable=True) # ontology or neo4j
-    is_promoted = Column(Boolean, default=False)
-    promotion_metadata = Column(JSON, default={})
-    pipeline_config = Column(JSON, default={"stages": []})  # Search pipeline configuration
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    class Settings:
+        name = "knowledge_bases"

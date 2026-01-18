@@ -13,11 +13,11 @@ extraction:
   llm_endpoint: "https://api.openai.com/v1/chat/completions"
   llm_model: "gpt-4o-mini"
   confidence_threshold: 0.6
-  max_candidates_per_chunk: 20
+  max_candidates_per_chunk: 50
   examples_path: "extraction_examples.yaml"
 
 ontology:
-  base_uri: "http://example.org/onto/"
+  base_uri: "http://rag.local/"
   base_graph_uri: "urn:onto:base"
   evidence_graph_prefix: "urn:ragchunk:"
 

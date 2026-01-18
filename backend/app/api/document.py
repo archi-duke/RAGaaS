@@ -1,8 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, BackgroundTasks
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.future import select
 from typing import List
-from app.core.database import get_db
 from app.models.document import Document as DocModel, DocumentStatus
 from app.models.knowledge_base import KnowledgeBase as KBModel
 from app.schemas import Document
@@ -17,20 +14,15 @@ async def upload_document(
     kb_id: str,
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    chunking_config: str = Form(None),
-    db: AsyncSession = Depends(get_db)
+    chunking_config: str = Form(None)
 ):
-    # Fetch Knowledge Base to get chunking config
-    result = await db.execute(select(KBModel).filter(KBModel.id == kb_id))
-    kb = result.scalars().first()
+    # Fetch Knowledge Base
+    kb = await KBModel.get(kb_id)
     if not kb:
         raise HTTPException(status_code=404, detail="Knowledge Base not found")
 
     # Check for duplicate filename
-    result = await db.execute(
-        select(DocModel).filter(DocModel.kb_id == kb_id, DocModel.filename == file.filename)
-    )
-    existing_doc = result.scalars().first()
+    existing_doc = await DocModel.find_one(DocModel.kb_id == kb_id, DocModel.filename == file.filename)
     
     if existing_doc:
         logger.info(f"Overwriting existing document: {file.filename}")
@@ -53,6 +45,7 @@ async def upload_document(
         existing_doc.status = DocumentStatus.PROCESSING.value
         from datetime import datetime
         existing_doc.updated_at = datetime.utcnow()
+        await existing_doc.save()
         
         doc = existing_doc
     else:
@@ -63,11 +56,8 @@ async def upload_document(
             file_type=file.filename.split(".")[-1],
             status=DocumentStatus.PROCESSING.value 
         )
-        db.add(doc)
+        await doc.insert()
 
-    await db.commit()
-    await db.refresh(doc)
-    
     # Read file content
     content = await file.read()
     
@@ -95,19 +85,17 @@ async def upload_document(
     return doc
 
 @router.get("/{kb_id}/documents", response_model=List[Document])
-async def list_documents(kb_id: str, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(DocModel).filter(DocModel.kb_id == kb_id))
-    return result.scalars().all()
+async def list_documents(kb_id: str):
+    docs = await DocModel.find(DocModel.kb_id == kb_id).to_list()
+    return docs
 
 @router.delete("/{kb_id}/documents/{doc_id}")
 async def delete_document(
     kb_id: str, 
     doc_id: str, 
-    background_tasks: BackgroundTasks,
-    db: AsyncSession = Depends(get_db)
+    background_tasks: BackgroundTasks
 ):
-    result = await db.execute(select(DocModel).filter(DocModel.id == doc_id, DocModel.kb_id == kb_id))
-    doc = result.scalars().first()
+    doc = await DocModel.find_one(DocModel.id == doc_id, DocModel.kb_id == kb_id)
     
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
@@ -115,7 +103,7 @@ async def delete_document(
     # Transactional Deletion: Mark as DELETING and run background task
     try:
         doc.status = DocumentStatus.DELETING.value
-        await db.commit()
+        await doc.save()
         
         from app.services.ingestion.cleanup_service import cleanup_service
         background_tasks.add_task(cleanup_service.perform_cascading_deletion, kb_id, doc_id)
@@ -127,13 +115,11 @@ async def delete_document(
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/{kb_id}/documents/{doc_id}/chunks")
-async def get_document_chunks(kb_id: str, doc_id: str, db: AsyncSession = Depends(get_db)):
+async def get_document_chunks(kb_id: str, doc_id: str):
     from app.core.milvus import create_collection
-    from pymilvus import Collection
     
     # Verify document exists
-    result = await db.execute(select(DocModel).filter(DocModel.id == doc_id, DocModel.kb_id == kb_id))
-    doc = result.scalars().first()
+    doc = await DocModel.find_one(DocModel.id == doc_id, DocModel.kb_id == kb_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
     
@@ -172,8 +158,7 @@ async def update_chunk(
     kb_id: str,
     doc_id: str,
     chunk_id: str,
-    content: str = Form(...),
-    db: AsyncSession = Depends(get_db)
+    content: str = Form(...)
 ):
     """Update chunk content and re-generate embedding"""
     try:
@@ -182,8 +167,7 @@ async def update_chunk(
         from datetime import datetime
         
         # Verify document exists
-        result = await db.execute(select(DocModel).filter(DocModel.id == doc_id, DocModel.kb_id == kb_id))
-        doc = result.scalars().first()
+        doc = await DocModel.find_one(DocModel.id == doc_id, DocModel.kb_id == kb_id)
         if not doc:
             raise HTTPException(status_code=404, detail="Document not found")
         
@@ -235,8 +219,7 @@ async def update_chunk(
         collection.flush()
         
         # Update Graph RAG if enabled
-        kb_result = await db.execute(select(KBModel).filter(KBModel.id == kb_id))
-        kb = kb_result.scalars().first()
+        kb = await KBModel.get(kb_id)
         
         if kb and kb.enable_graph_rag:
             try:
@@ -289,7 +272,7 @@ async def update_chunk(
         
         # Update document's updated_at timestamp
         doc.updated_at = datetime.utcnow()
-        await db.commit()
+        await doc.save()
         
         return {
             "ok": True,

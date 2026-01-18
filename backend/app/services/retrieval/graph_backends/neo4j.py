@@ -186,49 +186,46 @@ class Neo4jBackend(GraphBackend):
         return triples
 
     async def _attach_offsets_to_triples(self, kb_id: str, triples: List[Dict]) -> Tuple[List[Dict], List[str]]:
-        """SQLite에서 트리플의 소스 오프셋 정보 조회하여 첨부"""
-        from app.models.triple_chunk_mapping import compute_triple_hash
-        from app.core.database import SessionLocal
-        from sqlalchemy.future import select
-        from app.models.triple_chunk_mapping import TripleChunkMapping
+        """MongoDB(Beanie)에서 트리플의 소스 오프셋 정보 조회하여 첨부"""
+        from app.models.triple_chunk_mapping import TripleChunkMapping, compute_triple_hash
         
         discovered_chunk_ids = set()
         
         try:
-            async with SessionLocal() as db:
-                for triple in triples:
-                    triple_hash = compute_triple_hash(
-                        triple["subject"],
-                        triple["predicate"],
-                        triple["object"]
-                    )
+            for triple in triples:
+                triple_hash = compute_triple_hash(
+                    triple["subject"],
+                    triple["predicate"],
+                    triple["object"]
+                )
+                
+                # Beanie Query
+                mappings = await TripleChunkMapping.find(
+                    TripleChunkMapping.kb_id == kb_id,
+                    TripleChunkMapping.triple_hash == triple_hash
+                ).to_list()
+                
+                if mappings:
+                    # 오프셋은 첫 번째 매핑의 것 사용 (어차피 동일)
+                    triple["source_start"] = mappings[0].source_start
+                    triple["source_end"] = mappings[0].source_end
                     
-                    result = await db.execute(
-                        select(TripleChunkMapping)
-                        .filter(TripleChunkMapping.kb_id == kb_id)
-                        .filter(TripleChunkMapping.triple_hash == triple_hash)
-                    )
-                    mappings = result.scalars().all()
-                    
-                    if mappings:
-                        # 오프셋은 첫 번째 매핑의 것 사용 (어차피 동일)
-                        triple["source_start"] = mappings[0].source_start
-                        triple["source_end"] = mappings[0].source_end
-                        
-                        # 관련된 청크 ID 수집
-                        for m in mappings:
-                            if m.chunk_id:
-                                discovered_chunk_ids.add(m.chunk_id)
-                    else:
-                        # 매핑이 없으면 오프셋 없음
-                        triple["source_start"] = None
-                        triple["source_end"] = None
+                    # 관련된 청크 ID 수집
+                    for m in mappings:
+                        if m.chunk_id:
+                            discovered_chunk_ids.add(m.chunk_id)
+                else:
+                    # 매핑이 없으면 오프셋 없음
+                    triple["source_start"] = None
+                    triple["source_end"] = None
                         
         except Exception as e:
             logger.warning(f"Error attaching offsets to triples: {e}")
+            import traceback
+            traceback.print_exc()
             # Continue without offsets
             for triple in triples:
-                triple["source_start"] = None
-                triple["source_end"] = None
+                triple.setdefault("source_start", None)
+                triple.setdefault("source_end", None)
         
         return triples, list(discovered_chunk_ids)
