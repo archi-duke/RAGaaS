@@ -25,6 +25,10 @@ router = APIRouter()
 # In-memory job storage (In production, use Redis or a Database)
 jobs: Dict[str, Dict[str, Any]] = {}
 
+# Preview cache: stores extraction results before user confirms
+preview_cache: Dict[str, Dict[str, Any]] = {}
+
+
 
 class JobStatus(str, Enum):
     PENDING = "pending"
@@ -162,7 +166,12 @@ async def process_ingest_job(job_id: str, request: IngestRequest):
         
         # Milvus: 벡터 저장
         print(f"[IngestJob] Calling Milvus connector.insert_chunks...")
-        chunks_data = [{"content": node.get_content(), "metadata": node.metadata} for node in result["nodes"]]
+        # node_id를 포함하여 Fuseki의 source_node_id와 일치시킴
+        chunks_data = [{
+            "content": node.get_content(), 
+            "metadata": node.metadata,
+            "node_id": node.node_id  # LlamaIndex node_id 포함
+        } for node in result["nodes"]]
         print(f"[IngestJob] Prepared {len(chunks_data)} chunks for Milvus")
 
 
@@ -338,3 +347,283 @@ async def list_jobs(
             break
     
     return {"jobs": result, "total": len(result)}
+
+
+# ============================================================
+# Preview Endpoints (Two-Stage Ingestion)
+# ============================================================
+
+class PreviewRequest(BaseModel):
+    """Preview Request - Extract only, no persistence"""
+    kb_id: str
+    doc_id: str
+    file_path: str
+    chunking: ChunkingConfig = ChunkingConfig()
+    graph: GraphConfig = GraphConfig()
+    graph_store: str = "neo4j"
+    enable_text_cleaning: bool = False
+    extraction_examples_yaml: Optional[str] = None
+    custom_prompt: Optional[str] = None
+
+
+class PreviewResponse(BaseModel):
+    """Preview Response"""
+    preview_id: str
+    kb_id: str
+    doc_id: str
+    node_count: int
+    triples: List[Dict[str, Any]]
+    message: str
+
+
+class ConfirmRequest(BaseModel):
+    """Confirm Request - Save previewed data"""
+    enable_inference: bool = False
+    callback_url: Optional[str] = None
+
+
+@router.post("/preview", response_model=PreviewResponse)
+async def create_preview(request: PreviewRequest):
+    """Extract triples from document without saving to database.
+    Returns preview_id and extracted triples for user review.
+    """
+    preview_id = str(uuid.uuid4())
+    
+    try:
+        print(f"[Preview] Starting preview {preview_id} for doc {request.doc_id}")
+        
+        # 1. Read file
+        file_path = request.file_path
+        if file_path.lower().endswith('.pdf'):
+            from pypdf import PdfReader
+            import io
+            with open(file_path, "rb") as f:
+                pdf = PdfReader(io.BytesIO(f.read()))
+                text = ""
+                for page in pdf.pages:
+                    text += (page.extract_text() or "") + "\n"
+            print(f"[Preview] Read PDF: {len(text)} chars")
+        else:
+            with open(file_path, "r", encoding="utf-8") as f:
+                text = f.read()
+            print(f"[Preview] Read text file: {len(text)} chars")
+        
+        # 2. Prepare configs
+        chunking_config = {
+            "chunk_size": request.chunking.chunk_size,
+            "chunk_overlap": request.chunking.chunk_overlap,
+            "window_size": request.chunking.window_size,
+            "chunk_sizes": request.chunking.chunk_sizes,
+            "buffer_size": request.chunking.buffer_size,
+            "breakpoint_threshold": request.chunking.breakpoint_threshold,
+        }
+        
+        graph_config = {
+            "max_paths_per_chunk": request.graph.max_paths_per_chunk,
+            "max_triplets_per_chunk": request.graph.max_triplets_per_chunk,
+            "num_workers": request.graph.num_workers,
+            "allowed_entity_types": request.graph.allowed_entity_types,
+            "allowed_relation_types": request.graph.allowed_relation_types,
+        }
+        
+        # 3. Run pipeline (same as regular ingest)
+        result = await ingest_pipeline.process(
+            text=text,
+            chunking_strategy=request.chunking.strategy,
+            chunking_config=chunking_config,
+            graph_extractor_type=request.graph.extractor_type,
+            graph_config=graph_config,
+            enable_text_cleaning=request.enable_text_cleaning,
+            extraction_examples_yaml=request.extraction_examples_yaml,
+            custom_prompt=request.custom_prompt
+        )
+        
+        print(f"[Preview] Extracted {len(result['triples'])} triples, {result['node_count']} nodes")
+        
+        # 4. Cache result (NO persistence yet)
+        preview_cache[preview_id] = {
+            "preview_id": preview_id,
+            "kb_id": request.kb_id,
+            "doc_id": request.doc_id,
+            "graph_store": request.graph_store,
+            "generate_inverse_relations": request.graph.generate_inverse_relations,
+            "nodes": result["nodes"],
+            "embeddings": result["embeddings"],
+            "triples": result["triples"],
+            "node_count": result["node_count"],
+            "triple_count": result["triple_count"],
+            "created_at": datetime.utcnow().isoformat(),
+        }
+        
+        return PreviewResponse(
+            preview_id=preview_id,
+            kb_id=request.kb_id,
+            doc_id=request.doc_id,
+            node_count=result["node_count"],
+            triples=result["triples"],
+            message=f"Preview generated. {result['node_count']} nodes, {len(result['triples'])} triples extracted.",
+        )
+        
+    except Exception as e:
+        import traceback
+        print(f"[Preview] ❌ Preview failed: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/confirm/{preview_id}")
+async def confirm_preview(
+    preview_id: str,
+    request: ConfirmRequest,
+    background_tasks: BackgroundTasks
+):
+    """Confirm and save previewed data to database."""
+    if preview_id not in preview_cache:
+        raise HTTPException(status_code=404, detail="Preview not found or expired")
+    
+    cached = preview_cache[preview_id]
+    
+    # Create job for tracking
+    job_id = str(uuid.uuid4())
+    jobs[job_id] = {
+        "job_id": job_id,
+        "status": JobStatus.PENDING,
+        "kb_id": cached["kb_id"],
+        "doc_id": cached["doc_id"],
+        "created_at": datetime.utcnow().isoformat(),
+        "updated_at": datetime.utcnow().isoformat(),
+        "progress": 0,
+        "result": None,
+        "error": None,
+    }
+    
+    # Run save in background
+    background_tasks.add_task(
+        _save_preview_data,
+        job_id,
+        preview_id,
+        request.enable_inference,
+        request.callback_url
+    )
+    
+    return {
+        "job_id": job_id,
+        "preview_id": preview_id,
+        "status": "saving",
+        "message": "Preview data is being saved to database.",
+    }
+
+
+async def _save_preview_data(
+    job_id: str,
+    preview_id: str,
+    enable_inference: bool,
+    callback_url: Optional[str]
+):
+    """Background task to save preview data"""
+    try:
+        jobs[job_id]["status"] = JobStatus.PROCESSING
+        jobs[job_id]["updated_at"] = datetime.utcnow().isoformat()
+        
+        cached = preview_cache.get(preview_id)
+        if not cached:
+            raise ValueError("Preview data not found")
+        
+        kb_id = cached["kb_id"]
+        doc_id = cached["doc_id"]
+        
+        # 1. Save to Milvus
+        print(f"[Confirm] Saving {cached['node_count']} chunks to Milvus...")
+        chunks_data = [{"content": node.get_content(), "metadata": node.metadata} for node in cached["nodes"]]
+        await milvus_connector.insert_chunks(
+            kb_id,
+            doc_id,
+            chunks_data,
+            cached["embeddings"]
+        )
+        jobs[job_id]["progress"] = 50
+        
+        # 2. Save to Graph Store
+        if cached["triples"]:
+            if cached["graph_store"] == "fuseki":
+                print(f"[Confirm] Saving {len(cached['triples'])} triples to Fuseki...")
+                await fuseki_connector.insert_triples(
+                    kb_id,
+                    doc_id,
+                    cached["triples"],
+                    generate_inverse=cached["generate_inverse_relations"]
+                )
+            else:
+                print(f"[Confirm] Saving {len(cached['triples'])} triples to Neo4j...")
+                await neo4j_connector.insert_triples(
+                    kb_id,
+                    doc_id,
+                    cached["triples"],
+                    generate_inverse=cached["generate_inverse_relations"]
+                )
+        
+        jobs[job_id]["progress"] = 90
+        
+        # 3. Run inference if enabled
+        inference_count = 0
+        if enable_inference and cached["triples"]:
+            if cached["graph_store"] == "neo4j":
+                from app.core.inference_engine import inference_engine
+                inference_count = await inference_engine.run_inference(kb_id, doc_id)
+            elif cached["graph_store"] == "fuseki":
+                from app.core.fuseki_inference_engine import fuseki_inference_engine
+                inference_count = await fuseki_inference_engine.run_inference(kb_id, doc_id)
+        
+        jobs[job_id]["progress"] = 100
+        jobs[job_id]["status"] = JobStatus.COMPLETED
+        jobs[job_id]["result"] = {
+            "node_count": cached["node_count"],
+            "triple_count": cached["triple_count"],
+            "inference_count": inference_count,
+        }
+        jobs[job_id]["updated_at"] = datetime.utcnow().isoformat()
+        
+        # Cleanup preview cache
+        del preview_cache[preview_id]
+        
+        print(f"[Confirm] ✅ Preview {preview_id} saved successfully")
+        
+        # Callback
+        if callback_url:
+            import httpx
+            async with httpx.AsyncClient() as client:
+                await client.post(callback_url, json={
+                    "job_id": job_id,
+                    "doc_id": doc_id,
+                    "kb_id": kb_id,
+                    "status": "completed",
+                    "result": jobs[job_id]["result"],
+                })
+        
+    except Exception as e:
+        import traceback
+        print(f"[Confirm] ❌ Save failed: {e}")
+        traceback.print_exc()
+        jobs[job_id]["status"] = JobStatus.FAILED
+        jobs[job_id]["error"] = str(e)
+        jobs[job_id]["updated_at"] = datetime.utcnow().isoformat()
+
+
+@router.delete("/preview/{preview_id}")
+async def discard_preview(preview_id: str):
+    """Discard preview data without saving."""
+    if preview_id not in preview_cache:
+        raise HTTPException(status_code=404, detail="Preview not found or already discarded")
+    
+    cached = preview_cache[preview_id]
+    del preview_cache[preview_id]
+    
+    print(f"[Discard] Preview {preview_id} discarded")
+    
+    return {
+        "preview_id": preview_id,
+        "kb_id": cached["kb_id"],
+        "doc_id": cached["doc_id"],
+        "message": "Preview discarded successfully.",
+    }
+

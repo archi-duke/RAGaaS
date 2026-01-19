@@ -1,9 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, X, FileText, Settings, Database, AlertCircle, Check, Info } from 'lucide-react';
-import { docApi, kbApi } from '../services/api';
+import { Upload, X, FileText, Settings, Database, AlertCircle, Check, Info, Eye } from 'lucide-react';
+import { docApi, kbApi, extractionApi } from '../services/api';
 import MessageDialog from './MessageDialog';
 import ExtractionExampleModal from './ExtractionExampleModal';
 import ExtractionPromptModal from './ExtractionPromptModal';
+import ExtractionPreviewModal from './ExtractionPreviewModal';
 
 interface UploadDocumentModalProps {
     isOpen: boolean;
@@ -79,6 +80,14 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
     // Modals state
     const [showExampleModal, setShowExampleModal] = useState(false);
     const [showPromptModal, setShowPromptModal] = useState(false);
+    const [showPreviewModal, setShowPreviewModal] = useState(false);
+    const [isExtracting, setIsExtracting] = useState(false);
+    const [previewData, setPreviewData] = useState<{
+        preview_id: string;
+        doc_id: string;
+        triples: any[];
+        node_count: number;
+    } | null>(null);
 
     const [messageDialog, setMessageDialog] = useState<{ isOpen: boolean; title: string; message: string; type: 'info' | 'success' | 'error' }>({
         isOpen: false,
@@ -124,6 +133,17 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                 graph_section_size: data.chunking_config?.graph_section_size || 2500,
                 graph_section_overlap: data.chunking_config?.graph_section_overlap || 1000
             }));
+
+            // Load extraction prompt from server and set as default
+            try {
+                const promptRes = await kbApi.getExtractionPrompt();
+                const serverPrompt = promptRes.data?.content;
+                if (serverPrompt && serverPrompt !== 'Prompt not found in DB.') {
+                    setGraphParams(prev => ({ ...prev, custom_prompt: serverPrompt }));
+                }
+            } catch (promptErr) {
+                console.warn('Failed to load extraction prompt from server:', promptErr);
+            }
         } catch (err) {
             console.error("Failed to load KB config", err);
         }
@@ -160,6 +180,104 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
         } finally {
             setIsUploading(false);
         }
+    };
+
+    const handleExtract = async () => {
+        if (!file) return;
+        setIsExtracting(true);
+        try {
+            // First upload file to get file_path (via standard upload but we need the path)
+            // For now, we'll use the docApi to create a pending document and get its path
+            const formData = new FormData();
+            formData.append('file', file);
+
+            // Upload file to backend first to get file_path
+            const uploadRes = await docApi.upload(kbId, file, { ...graphParams, preview_only: true });
+            const docId = uploadRes.data.id;
+            const filePath = uploadRes.data.file_path || `/data/uploads/${kbId}/${file.name}`;
+
+            // Call preview API
+            const res = await extractionApi.preview({
+                kb_id: kbId,
+                doc_id: docId,
+                file_path: filePath,
+                chunking: {
+                    strategy: 'fixed_size',
+                    chunk_size: 1024,
+                    chunk_overlap: 20,
+                },
+                graph: {
+                    extractor_type: graphParams.extractor_type,
+                    max_paths_per_chunk: graphParams.max_paths_per_chunk,
+                    max_triplets_per_chunk: graphParams.max_triplets_per_chunk,
+                    num_workers: graphParams.num_workers,
+                    generate_inverse_relations: graphParams.generate_inverse_relations,
+                },
+                graph_store: kbConfig?.graph_backend === 'neo4j' ? 'neo4j' : 'fuseki',
+                enable_text_cleaning: graphParams.enable_text_cleaning,
+                extraction_examples_yaml: graphParams.extraction_examples_yaml || undefined,
+                custom_prompt: graphParams.custom_prompt || undefined,
+            });
+
+            setPreviewData({
+                preview_id: res.data.preview_id,
+                doc_id: docId,  // Store doc_id for cleanup on cancel
+                triples: res.data.triples,
+                node_count: res.data.node_count,
+            });
+            setShowPreviewModal(true);
+        } catch (err: any) {
+            console.error('Extract failed:', err);
+            setMessageDialog({
+                isOpen: true,
+                title: '추출 실패',
+                message: err.response?.data?.detail || '트리플 추출 중 오류가 발생했습니다.',
+                type: 'error'
+            });
+        } finally {
+            setIsExtracting(false);
+        }
+    };
+
+    const handlePreviewConfirm = async () => {
+        if (!previewData) return;
+        setIsExtracting(true);
+        try {
+            await extractionApi.confirm(previewData.preview_id, {
+                enable_inference: graphParams.enable_inference,
+            });
+            onUploadComplete();
+            onClose();
+            setFile(null);
+            setPreviewData(null);
+            setShowPreviewModal(false);
+        } catch (err: any) {
+            console.error('Confirm failed:', err);
+            setMessageDialog({
+                isOpen: true,
+                title: '저장 실패',
+                message: err.response?.data?.detail || '데이터 저장 중 오류가 발생했습니다.',
+                type: 'error'
+            });
+        } finally {
+            setIsExtracting(false);
+        }
+    };
+
+    const handlePreviewDiscard = async () => {
+        if (!previewData) return;
+        try {
+            // 1. Discard preview cache
+            await extractionApi.discard(previewData.preview_id);
+
+            // 2. Delete the created document record
+            await docApi.delete(kbId, previewData.doc_id);
+            console.log(`Document ${previewData.doc_id} deleted after preview cancel`);
+        } catch (err) {
+            console.error('Discard cleanup failed:', err);
+        }
+        setPreviewData(null);
+        setShowPreviewModal(false);
     };
 
     const isGraphEnabled = kbConfig && kbConfig.graph_backend && kbConfig.graph_backend !== 'none';
@@ -325,25 +443,37 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
 
                                     <button
                                         className="btn"
-                                        style={{ width: '100%', marginBottom: '1rem', justifyContent: 'center', background: '#fff', border: '1px solid #cbd5e1' }}
+                                        style={{ width: '100%', marginBottom: '0.75rem', justifyContent: 'center', background: '#fff', border: '1px solid #cbd5e1' }}
                                         onClick={() => setShowExampleModal(true)}
                                     >
                                         Manage Examples
                                     </button>
-                                    <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '1.5rem', textAlign: 'center' }}>
-                                        {graphParams.extraction_examples_yaml ? '✅ Examples Added' : 'No examples configured'}
-                                    </div>
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'default', marginBottom: '1.25rem', justifyContent: 'center' }}>
+                                        <input
+                                            type="checkbox"
+                                            checked={!!graphParams.extraction_examples_yaml}
+                                            readOnly
+                                            style={{ width: '0.9rem', height: '0.9rem', accentColor: '#3b82f6' }}
+                                        />
+                                        <span style={{ fontSize: '0.75rem', color: '#64748b' }}>Examples Added</span>
+                                    </label>
 
                                     <button
                                         className="btn"
-                                        style={{ width: '100%', marginBottom: '1rem', justifyContent: 'center', background: '#fff', border: '1px solid #cbd5e1' }}
+                                        style={{ width: '100%', marginBottom: '0.75rem', justifyContent: 'center', background: '#fff', border: '1px solid #cbd5e1' }}
                                         onClick={() => setShowPromptModal(true)}
                                     >
                                         Edit Extraction Prompt
                                     </button>
-                                    <div style={{ fontSize: '0.75rem', color: '#64748b', textAlign: 'center' }}>
-                                        {graphParams.custom_prompt ? '✅ Custom Prompt Active' : 'Default Prompt Active'}
-                                    </div>
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'default', justifyContent: 'center' }}>
+                                        <input
+                                            type="checkbox"
+                                            checked={!!graphParams.custom_prompt}
+                                            readOnly
+                                            style={{ width: '0.9rem', height: '0.9rem', accentColor: '#3b82f6' }}
+                                        />
+                                        <span style={{ fontSize: '0.75rem', color: '#64748b' }}>Custom Prompt Active</span>
+                                    </label>
                                 </div>
                             </div>
                         </div>
@@ -351,11 +481,28 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
 
 
                     <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '1rem' }}>
-                        <button className="btn" onClick={onClose} disabled={isUploading}>Cancel</button>
+                        <button className="btn" onClick={onClose} disabled={isUploading || isExtracting}>Cancel</button>
+                        {isGraphEnabled && (
+                            <button
+                                className="btn"
+                                onClick={handleExtract}
+                                disabled={!file || isUploading || isExtracting}
+                                style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '0.5rem',
+                                    border: '1px solid #3b82f6',
+                                    color: '#3b82f6'
+                                }}
+                            >
+                                <Eye size={16} />
+                                {isExtracting ? 'Extracting...' : 'Extract'}
+                            </button>
+                        )}
                         <button
                             className="btn btn-primary"
                             onClick={handleUpload}
-                            disabled={!file || isUploading}
+                            disabled={!file || isUploading || isExtracting}
                         >
                             {isUploading ? 'Uploading...' : 'Upload'}
                         </button>
@@ -384,6 +531,19 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                 type={messageDialog.type}
                 onClose={() => setMessageDialog({ ...messageDialog, isOpen: false })}
             />
+
+            {previewData && (
+                <ExtractionPreviewModal
+                    isOpen={showPreviewModal}
+                    onClose={() => setShowPreviewModal(false)}
+                    previewId={previewData.preview_id}
+                    triples={previewData.triples}
+                    nodeCount={previewData.node_count}
+                    isLoading={isExtracting}
+                    onConfirm={handlePreviewConfirm}
+                    onDiscard={handlePreviewDiscard}
+                />
+            )}
         </>
 
     );

@@ -77,7 +77,15 @@ class MilvusConnector:
         
         # Prepare data
         doc_ids = [doc_id] * len(chunks)
-        chunk_ids = [f"{doc_id}_{i}" for i in range(len(chunks))]
+        # node_id가 있으면 사용, 없으면 기존 방식 (doc_id_index)
+        chunk_ids = []
+        for i, chunk in enumerate(chunks):
+            node_id = chunk.get("node_id")
+            if node_id:
+                chunk_ids.append(node_id)
+            else:
+                chunk_ids.append(f"{doc_id}_{i}")
+        
         contents = [chunk.get("content", chunk.get("text", "")) for chunk in chunks]
         metadatas = [chunk.get("metadata", {}) for chunk in chunks]
         

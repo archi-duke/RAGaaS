@@ -6,7 +6,6 @@ from pathlib import Path
 from app.core.milvus import create_collection
 from app.core.fuseki import fuseki_client
 from app.models.document import Document
-from app.models.triple_chunk_mapping import TripleChunkMapping
 
 logger = logging.getLogger(__name__)
 
@@ -40,38 +39,70 @@ class CleanupService:
             dataset_name = f"kb_{kb_id.replace('-', '_')}"
             graph_uri = f"urn:doc:{doc_id}"
             
-            # 1.1 DELETE the Named Graph directly (GSP API)
+            deleted_count = 0
+            
+            # 1.1 DROP GRAPH via SPARQL (Most reliable method)
+            try:
+                print(f"[Cleanup] Attempting to drop Fuseki Named Graph: {graph_uri}")
+                drop_result = fuseki_client.drop_graph(kb_id, graph_uri)
+                if drop_result:
+                    print(f"[Cleanup] ✅ Fuseki Named Graph {graph_uri} dropped successfully")
+                    deleted_count += 1
+                else:
+                    print(f"[Cleanup] Fuseki DROP GRAPH returned False (might not exist)")
+            except Exception as drop_e:
+                print(f"[Cleanup] SPARQL DROP error: {drop_e}")
+            
+            # 1.2 GSP DELETE (Fallback method for Named Graph)
             try:
                 import requests
                 response = requests.delete(
                     f"{fuseki_client.base_url}/{dataset_name}/data",
                     params={"graph": graph_uri},
-                    auth=("admin", "admin")
+                    auth=("admin", "admin"),
+                    timeout=10
                 )
                 if response.status_code in [200, 204]:
-                    print(f"[Cleanup] Fuseki Named Graph {graph_uri} deleted")
+                    print(f"[Cleanup] Fuseki GSP DELETE confirmed for {graph_uri}")
+                    deleted_count += 1
+                elif response.status_code == 404:
+                    print(f"[Cleanup] Graph {graph_uri} not found (already deleted or never existed)")
                 else:
-                    print(f"[Cleanup] No Named Graph found at {graph_uri} (or error: {response.status_code})")
+                    print(f"[Cleanup] GSP DELETE status {response.status_code}: {response.text[:200]}")
             except Exception as gsp_e:
                  print(f"[Cleanup] GSP delete error: {gsp_e}")
 
-            # 1.2 Legacy fallback: SPARQL based cleanup
-            source_prefix = f"http://rag.local/source/{doc_id}"
-            delete_query = f"""
-            PREFIX rel: <http://rag.local/relation/>
-            DELETE {{ ?s ?p ?o . ?inv_s ?inv_p ?s . }}
-            WHERE {{
-                ?s rel:hasSource ?src .
-                FILTER(STRSTARTS(STR(?src), "{source_prefix}")) .
-                ?s ?p ?o .
-                OPTIONAL {{ ?inv_s ?inv_p ?s }}
-            }}
-            """
-            fuseki_client.update_sparql(kb_id, delete_query)
-            print(f"[Cleanup] Fuseki legacy cleanup attempted for doc {doc_id}")
+            # 1.3 Legacy fallback: SPARQL DELETE for old-style triples
+            try:
+                source_prefix = f"http://rag.local/source/{doc_id}"
+                delete_query = f"""
+                PREFIX rel: <http://rag.local/relation/>
+                DELETE {{ ?s ?p ?o . ?inv_s ?inv_p ?s . }}
+                WHERE {{
+                    ?s rel:hasSource ?src .
+                    FILTER(STRSTARTS(STR(?src), "{source_prefix}")) .
+                    ?s ?p ?o .
+                    OPTIONAL {{ ?inv_s ?inv_p ?s }}
+                }}
+                """
+                legacy_result = fuseki_client.update_sparql(kb_id, delete_query)
+                if legacy_result:
+                    print(f"[Cleanup] Fuseki legacy SPARQL cleanup executed for doc {doc_id}")
+                    deleted_count += 1
+                else:
+                    print(f"[Cleanup] Fuseki legacy cleanup returned False")
+            except Exception as legacy_e:
+                print(f"[Cleanup] Legacy SPARQL cleanup error: {legacy_e}")
+            
+            if deleted_count > 0:
+                print(f"[Cleanup] ✅ Fuseki cleanup complete ({deleted_count} methods succeeded)")
+            else:
+                print(f"[Cleanup] ⚠️ No Fuseki data deleted (might be expected if using Neo4j)")
             
         except Exception as e:
-            print(f"[Cleanup] Fuseki cleanup error for {doc_id}: {e}")
+            print(f"[Cleanup] ❌ Fuseki cleanup error for {doc_id}: {e}")
+            import traceback
+            traceback.print_exc()
 
         # 1.5. Neo4j Cleanup (Graph)
         try:
@@ -107,17 +138,61 @@ class CleanupService:
 
         # 2. Milvus Cleanup (Vector)
         try:
+            from pymilvus import utility
             collection = create_collection(kb_id)
             collection.load()
+            
+            # Expression to delete all chunks of this document
             expr = f'doc_id == "{doc_id}"'
-            res = collection.delete(expr)
             
-            # CRITICAL: Flush to ensure deletion is committed
-            collection.flush()
+            # Query first to see what will be deleted (for logging)
+            try:
+                pre_delete_count = collection.query(
+                    expr=expr,
+                    output_fields=["chunk_id"],
+                    limit=1000
+                )
+                print(f"[Cleanup] Milvus: Found {len(pre_delete_count)} chunks to delete for doc {doc_id}")
+            except Exception as query_e:
+                print(f"[Cleanup] Milvus pre-delete query warning: {query_e}")
             
-            print(f"[Cleanup] Milvus cleanup complete for doc {doc_id}. Deleted: {res}")
+            # Delete with retry
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    res = collection.delete(expr)
+                    print(f"[Cleanup] Milvus delete result (attempt {attempt+1}): {res}")
+                    
+                    # CRITICAL: Flush to persist deletion
+                    collection.flush()
+                    print(f"[Cleanup] Milvus flush complete for doc {doc_id}")
+                    
+                    # Release collection from memory to ensure clean state
+                    try:
+                        collection.release()
+                        print(f"[Cleanup] Milvus collection released from memory")
+                    except Exception as release_e:
+                        print(f"[Cleanup] Milvus release warning: {release_e}")
+                    
+                    # Compact to actually remove deleted entities (prevents ghost data)
+                    try:
+                        collection.compact()
+                        print(f"[Cleanup] Milvus compaction triggered for doc {doc_id}")
+                    except Exception as compact_e:
+                        print(f"[Cleanup] Milvus compact warning: {compact_e}")
+                    
+                    break  # Success
+                except Exception as delete_e:
+                    print(f"[Cleanup] Milvus delete attempt {attempt+1} failed: {delete_e}")
+                    if attempt == max_retries - 1:
+                        raise
+                    await asyncio.sleep(1)  # Wait before retry
+            
+            print(f"[Cleanup] Milvus cleanup complete for doc {doc_id}")
         except Exception as e:
-            print(f"[Cleanup] Milvus cleanup error for {doc_id}: {e}")
+            print(f"[Cleanup] ❌ Milvus cleanup error for {doc_id}: {e}")
+            import traceback
+            traceback.print_exc()
 
 
         # 3. File System Cleanup (Artifacts)
@@ -154,11 +229,6 @@ class CleanupService:
 
         # 4. MongoDB Cleanup (Final Step)
         try:
-            print(f"[Cleanup] Deleting TripleChunkMappings for {doc_id}...")
-            # 관련 TripleChunkMapping 삭제
-            await TripleChunkMapping.find(TripleChunkMapping.doc_id == doc_id).delete()
-            print(f"[Cleanup] Deleted TripleChunkMappings for {doc_id}")
-            
             # 문서 레코드 삭제
             doc = await Document.get(doc_id)
             if doc:
@@ -180,7 +250,7 @@ class CleanupService:
             except Exception as ws_e:
                  print(f"[Cleanup] WebSocket broadcast error: {ws_e}")
             
-            print(f"[Cleanup] Document and mappings deleted from MongoDB for {doc_id}")
+            print(f"[Cleanup] Document deleted from MongoDB for {doc_id}")
         except Exception as e:
             print(f"[Cleanup] MongoDB cleanup error: {e}")
             import traceback
@@ -204,15 +274,7 @@ class CleanupService:
         except Exception:
             pass
         
-        # Check Neo4j (via TripleChunkMapping)
-        try:
-            remaining = await TripleChunkMapping.find(
-                TripleChunkMapping.doc_id == doc_id
-            ).count()
-            if remaining > 0:
-                garbage_found.append(f"TripleChunkMapping: {remaining} entries")
-        except Exception:
-            pass
+        # Note: TripleChunkMapping no longer used - source_node_id is in Neo4j/Fuseki directly
         
         # Check shared storage files
         try:

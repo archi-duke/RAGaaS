@@ -13,6 +13,7 @@ import type { PipelineConfig } from '../components/PipelineBuilder';
 import SearchResults from '../components/SearchResults';
 import ConfirmDialog from '../components/ConfirmDialog';
 import PromptDialog from '../components/PromptDialog';
+import GraphDataTable from '../components/GraphDataTable';
 
 
 export default function KnowledgeBaseDetail() {
@@ -474,6 +475,14 @@ export default function KnowledgeBaseDetail() {
                 >
                     Documents
                 </button>
+                {kb.graph_backend && kb.graph_backend !== 'none' && (
+                    <button
+                        className={clsx('tab', activeTab === 'graph_data' && 'active')}
+                        onClick={() => setActiveTab('graph_data')}
+                    >
+                        Graph Data
+                    </button>
+                )}
                 <button
                     className={clsx('tab', activeTab === 'chat' && 'active')}
                     onClick={() => setActiveTab('chat')}
@@ -507,6 +516,15 @@ export default function KnowledgeBaseDetail() {
                         onDeleteDocument={(docId) => setDeleteDocId(docId)}
                         onViewChunks={handleViewChunks}
                         isOntology={kb.graph_backend === 'ontology'}
+                    />
+                </div>
+            )}
+
+            {activeTab === 'graph_data' && (
+                <div style={{ flex: 1, overflow: 'auto' }}>
+                    <GraphDataTable
+                        kbId={id!}
+                        backend={kb.graph_backend === 'ontology' ? 'fuseki' : (kb.graph_backend || 'neo4j')}
                     />
                 </div>
             )}

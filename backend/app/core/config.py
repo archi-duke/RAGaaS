@@ -28,8 +28,7 @@ class Settings(BaseSettings):
     INGEST_SERVICE_URL: str = "http://ingest-service:8001"
     SHARED_STORAGE_PATH: str = "/data/uploads"  # Shared volume for file exchange
     
-    # Doc2Onto (Legacy - DEPRECATED, will be removed)
-    DOC2ONTO_CONFIG_PATH: str = "doc2onto_config.yaml"
+
 
     
     class Config:

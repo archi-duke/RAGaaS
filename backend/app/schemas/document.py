@@ -21,6 +21,7 @@ class Document(DocumentBase):
     status: DocumentStatus
     created_at: datetime
     updated_at: Optional[datetime] = None
+    file_path: Optional[str] = None  # Added for ingest service communication
 
     class Config:
         from_attributes = True

@@ -111,9 +111,27 @@ async def upload_document(
             "generate_inverse_relations": final_config.get("generate_inverse_relations", True),
         }
     
+    
     # Call Ingest Service asynchronously
     async def call_ingest_service():
         try:
+            # Load custom prompt for graph extraction from file
+            graph_extraction_prompt = None
+            prompt_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "data", "prompts", "graph_extraction_prompt.txt")
+            if os.path.exists(prompt_path):
+                with open(prompt_path, "r", encoding="utf-8") as pf:
+                    graph_extraction_prompt = pf.read()
+                logger.info(f"[Ingest] Loaded custom graph extraction prompt ({len(graph_extraction_prompt)} chars)")
+            
+            # Load default examples if not provided by user
+            final_examples_yaml = extraction_examples_yaml
+            if not final_examples_yaml:
+                default_examples_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "..", "extraction_examples.yaml")
+                if os.path.exists(default_examples_path):
+                    with open(default_examples_path, "r", encoding="utf-8") as ef:
+                        final_examples_yaml = ef.read()
+                    logger.info(f"[Ingest] Loaded default extraction examples ({len(final_examples_yaml)} chars)")
+            
             result = await ingest_client.create_ingest_job(
                 kb_id=kb_id,
                 doc_id=doc.id,
@@ -123,7 +141,7 @@ async def upload_document(
                 graph_store="fuseki" if kb.graph_backend == "ontology" else "neo4j",
                 enable_text_cleaning=enable_text_cleaning,
                 enable_inference=enable_inference,
-                extraction_examples_yaml=extraction_examples_yaml,
+                extraction_examples_yaml=final_examples_yaml,
                 custom_prompt=graph_extraction_prompt,
                 callback_url="http://backend:8000/api/knowledge-bases/ingest/callback"
             )
@@ -139,7 +157,13 @@ async def upload_document(
     
     background_tasks.add_task(call_ingest_service)
     
-    return doc
+    # Return Pydantic model response with injected file_path
+    # We must convert Beanie Document to Dict and add file_path
+    doc_dict = doc.dict()
+    doc_dict['id'] = str(doc.id)  # Beanie ID compatibility
+    doc_dict['file_path'] = file_path
+    
+    return Document(**doc_dict)
 
 
 @router.get("/{kb_id}/documents", response_model=List[Document])
@@ -365,17 +389,21 @@ async def ingest_callback(payload: IngestCallback):
     doc = await DocModel.find_one(DocModel.id == payload.doc_id, DocModel.kb_id == payload.kb_id)
     if not doc:
         logger.error(f"Document not found for callback: {payload.doc_id}")
-        # Return 200 even if not found to stop retries from ingest service if any
         return {"ok": False, "error": "Document not found"}
     
     if payload.status == "completed":
         doc.status = DocumentStatus.COMPLETED.value
         doc.updated_at = datetime.utcnow()
+        await doc.save()
         logger.info(f"Document {doc.id} marked as COMPLETED")
+        # Note: Triple-chunk mappings are no longer stored in MongoDB.
+        # source_node_id is retrieved directly from Neo4j/Fuseki at query time.
+            
     elif payload.status == "failed":
         doc.status = DocumentStatus.ERROR.value
         doc.error_message = payload.error
+        await doc.save()
         logger.info(f"Document {doc.id} marked as ERROR: {payload.error}")
     
-    await doc.save()
     return {"ok": True}
+

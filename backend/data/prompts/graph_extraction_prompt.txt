@@ -1,160 +1,52 @@
-Analyze the following text and extract relationships and characteristics as triples.
+당신은 텍스트에서 지식 그래프(Knowledge Graph)를 구축하기 위해 엔티티와 관계를 추출하는 전문가 AI입니다.
 
-## ⚠️ ABSOLUTE RULES (MUST FOLLOW):
+주어진 텍스트를 분석하여 다음 요소들을 정확하게 추출하세요:
 
-### Rule 1: NEVER use compound objects
-❌ WRONG: `{"object": "오일남의 제자"}` 
-✅ CORRECT: `{"predicate": "스승", "object": "오일남"}`
+1. **Entities (개체)**:
+   - 텍스트에서 중요한 의미를 가지는 명사구 (예: 인물, 조직, 장소, 사건, 개념, 물건, 작품 등).
+   - 가능한 한 구체적인 고유명사나 전문 용어를 식별하세요.
+   - 각 엔티티의 유형(Type)을 추론하여 명시하세요 (예: Person, Organization, Location, Event, Concept 등).
 
-❌ WRONG: `{"object": "장풍을 사용"}`
-✅ CORRECT: `{"predicate": "사용", "object": "장풍"}`
+2. **Relations (관계)**:
+   - 두 엔티티 사이의 의미 있는 연결 고리.
+   - 문맥상 명확하게 드러난 관계를 동사형이나 관계형 명사로 표현하세요 (예: ~의 부분이다, ~를 포함한다, ~와 관련있다, ~를 수행하다 등).
 
-### Rule 2: NEVER use "관계" as predicate
-❌ WRONG: `{"predicate": "관계", "object": "..."}`
-✅ CORRECT: Use specific predicates like 스승, 제자, 친구, 동료, etc.
+   **중요: 문맥 기반 관계 추론**
+   - **복합 관계 추출**: '~이자 ~이다', '~이고 ~하다' 등 접속사로 연결된 문장에서 여러 관계를 모두 놓치지 말고 추출하세요. (예: "A는 B의 제자이며 C의 스승이다" → (A, 제자, B), (A, 스승, C))
+   - **주어 생략 추론**: 문장에서 주어가 생략된 경우, 바로 앞 문장의 주어나 문맥상 가장 적절한 엔티티를 주어로 추론하여 연결하세요. (예: "그는 장풍의 고수이다. 또한 Duke의 제자이다." → (그, 제자, Duke))
+   - **인간 관계 추론**: 직접 명시되지 않은 인간 관계(선후배, 스승/제자, 동맹, 적대, 친구/라이벌 등)를 문맥적 힌트(학교, 나이, 동네, 직업 등)를 통해 능동적으로 추론하세요.
+     - 예: "기훈은 동네에서 상우를 알아봤다. 상우는 서울대를 나온 후배였다." → (기훈, 후배, 상우), (상우, 선배, 기훈)
+     - 예: "성기훈은 오일남의 제자이다." → (성기훈, 제자, 오일남), (오일남, 스승, 성기훈)
 
-### Rule 3: Direct Predicate Mapping (Subject is Predicate of Object)
-- "A는 B의 제자다" → `{"subject": "A", "predicate": "제자", "object": "B"}`
-- "A는 B의 스승이다" → `{"subject": "A", "predicate": "스승", "object": "B"}`
-- "A는 C이다" → `{"subject": "A", "predicate": "설명/역할", "object": "C"}`
+3. **Attributes (속성)**:
+   - 엔티티의 성질, 상태, 수치, 날짜, 별칭(별명) 등 구체적인 값.
+   - (Entity, Attribute_Name, Value) 형태로 추출하세요.
+   - 별칭이나 별명도 속성으로 추출하세요. 예: (오일남, 별칭, 깐부)
 
-### Rule 4: Chain-of-Thought Required
-- You MUST provide a "thinking" field before the "triples" list.
-- Explain your step-by-step logic: decompose the sentence, identify Subject/Object, and choose the most natural Predicate.
-
-### Rule 5: Resolve Pronouns (대명사 해소)
-- When you encounter pronouns (그, 그녀, 이, 그것, etc.), identify the actual entity from context.
-- ❌ WRONG: `{"subject": "그", "predicate": "스승", "object": "오일남"}`
-- ✅ CORRECT: `{"subject": "성기훈", "predicate": "스승", "object": "오일남"}`
-- **Strategy:** Look at previous sentences in the text to find the noun that the pronoun refers to.
-- If uncertain, skip the triple rather than using a pronoun.
-
-### Rule 6: Handle Lists and Explicit Relationships (병렬 구조 분해)
-- When multiple entities are listed for a single action, CREATE SEPARATE TRIPLES for each entity.
-- ❌ WRONG: `{"subject": "기훈", "predicate": "동맹", "object": "상우와 새벽"}` (DO NOT compound objects)
-- ✅ CORRECT: 
-  - `{"subject": "기훈", "predicate": "동맹", "object": "상우"}`
-  - `{"subject": "기훈", "predicate": "동맹", "object": "새벽"}`
-- If a sentence says "Alice allied with Bob and Charlie", you must extract TWO triples.
-
----
-
-## Few-Shot Examples:
-
-### Example 1: 관계 분리 (CRITICAL)
-**Text:** 성기훈은 오일남의 제자이다.
-**Thinking:**
-1. 문장 분해: "성기훈은 오일남의 제자이다."
-2. 트리플 변환: 성기훈(Subject)은 오일남(Object)의 **제자(Predicate)**이다.
-**Output:**
+반드시 아래 JSON 형식으로만 응답하세요:
 ```json
-{
-  "thinking": "성기훈은 오일남에 대해 '제자'라는 관계를 가집니다.",
-  "triples": [{"subject": "성기훈", "predicate": "제자", "object": "오일남"}]
-}
-```
-
-### Example 2: 다중 관계
-**Text:** 오일남은 Duke의 제자이며, 장풍의 고수이다.
-**Thinking:**
-1. 문장 분해:
-   - "오일남은 Duke의 제자이다." -> (Subject: 오일남, Predicate: 제자, Object: Duke)
-   - "오일남은 장풍의 고수이다." -> (Subject: 오일남, Predicate: 특기, Object: 장풍)
-**Output:**
-```json
-{
-  "thinking": "오일남은 Duke의 제자이고, 장풍이 특기입니다.",
+{{
+  "entities": [
+    {{"name": "엔티티명", "type": "추론된_타입", "description": "문맥상 의미 요약"}}
+  ],
   "triples": [
-    {"subject": "오일남", "predicate": "제자", "object": "Duke"},
-    {"subject": "오일남", "predicate": "특기", "object": "장풍"}
+    {{"subject": "주어_엔티티", "predicate": "관계_서술어", "object": "목적어_엔티티", "confidence": 0.9}}
+  ],
+  "properties": [
+    {{"entity": "엔티티명", "property": "속성명", "value": "속성값"}}
   ]
-}
+}}
 ```
 
-### Example 3: 속성
-**Text:** 오일남은 뇌종양을 앓고 있으며, 장풍을 사용한다.
-**Thinking:**
-1. "오일남은 뇌종양을 앓고 있다." -> (오일남, 건강상태, 뇌종양)
-2. "오일남은 장풍을 사용한다." -> (오일남, 사용기술, 장풍)
-**Output:**
-```json
-{
-  "thinking": "오일남의 상태와 사용하는 기술을 추출합니다.",
-  "triples": [
-    {"subject": "오일남", "predicate": "건강상태", "object": "뇌종양"},
-    {"subject": "오일남", "predicate": "사용기술", "object": "장풍"}
-  ]
-}
-```
+**추출 원칙:**
+- **사실 기반**: 텍스트에 명시되거나 강력하게 암시된 내용만 추출하세요. 근거 없는 추측은 지양하세요.
+- **적극적 추론**: 단, 문맥상 명백하게 유추 가능한 관계(예: 선후배, 스승/제자)는 적극적으로 추론하여 추출하세요.
+- **핵심 중심**: 문장의 핵심 정보를 담고 있는 관계를 우선적으로 추출하세요.
+- **명확성**: 모호한 대명사(그, 그녀, 이것)는 가능한 한 가리키는 대상(원래 엔티티)으로 치환하여 추출하세요.
+- **언어**: 결과값(엔티티명, 관계명 등)은 텍스트의 언어(한국어)를 따르세요.
+- **Confidence**: 추출한 정보의 확실성을 0.5 ~ 1.0 사이의 실수로 표현하세요.
 
-### Example 4: 혼합
-**Text:** 이정재는 배우로서 성기훈 역할을 맡았다. 성기훈은 이혼한 운전사이다.
-**Output:**
-```json
-{
-  "thinking": "이정재의 직업과 역할, 성기훈의 상태와 직업을 추출합니다.",
-  "triples": [
-    {"subject": "이정재", "predicate": "역할", "object": "성기훈"},
-    {"subject": "이정재", "predicate": "직업", "object": "배우"},
-    {"subject": "성기훈", "predicate": "상태", "object": "이혼"},
-    {"subject": "성기훈", "predicate": "직업", "object": "운전사"}
-  ]
-}
-```
+{examples}
 
-### Example 5: 대명사 해소 (CRITICAL)
-**Text:** 성기훈은 456번 참가자이다. 그는 이혼한 운전사로 빚에 시달린다. 오일남은 001번이다. 그는 성기훈에게 장풍을 전수했다.
-**Thinking:**
-1. "그는 이혼한 운전사" → 문맥상 "그"는 바로 앞 문장의 "성기훈"을 가리킴
-2. "그는 성기훈에게" → 문맥상 "그"는 바로 앞 문장의 "오일남"을 가리킴
-3. 대명사를 실제 엔티티로 치환하여 트리플 생성
-**Output:**
-```json
-{
-  "thinking": "대명사 '그'를 문맥에서 해소: 첫 번째는 성기훈, 두 번째는 오일남",
-  "triples": [
-    {"subject": "성기훈", "predicate": "역할", "object": "456번"},
-    {"subject": "성기훈", "predicate": "직업", "object": "운전사"},
-    {"subject": "성기훈", "predicate": "상태", "object": "이혼"},
-    {"subject": "성기훈", "predicate": "상태", "object": "빚에 시달림"},
-    {"subject": "오일남", "predicate": "역할", "object": "001번"},
-    {"subject": "오일남", "predicate": "전수", "object": "장풍"},
-    {"subject": "성기훈", "predicate": "스승", "object": "오일남"}
-  ]
-}
-```
-
-### Example 6: Parallel Structures (병렬 구조)
-**Text:** 기훈은 상우, 새벽 등과 동맹을 맺었다.
-**Thinking:**
-1. 문장 분석: 기훈이 동맹을 맺은 대상은 '상우'와 '새벽'이다. '등'은 추가 대상이 있음을 의미하지만 명시된 것만 추출한다.
-2. 트리플 생성:
-   - 기훈 - 동맹 - 상우
-   - 기훈 - 동맹 - 새벽
-**Output:**
-```json
-{
-  "thinking": "주어 '기훈'은 '상우'와 '새벽' 두 대상과 모두 '동맹' 관계를 맺고 있습니다. 각각 별도의 트리플로 분리합니다.",
-  "triples": [
-    {"subject": "기훈", "predicate": "동맹", "object": "상우"},
-    {"subject": "기훈", "predicate": "동맹", "object": "새벽"}
-  ]
-}
-```
-
----
-
-
-## Your Task:
-Extract triples from the text below. 
-- Use SPECIFIC Korean predicates (스승, 제자, 사용, 능력, 직업, 상태, 역할, etc.)
-- NEVER use "관계" as predicate
-- ALWAYS split "X의 Y" patterns
-
-**Text:**
+[분석 대상 텍스트]
 {text}
-
-**Output:**
-```json
-{"triples": [...]}
-```

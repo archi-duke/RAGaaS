@@ -311,15 +311,8 @@ async def delete_knowledge_base(kb_id: str):
         except Exception as e:
             print(f"[KB Delete] Neo4j cleanup error: {e}")
 
-    # 6. Delete TripleChunkMapping entries (MongoDB)
-    try:
-        from app.models.triple_chunk_mapping import TripleChunkMapping
-        result = await TripleChunkMapping.find(
-            TripleChunkMapping.kb_id == kb_id
-        ).delete()
-        print(f"[KB Delete] Deleted TripleChunkMapping entries for KB {kb_id}")
-    except Exception as e:
-        print(f"[KB Delete] TripleChunkMapping cleanup error: {e}")
+    # Note: TripleChunkMapping no longer stored in MongoDB
+    # source_node_id is stored directly in Neo4j/Fuseki
 
     # 7. Delete shared storage files for this KB
     try:

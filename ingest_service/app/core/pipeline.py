@@ -195,8 +195,8 @@ class IngestPipeline:
     ) -> List[Dict[str, Any]]:
         """Extract graph triples from nodes
 
-        Note: LlamaIndex Path Extractors are designed for use with PropertyGraphIndex.
-        Here we use a simplified method of calling LLM directly to extract triples.
+        Supports both legacy pipe-delimited format and modern JSON format.
+        JSON format allows richer extraction (entity types, properties, etc.)
         """
         
         if extractor_type == GraphExtractorType.NONE:
@@ -211,7 +211,7 @@ class IngestPipeline:
                 if len(text.strip()) < 10:  # Skip too short text
                     continue
                 
-                # Simple prompt-based extraction
+                # Prepare examples
                 examples_text = ""
                 if examples:
                     print(f"[Pipeline] Using Few-Shot Examples ({len(examples)} chars):\n{examples[:100]}...")
@@ -219,7 +219,9 @@ class IngestPipeline:
 
                 # Use custom prompt or default prompt
                 if custom_prompt:
-                    prompt = custom_prompt.format(text=text[:2000], examples=examples_text)
+                    print(f"[Pipeline DEBUG] Custom prompt length: {len(custom_prompt)}. Using .replace() method.")
+                    # Use safe replacement to avoid conflicts with JSON braces in prompt
+                    prompt = custom_prompt.replace("{text}", text[:2000]).replace("{examples}", examples_text)
                 else:
                     prompt = f"""Extract primary entities and their relationships from the following text.
 Format: (Subject, Relation, Object)
@@ -233,22 +235,54 @@ Triplets (one per line, format: Subject|Relation|Object):"""
                 response = self.llm.complete(prompt)
                 response_text = response.text.strip()
                 
-                # Parse response
-                for line in response_text.split('\n'):
-                    line = line.strip()
-                    if '|' in line:
-                        parts = line.split('|')
-                        if len(parts) >= 3:
+                # Try JSON parsing first (modern format)
+                parsed_json = self._try_parse_json(response_text)
+                if parsed_json:
+                    # Extract triples from JSON
+                    triples = parsed_json.get("triples", [])
+                    for t in triples:
+                        if all(k in t for k in ["subject", "predicate", "object"]):
                             triple = {
-                                "subject": parts[0].strip(),
-                                "predicate": parts[1].strip(),
-                                "object": parts[2].strip(),
+                                "subject": str(t["subject"]).strip(),
+                                "predicate": str(t["predicate"]).strip(),
+                                "object": str(t["object"]).strip(),
                                 "source_node_id": node.node_id,
+                                "confidence": t.get("confidence", 0.8),
                             }
                             all_triples.append(triple)
+                    
+                    # Also extract properties (entity attributes) as triples
+                    properties = parsed_json.get("properties", [])
+                    for prop in properties:
+                        if all(k in prop for k in ["entity", "property", "value"]):
+                            triple = {
+                                "subject": str(prop["entity"]).strip(),
+                                "predicate": f"has_{prop['property']}",
+                                "object": str(prop["value"]).strip(),
+                                "source_node_id": node.node_id,
+                                "confidence": 0.9,
+                            }
+                            all_triples.append(triple)
+                else:
+                    # Fallback: Legacy pipe-delimited format
+                    for line in response_text.split('\n'):
+                        line = line.strip()
+                        if '|' in line:
+                            parts = line.split('|')
+                            if len(parts) >= 3:
+                                triple = {
+                                    "subject": parts[0].strip(),
+                                    "predicate": parts[1].strip(),
+                                    "object": parts[2].strip(),
+                                    "source_node_id": node.node_id,
+                                    "confidence": 0.7,
+                                }
+                                all_triples.append(triple)
                             
             except Exception as e:
                 print(f"Error extracting from node {node.node_id}: {e}")
+                import traceback
+                traceback.print_exc()
                 continue
             
             if len(all_triples) > 0 and len(all_triples) % 5 == 0:
@@ -256,6 +290,29 @@ Triplets (one per line, format: Subject|Relation|Object):"""
 
         
         return all_triples
+
+    def _try_parse_json(self, text: str) -> Optional[Dict[str, Any]]:
+        """Try to parse JSON from LLM response, handling code blocks"""
+        import json
+        import re
+        
+        # Remove markdown code blocks if present
+        json_pattern = r'```json\s*(.*?)\s*```'
+        match = re.search(json_pattern, text, re.DOTALL)
+        if match:
+            text = match.group(1)
+        elif '```' in text:
+            # Generic code block
+            parts = text.split('```')
+            if len(parts) >= 2:
+                text = parts[1]
+        
+        # Try parsing
+        try:
+            return json.loads(text.strip())
+        except json.JSONDecodeError:
+            # Not JSON format
+            return None
 
     
     async def process(

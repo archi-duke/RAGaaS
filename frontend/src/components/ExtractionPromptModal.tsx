@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { X, Save, RotateCcw } from 'lucide-react';
+import { X, Save, RotateCcw, Loader } from 'lucide-react';
+import { kbApi } from '../services/api';
 
 interface ExtractionPromptModalProps {
     isOpen: boolean;
@@ -18,15 +19,49 @@ Text:
 Triplets (one per line, format: Subject|Relation|Object):`;
 
 export default function ExtractionPromptModal({ isOpen, onClose, initialPrompt, onSave }: ExtractionPromptModalProps) {
-    const [promptContent, setPromptContent] = useState(initialPrompt || DEFAULT_PROMPT);
+    const [promptContent, setPromptContent] = useState('');
+    const [isLoading, setIsLoading] = useState(false);
+    const [isSaving, setIsSaving] = useState(false);
 
     useEffect(() => {
-        setPromptContent(initialPrompt || DEFAULT_PROMPT);
-    }, [initialPrompt, isOpen]);
+        if (isOpen) {
+            loadPromptFromServer();
+        }
+    }, [isOpen]);
 
-    const handleSave = () => {
-        onSave(promptContent);
-        onClose();
+    const loadPromptFromServer = async () => {
+        setIsLoading(true);
+        try {
+            const res = await kbApi.getExtractionPrompt();
+            const serverPrompt = res.data?.content;
+            if (serverPrompt && serverPrompt !== 'Prompt not found in DB.') {
+                setPromptContent(serverPrompt);
+            } else {
+                // Fallback to initialPrompt or DEFAULT_PROMPT
+                setPromptContent(initialPrompt || DEFAULT_PROMPT);
+            }
+        } catch (err) {
+            console.error('Failed to load prompt from server:', err);
+            setPromptContent(initialPrompt || DEFAULT_PROMPT);
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    const handleSave = async () => {
+        setIsSaving(true);
+        try {
+            // Save to server
+            await kbApi.saveExtractionPrompt(promptContent);
+            // Also update parent state
+            onSave(promptContent);
+            onClose();
+        } catch (err) {
+            console.error('Failed to save prompt:', err);
+            alert('Failed to save prompt to server.');
+        } finally {
+            setIsSaving(false);
+        }
     };
 
     const handleReset = () => {

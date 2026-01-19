@@ -67,6 +67,38 @@ async def startup():
         print("[Startup] Milvus Connected.", file=sys.stdout, flush=True)
     except Exception as e:
         print(f"[Startup] Failed to connect to Milvus: {e}", file=sys.stdout, flush=True)
+    
+    # Seed improved extraction prompt if not exists
+    try:
+        from app.models.prompt import PromptTemplate
+        import os
+        
+        prompt_path = os.path.join(os.path.dirname(__file__), "data", "prompts", "graph_extraction_prompt.txt")
+        if os.path.exists(prompt_path):
+            with open(prompt_path, "r", encoding="utf-8") as f:
+                file_content = f.read()
+            
+            existing = await PromptTemplate.find_one(PromptTemplate.name == "graph_extraction_prompt")
+            if not existing:
+                # Insert new
+                new_prompt = PromptTemplate(
+                    name="graph_extraction_prompt",
+                    content=file_content,
+                    type="extraction"
+                )
+                await new_prompt.insert()
+                print(f"[Startup] Seeded extraction prompt ({len(file_content)} chars)", file=sys.stdout, flush=True)
+            elif existing.content != file_content:
+                # Update if file changed (e.g. placeholder fix)
+                existing.content = file_content
+                await existing.save()
+                print(f"[Startup] Updated extraction prompt ({len(file_content)} chars)", file=sys.stdout, flush=True)
+            else:
+                print("[Startup] Extraction prompt up-to-date.", file=sys.stdout, flush=True)
+        else:
+            print(f"[Startup] Prompt file not found: {prompt_path}", file=sys.stdout, flush=True)
+    except Exception as e:
+        print(f"[Startup] Failed to seed extraction prompt: {e}", file=sys.stdout, flush=True)
         
     # Recovery Task: Resume incomplete deletions (Temporarily disabled for Mongo migration)
     # try:

@@ -34,7 +34,7 @@ class FusekiConnector:
         """구조화된 트리플을 RDF N-Triples 형식으로 변환"""
         rdf_lines = []
         
-        for t in triples:
+        for idx, t in enumerate(triples):
             subj_clean = self._sanitize_uri(t.get("subject", ""))
             pred_clean = self._sanitize_uri(t.get("predicate", ""))
             obj_clean = self._sanitize_uri(t.get("object", ""))
@@ -46,7 +46,7 @@ class FusekiConnector:
             p_uri = f"<{self.namespace_relation}{pred_clean}>"
             o_uri = f"<{self.namespace_entity}{obj_clean}>"
             
-            # 트리플 추가
+            # 메인 트리플 추가
             rdf_lines.append(f"{s_uri} {p_uri} {o_uri} .")
             
             # Label 추가 (검색 성능 향상) - json.dumps로 안전하게 이스케이프
@@ -57,6 +57,27 @@ class FusekiConnector:
             rdf_lines.append(f'{s_uri} <http://www.w3.org/2000/01/rdf-schema#label> {subj_label} .')
             rdf_lines.append(f'{p_uri} <http://www.w3.org/2000/01/rdf-schema#label> {pred_label} .')
             rdf_lines.append(f'{o_uri} <http://www.w3.org/2000/01/rdf-schema#label> {obj_label} .')
+            
+            # ✅ 메타데이터 트리플 추가: source_node_id를 별도 트리플로 저장
+            # 트리플 statement URI 생성
+            source_node_id = t.get("source_node_id", "")
+            if source_node_id:
+                # 트리플을 고유하게 식별할 수 있는 URI 생성
+                import hashlib
+                triple_key = f"{t.get('subject', '')}|{t.get('predicate', '')}|{t.get('object', '')}"
+                triple_hash = hashlib.sha256(triple_key.encode()).hexdigest()[:16]
+                stmt_uri = f"<http://rag.local/stmt/{triple_hash}>"
+                
+                # Reification: 트리플을 리소스로 표현
+                rdf_lines.append(f'{stmt_uri} <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Statement> .')
+                rdf_lines.append(f'{stmt_uri} <http://www.w3.org/1999/02/22-rdf-syntax-ns#subject> {s_uri} .')
+                rdf_lines.append(f'{stmt_uri} <http://www.w3.org/1999/02/22-rdf-syntax-ns#predicate> {p_uri} .')
+                rdf_lines.append(f'{stmt_uri} <http://www.w3.org/1999/02/22-rdf-syntax-ns#object> {o_uri} .')
+                
+                # 메타데이터 속성 추가
+                source_node_id_literal = json.dumps(source_node_id, ensure_ascii=False)
+                rdf_lines.append(f'{stmt_uri} <http://rag.local/meta/sourceNodeId> {source_node_id_literal} .')
+                rdf_lines.append(f'{stmt_uri} <http://rag.local/meta/docId> "{doc_id}" .')
         
         return rdf_lines
     

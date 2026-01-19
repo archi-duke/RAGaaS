@@ -28,6 +28,8 @@ export const kbApi = {
     getExtractionPrompt: () => api.get('/knowledge-bases/extraction-prompt/content'),
     saveExtractionPrompt: (content: string) => api.post('/knowledge-bases/extraction-prompt/save', { content }),
     getQueryPrompt: (type: 'ontology_plus' | 'ontology_minus' | 'neo4j' = 'ontology_minus') => api.get('/knowledge-bases/query-prompt/content', { params: { type } }),
+    getTriples: (kbId: string, backend: string) => api.get(`/retrieval/graph/triples/${kbId}`, { params: { backend, limit: 1000 } }),
+    getChunk: (kbId: string, chunkId: string) => api.get(`/knowledge-bases/${kbId}/chunks/${chunkId}`),
 };
 
 export const docApi = {
@@ -133,4 +135,36 @@ export const retrievalApi = {
     }) => api.post(`/knowledge-bases/${kbId}/chat`, data),
 };
 
+// Ingest Service API (runs on port 8001)
+const ingestApi = axios.create({
+    baseURL: 'http://localhost:8001/api',
+    headers: {
+        'Content-Type': 'application/json',
+    },
+});
+
+export const extractionApi = {
+    preview: (data: {
+        kb_id: string;
+        doc_id: string;
+        file_path: string;
+        chunking?: any;
+        graph?: any;
+        graph_store?: string;
+        enable_text_cleaning?: boolean;
+        extraction_examples_yaml?: string;
+        custom_prompt?: string;
+    }) => ingestApi.post('/preview', data),
+
+    confirm: (previewId: string, data?: {
+        enable_inference?: boolean;
+        callback_url?: string;
+    }) => ingestApi.post(`/confirm/${previewId}`, data || {}),
+
+    discard: (previewId: string) => ingestApi.delete(`/preview/${previewId}`),
+
+    getJobStatus: (jobId: string) => ingestApi.get(`/jobs/${jobId}`),
+};
+
 export default api;
+

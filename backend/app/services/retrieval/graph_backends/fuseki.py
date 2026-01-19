@@ -190,15 +190,15 @@ class FusekiBackend(GraphBackend):
                         # [CRITICAL FIX] Perform Secondary Lookup to find REAL triples for these entities
                         # The LLM generated query (e.g. SELECT ?label) does not return the S-P-O structure we need for mapping.
                         # We must query the graph again to find triples connecting these found entities.
+                        # Now also fetch sourceNodeId from Reification for direct chunk mapping.
                         
                         real_triples = []
+                        discovered_chunk_ids = set()
+                        
                         if found_uris:
-                            # Construct a query to fetch triples involving these URIs
-                            # We limit to finding relations between these entities or involving them
-                            
+                            # Construct a query to fetch triples involving these URIs + Reification sourceNodeId
                             print(f"[DEBUG FUSEKI] found_uris for secondary lookup: {found_uris}", flush=True)
-                            # Fuseki에서 VALUES + FILTER 조합이 동작하지 않음
-                            # 각 URI에 대해 간단한 쿼리를 UNION으로 결합
+                            
                             union_clauses = []
                             for uri in found_uris:
                                 clause = f"""{{ BIND(<{uri}> AS ?target) . ?s ?p ?o . FILTER(?o = ?target) }}
@@ -208,6 +208,7 @@ class FusekiBackend(GraphBackend):
                             
                             union_body = " UNION ".join(union_clauses)
                             
+                            # Step 1: Get triples
                             secondary_query = f"""
                             PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
                             PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
@@ -225,8 +226,6 @@ class FusekiBackend(GraphBackend):
                             LIMIT 100
                             """
 
-
-                            
                             print(f"[DEBUG FUSEKI] Secondary Query:\n{secondary_query}", flush=True)
                             log_trace(f"[Fuseki] Executing Secondary Lookup for Real Triples...")
                             sec_results = fuseki_client.query_sparql(kb_id, secondary_query)
@@ -235,7 +234,6 @@ class FusekiBackend(GraphBackend):
                             if sec_bindings:
                                 print(f"[DEBUG FUSEKI] First binding: {sec_bindings[0]}", flush=True)
 
-                            
                             for b in sec_bindings:
                                 s = b["s"]["value"].split("/")[-1]
                                 p = b["p"]["value"].split("/")[-1]
@@ -247,18 +245,42 @@ class FusekiBackend(GraphBackend):
                                 })
                             
                             log_trace(f"[Fuseki] Secondary lookup retrieved {len(real_triples)} real triples.")
+                            
+                            # Step 2: Query Reification for sourceNodeId
+                            # Find Statement nodes that match our triples
+                            if real_triples:
+                                reification_query = f"""
+                                PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+                                PREFIX meta: <http://rag.local/meta/>
+                                SELECT ?sourceNodeId
+                                FROM <urn:x-arq:UnionGraph>
+                                WHERE {{
+                                  ?stmt rdf:type rdf:Statement ;
+                                        meta:sourceNodeId ?sourceNodeId .
+                                }}
+                                LIMIT 100
+                                """
+                                
+                                print(f"[DEBUG FUSEKI] Reification Query for sourceNodeId...", flush=True)
+                                reif_results = fuseki_client.query_sparql(kb_id, reification_query)
+                                reif_bindings = reif_results.get("results", {}).get("bindings", [])
+                                
+                                for rb in reif_bindings:
+                                    if "sourceNodeId" in rb:
+                                        node_id = rb["sourceNodeId"]["value"]
+                                        if node_id:
+                                            discovered_chunk_ids.add(node_id)
+                                
+                                log_trace(f"[Fuseki] Found {len(discovered_chunk_ids)} unique sourceNodeIds from Reification")
 
                         # Use real_triples if found, otherwise fall back to dummy triples (which will fail mapping but show entity)
                         final_triples = real_triples if real_triples else triples
 
-                        # 오프셋 정보 첨부
-                        triples_with_offset, discovered_chunk_ids = await self._attach_offsets_to_triples(kb_id, final_triples)
-
                         return {
-                            "chunk_ids": discovered_chunk_ids, # 오프셋에서 발견된 청크 ID
+                            "chunk_ids": list(discovered_chunk_ids),  # Fuseki Reification에서 직접 추출
                             "sparql_query": generated_sparql.strip(),
-                            "triples": triples_with_offset,
-                            "found_entities": list(found_entities), # Pass this back!
+                            "triples": final_triples,
+                            "found_entities": list(found_entities),
                             "trace_logs": trace_logs
                         }
                     else:
@@ -291,47 +313,3 @@ class FusekiBackend(GraphBackend):
             "trace_logs": trace_logs
         }
 
-
-    async def _attach_offsets_to_triples(self, kb_id: str, triples: List[Dict]) -> Tuple[List[Dict], List[str]]:
-        """MongoDB(Beanie)에서 트리플의 소스 오프셋 정보 조회하여 첨부"""
-        from app.models.triple_chunk_mapping import TripleChunkMapping, compute_triple_hash
-        
-        discovered_chunk_ids = set()
-        
-        try:
-            for triple in triples:
-                triple_hash = compute_triple_hash(
-                    triple.get("subject", ""),
-                    triple.get("predicate", ""),
-                    triple.get("object", "")
-                )
-                
-                # Beanie Query
-                mappings = await TripleChunkMapping.find(
-                    TripleChunkMapping.kb_id == kb_id,
-                    TripleChunkMapping.triple_hash == triple_hash
-                ).to_list()
-                
-                if mappings:
-                    # 오프셋은 첫 번째 매핑의 것 사용 (어차피 동일)
-                    triple["source_start"] = mappings[0].source_start
-                    triple["source_end"] = mappings[0].source_end
-                    
-                    # 관련된 청크 ID 수집
-                    for m in mappings:
-                        if m.chunk_id:
-                            discovered_chunk_ids.add(m.chunk_id)
-                else:
-                    triple["source_start"] = None
-                    triple["source_end"] = None
-                        
-        except Exception as e:
-            logger.warning(f"Error attaching offsets to triples: {e}")
-            import traceback
-            traceback.print_exc()
-            # Continue without offsets
-            for triple in triples:
-                triple.setdefault("source_start", None)
-                triple.setdefault("source_end", None)
-        
-        return triples, list(discovered_chunk_ids)
