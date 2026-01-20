@@ -118,12 +118,12 @@ export default function GraphDataTable({ kbId, backend }: GraphDataTableProps) {
                             fontWeight: 500,
                             padding: '2px 4px'
                         }}
-                        title="View Chunk Content"
+                        title={`Source Chunk ID: ${chunkId}\n(Note: Multiple triples may originate from the same text chunk)`}
                     >
                         {chunkId.substring(0, 8)}...
                     </span>
                 ) : (
-                    <span style={{ color: '#f59e0b' }}>⚠️ N/A</span>
+                    <span style={{ color: '#94a3b8' }}>-</span>
                 )}
             </td>
         );
@@ -144,15 +144,23 @@ export default function GraphDataTable({ kbId, backend }: GraphDataTableProps) {
     };
 
     const DocumentCell = (props: any) => {
-        const style = { ...props.style, ...centerStyle, color: '#64748b', fontSize: '0.85em' };
+        const { doc_filename, doc_id } = props.dataItem;
+        const style = { ...props.style, ...centerStyle, fontSize: '0.85em' };
+
+        // If filename is missing, show shortened ID with distinct style
+        const isUnknown = !doc_filename;
+        const display = doc_filename || (doc_id ? `${doc_id.substring(0, 8)}...` : '-');
+
         return (
             <td
-                style={style}
+                style={{ ...style, color: isUnknown ? '#94a3b8' : '#64748b' }}
                 className={props.className}
                 colSpan={props.colSpan || 1}
                 role="gridcell"
+                title={isUnknown ? `Document ID: ${doc_id} (Metadata missing or deleted)` : doc_filename}
             >
-                {props.dataItem.doc_filename || props.dataItem.doc_id || '-'}
+                {display}
+                {isUnknown && doc_id && <span style={{ fontSize: '0.7em', marginLeft: '4px', fontStyle: 'italic' }}>(del)</span>}
             </td>
         );
     };

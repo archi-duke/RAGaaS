@@ -1,49 +1,53 @@
-# Implementation Plan - RAG Management System
+# [Bug Fix & Logic Improvement] Graph Data Integrity & UI
 
-# Goal Description
-Build a Milvus-based RAG management system with React frontend and FastAPI backend. The system will support multiple Knowledge Bases, document management, and advanced retrieval strategies (Keyword, ANN, 2-Stage).
+## Problem Analysis
+1. **Orphaned Data (Data Integrity)**:
+   - **Issue**: Deleting a document in MongoDB does not always clean up corresponding data in Fuseki/Neo4j, leaving "orphaned triples".
+   - **Root Cause**: The current deletion logic is not transactional or verified. If the Graph DB deletion fails, the MongoDB record is still deleted, leading to inconsistency.
+   - **Impact**: Graph View shows triples with missing Document/Chunk info (displayed as `-` or `N/A`).
 
-## User Review Required
-> [!IMPORTANT]
-> - **Database**: SQLite will be used for metadata for simplicity.
-> - **Vector DB**: Milvus is expected to be running or accessible. I will assume a local Docker setup or similar is available or I will provide instructions.
-> - **Embeddings**: Will use a default model (e.g., OpenAI or a local HuggingFace model) but this needs to be configurable.
+2. **UI Issues (Graph Data Table)**:
+   - **Document ID Exposure**: Raw UUIDs are shown when document metadata is missing.
+   - **Chunk N/A**: Warning icons (`⚠️ N/A`) appear for valid legacy data or orphans.
+   - **Repetitive Content**: Users are confused why multiple rows point to the same chunk.
 
 ## Proposed Changes
 
-### Project Structure
-#### [NEW] /Users/dukekimm/Works/RAGaaS
-- `backend/`: FastAPI application
-- `frontend/`: React application
-- `docker-compose.yml`: For Milvus and other services (optional but recommended)
+### 1. Backend Logic Improvements (Critical)
+#### [MODIFY] [cleanup_service.py](file:///Users/dukekimm/Works/RAGaaS/backend/app/services/ingestion/cleanup_service.py)
+- **Transactional Deletion Strategy**:
+  - **Proposed Order**: 
+    1. **Graph DB Deletion** (Fuseki/Neo4j) - *Primary*.
+    2. **Verification** - Check if data is truly gone.
+    3. **MongoDB Deletion** - *Final Commit*.
+  - If step 1 fails, **abort** the entire operation and report error to user. Do NOT delete the MongoDB record.
+- **Post-Deletion Verification**:
+  - Implement a `verify_deletion(doc_id)` function that queries Fuseki/Neo4j to ensure no triples remain for that `doc_id`.
+  - Trigger `cleanup_orphans` logic (like the manual script) if verification fails.
 
-### Backend (FastAPI)
-#### [NEW] backend/
-- `main.py`: Entry point
-- `app/api/`: API routers (knowledge_base.py, document.py, retrieval.py)
-- `app/core/`: Config, database connection, Milvus client
-- `app/models/`: SQLModel/Pydantic models
-- `app/services/`: Business logic (Ingestion, Chunking, Retrieval)
-    - `chunking.py`: Size, Parent-Child, Context-Aware logic
-    - `retrieval.py`: Keyword, ANN, 2-Stage logic
+#### [NEW] [Garbage Collection API]
+- Add an Admin API endpoint (e.g., `POST /api/admin/gc`) to run the orphan cleanup logic on demand.
 
-### Frontend (React)
-#### [NEW] frontend/
-- `src/components/`: Reusable components
-- `src/pages/`: Dashboard, KnowledgeBaseDetail
-- `src/services/`: API client
-- `src/types/`: TypeScript interfaces
+### 2. Frontend UI Improvements
+#### [MODIFY] [GraphDataTable.tsx](file:///Users/dukekimm/Works/RAGaaS/frontend/src/components/GraphDataTable.tsx)
+- **Graceful Error Handling**: 
+  - Display `-` instead of `⚠️ N/A` for missing chunks.
+  - Show "Unknown/Deleted" label for missing document filenames instead of raw UUIDs.
+- **UX Enhancements**:
+  - Add tooltip explaining "Multiple triples per chunk".
 
 ## Verification Plan
-
 ### Automated Tests
-- Backend: `pytest` for API endpoints and logic.
-- Frontend: Basic rendering tests.
+- **Deletion Test**: 
+  - Ingest a document -> Verify triples exist.
+  - Delete document -> Verify `doc_id` returns 0 results in Fuseki/Neo4j.
+  - Verify MongoDB record is gone.
 
 ### Manual Verification
-- **Setup**: Run backend and frontend.
-- **Flow**:
-    1.  Create a Knowledge Base.
-    2.  Upload a PDF/TXT file.
-    3.  Check if chunks are created (Size, Parent-Child, etc.).
-    4.  Perform a search (Keyword, ANN, 2-Stage) and verify results.
+1. **Clean State Check**: 
+   - Run the manual GC script (done).
+   - Verify Graph Data tab looks clean (no N/A).
+2. **Deletion Flow**:
+   - Upload new file.
+   - Delete it.
+   - Check Graph Data tab to ensure no leftovers.
