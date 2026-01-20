@@ -180,6 +180,8 @@ export const extractionApi = {
         max_triplets_per_chunk?: number;
         num_workers?: number;
         generate_inverse_relations?: boolean;
+        enable_text_cleaning?: boolean;
+        enable_subject_restoration?: boolean;
         extraction_examples_yaml?: string;
         custom_prompt?: string;
     }) => ingestApi.post('/extract-chunk', data),

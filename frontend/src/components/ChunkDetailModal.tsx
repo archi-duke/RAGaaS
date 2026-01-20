@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { Database, ChevronDown, ChevronUp, FlaskConical } from 'lucide-react';
 import { extractionApi, kbApi } from '../services/api';
@@ -97,6 +97,32 @@ export default function ChunkDetailModal({ isOpen, onClose, chunk, title = 'Chun
     const [showExampleModal, setShowExampleModal] = useState(false);
     const [showPromptModal, setShowPromptModal] = useState(false);
 
+    // Selection state for partial extraction
+    const contentRef = useRef<HTMLDivElement>(null);
+    const [selectionText, setSelectionText] = useState('');
+
+    // Track text selection within the content area
+    useEffect(() => {
+        const handleSelectionChange = () => {
+            const selection = window.getSelection();
+            if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
+                if (selectionText) setSelectionText(''); // Optimize check
+                return;
+            }
+
+            const text = selection.toString().trim();
+            // Check if selection is inside contentRef
+            if (contentRef.current && contentRef.current.contains(selection.anchorNode)) {
+                if (text !== selectionText) setSelectionText(text);
+            } else {
+                if (selectionText) setSelectionText('');
+            }
+        };
+
+        document.addEventListener('selectionchange', handleSelectionChange);
+        return () => document.removeEventListener('selectionchange', handleSelectionChange);
+    }, [selectionText]);
+
     // Graph Params (same structure as UploadDocumentModal)
     const [graphParams, setGraphParams] = useState({
         extractor_type: 'simple' as 'simple' | 'dynamic' | 'schema',
@@ -105,6 +131,7 @@ export default function ChunkDetailModal({ isOpen, onClose, chunk, title = 'Chun
         num_workers: 4,
         generate_inverse_relations: true,
         enable_text_cleaning: false,
+        enable_subject_restoration: true,
         enable_inference: false,
         extraction_examples_yaml: '',
         custom_prompt: '',
@@ -157,15 +184,19 @@ export default function ChunkDetailModal({ isOpen, onClose, chunk, title = 'Chun
 
     const handleExtract = async () => {
         setIsExtracting(true);
+        // Use selected text if available, otherwise full content
+        const textToExtract = selectionText || chunk.content;
+
         try {
             const res = await extractionApi.extractChunk({
-                chunk_text: chunk.content,
+                chunk_text: textToExtract,
                 extractor_type: graphParams.extractor_type,
                 max_paths_per_chunk: graphParams.max_paths_per_chunk,
                 max_triplets_per_chunk: graphParams.max_triplets_per_chunk,
                 num_workers: graphParams.num_workers,
                 generate_inverse_relations: graphParams.generate_inverse_relations,
-                extraction_examples_yaml: graphParams.extraction_examples_yaml || undefined,
+                enable_subject_restoration: graphParams.enable_subject_restoration,
+                enable_text_cleaning: graphParams.enable_text_cleaning,
                 custom_prompt: graphParams.custom_prompt || undefined,
             });
             setExtractedTriples(res.data.triples || []);
@@ -361,6 +392,19 @@ export default function ChunkDetailModal({ isOpen, onClose, chunk, title = 'Chun
                                     </div>
                                 </label>
 
+                                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', marginBottom: '1rem' }}>
+                                    <input
+                                        type="checkbox"
+                                        checked={graphParams.enable_subject_restoration}
+                                        onChange={(e) => setGraphParams({ ...graphParams, enable_subject_restoration: e.target.checked })}
+                                        style={{ width: '1.1rem', height: '1.1rem' }}
+                                    />
+                                    <div>
+                                        <span style={{ color: '#334155', fontWeight: 500, fontSize: '0.9rem' }}>Subject Restoration</span>
+                                        <div style={{ fontSize: '0.75rem', color: '#64748b' }}>Resolve omitted subjects (KR)</div>
+                                    </div>
+                                </label>
+
                                 <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
                                     <input
                                         type="checkbox"
@@ -431,7 +475,7 @@ export default function ChunkDetailModal({ isOpen, onClose, chunk, title = 'Chun
                                     }}
                                 >
                                     <FlaskConical size={16} />
-                                    {isExtracting ? 'Extracting...' : 'Extract'}
+                                    {isExtracting ? 'Extracting...' : (selectionText ? 'Extract (Selection)' : 'Extract')}
                                 </button>
                             </div>
                         </div>
@@ -544,6 +588,7 @@ export default function ChunkDetailModal({ isOpen, onClose, chunk, title = 'Chun
                                 maxHeight: showExtractionSettings || showResults ? '40vh' : '60vh',
                                 overflowY: 'auto'
                             }}
+                            ref={contentRef}
                         >
                             {chunk.content.replace(/(\r\n|\n|\r){2,}/gm, '\n')}
                         </div>
