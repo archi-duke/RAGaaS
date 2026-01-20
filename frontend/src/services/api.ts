@@ -28,7 +28,7 @@ export const kbApi = {
     getExtractionPrompt: () => api.get('/knowledge-bases/extraction-prompt/content'),
     saveExtractionPrompt: (content: string) => api.post('/knowledge-bases/extraction-prompt/save', { content }),
     getQueryPrompt: (type: 'ontology_plus' | 'ontology_minus' | 'neo4j' = 'ontology_minus') => api.get('/knowledge-bases/query-prompt/content', { params: { type } }),
-    getTriples: (kbId: string, backend: string) => api.get(`/retrieval/graph/triples/${kbId}`, { params: { backend, limit: 1000 } }),
+    getTriples: (kbId: string, backend: string, skip: number = 0, limit: number = 50, sort?: any, filter?: any) => api.get(`/retrieval/graph/triples/${kbId}`, { params: { backend, skip, limit, include_chunk_text: false, sort: sort ? JSON.stringify(sort) : undefined, filter: filter ? JSON.stringify(filter) : undefined } }),
     getChunk: (kbId: string, chunkId: string) => api.get(`/knowledge-bases/${kbId}/chunks/${chunkId}`),
 };
 
@@ -70,6 +70,8 @@ export const docApi = {
             },
         });
     },
+    update: (kbId: string, docId: string, data: { extraction_examples?: string; custom_prompt?: string }) =>
+        api.patch(`/knowledge-bases/${kbId}/documents/${docId}`, data),
 };
 
 export const retrievalApi = {
@@ -164,6 +166,18 @@ export const extractionApi = {
     discard: (previewId: string) => ingestApi.delete(`/preview/${previewId}`),
 
     getJobStatus: (jobId: string) => ingestApi.get(`/jobs/${jobId}`),
+
+    // Extract triples from a single chunk (for testing extraction settings)
+    extractChunk: (data: {
+        chunk_text: string;
+        extractor_type?: string;
+        max_paths_per_chunk?: number;
+        max_triplets_per_chunk?: number;
+        num_workers?: number;
+        generate_inverse_relations?: boolean;
+        extraction_examples_yaml?: string;
+        custom_prompt?: string;
+    }) => ingestApi.post('/extract-chunk', data),
 };
 
 export default api;

@@ -968,6 +968,7 @@ export default function KnowledgeBaseDetail() {
                 isLoading={isLoadingChunks}
                 kbId={id!}
                 onChunkUpdated={() => handleViewChunks(selectedDoc)}
+                isGraphEnabled={kb.graph_backend !== 'none' && kb.graph_backend !== undefined}
             />
 
             <PromptDialog

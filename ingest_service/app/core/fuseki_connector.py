@@ -78,6 +78,11 @@ class FusekiConnector:
                 source_node_id_literal = json.dumps(source_node_id, ensure_ascii=False)
                 rdf_lines.append(f'{stmt_uri} <http://rag.local/meta/sourceNodeId> {source_node_id_literal} .')
                 rdf_lines.append(f'{stmt_uri} <http://rag.local/meta/docId> "{doc_id}" .')
+                
+                # Confidence 추가
+                confidence = t.get("confidence")
+                if confidence is not None:
+                    rdf_lines.append(f'{stmt_uri} <http://rag.local/meta/confidence> "{confidence}" .')
         
         return rdf_lines
     
@@ -125,13 +130,38 @@ class FusekiConnector:
         # 역관계 추가
         all_triples = list(triples)
         if generate_inverse:
+            inverse_mapping = {
+                "스승": "제자", "제자": "스승",
+                "부모": "자녀", "자녀": "부모",
+                "선생": "학생", "학생": "선생",
+                "상사": "부하", "부하": "상사",
+            }
+            
             for t in triples:
-                if not t.get("is_inverse", False):
+                if t.get("is_inverse", False):
+                    continue
+                    
+                pred = t.get("predicate", "")
+                if pred in inverse_mapping:
                     inverse = {
                         "subject": t.get("object"),
-                        "predicate": f"inverse_{t.get('predicate', '')}",
+                        "predicate": inverse_mapping[pred],
                         "object": t.get("subject"),
+                        "source_node_id": t.get("source_node_id"),
                         "is_inverse": True,
+                        "confidence": t.get("confidence", 0.7)
+                    }
+                    all_triples.append(inverse)
+                else:
+                    # 매핑이 없는 경우, 기계적 역관계 생성 (inverse_접두사)
+                    # 사용자가 원치 않을 수 있으나, 일단 기존 로직 유지하되 구분
+                    inverse = {
+                        "subject": t.get("object"),
+                        "predicate": f"inverse_{pred}",
+                        "object": t.get("subject"),
+                        "source_node_id": t.get("source_node_id"),
+                        "is_inverse": True,
+                        "confidence": t.get("confidence", 0.7)
                     }
                     all_triples.append(inverse)
         

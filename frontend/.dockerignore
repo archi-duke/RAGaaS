@@ -13,3 +13,7 @@ README.md
 coverage
 .vscode
 .idea
+
+# Include license files for build
+!telerik-license.txt
+!kendo-ui-license.txt

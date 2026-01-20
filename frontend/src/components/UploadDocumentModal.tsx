@@ -2,8 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Upload, X, FileText, Settings, Database, AlertCircle, Check, Info, Eye } from 'lucide-react';
 import { docApi, kbApi, extractionApi } from '../services/api';
 import MessageDialog from './MessageDialog';
-import ExtractionExampleModal from './ExtractionExampleModal';
-import ExtractionPromptModal from './ExtractionPromptModal';
+import PromptDialog from './PromptDialog';
 import ExtractionPreviewModal from './ExtractionPreviewModal';
 
 interface UploadDocumentModalProps {
@@ -510,18 +509,20 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                 </div>
             </div>
 
-            <ExtractionExampleModal
+            <PromptDialog
                 isOpen={showExampleModal}
                 onClose={() => setShowExampleModal(false)}
-                initialYaml={graphParams.extraction_examples_yaml}
+                initialPrompt={graphParams.extraction_examples_yaml}
                 onSave={(yaml) => setGraphParams(prev => ({ ...prev, extraction_examples_yaml: yaml }))}
+                mode="extraction_examples"
             />
 
-            <ExtractionPromptModal
+            <PromptDialog
                 isOpen={showPromptModal}
                 onClose={() => setShowPromptModal(false)}
                 initialPrompt={graphParams.custom_prompt}
                 onSave={(prompt) => setGraphParams(prev => ({ ...prev, custom_prompt: prompt }))}
+                mode="extraction_prompt"
             />
 
             <MessageDialog

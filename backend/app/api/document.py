@@ -102,7 +102,16 @@ async def upload_document(
     
     # Build graph config (only used if Graph RAG is enabled)
     graph_config = {}
-    if kb.enable_graph_rag:
+    is_graph_enabled = kb.enable_graph_rag or (kb.graph_backend in ["ontology", "neo4j"])
+    
+    logger.info(f"Uploading document. is_graph_enabled={is_graph_enabled}")
+    logger.info(f"final_config keys: {list(final_config.keys())}")
+    if "extractor_type" in final_config:
+        logger.info(f"final_config contains extractor_type: {final_config['extractor_type']}")
+    else:
+        logger.warning("final_config missing extractor_type")
+
+    if is_graph_enabled:
         graph_config = {
             "extractor_type": final_config.get("extractor_type", "simple"),
             "max_paths_per_chunk": final_config.get("max_paths_per_chunk", 10),
@@ -110,27 +119,62 @@ async def upload_document(
             "num_workers": final_config.get("num_workers", 4),
             "generate_inverse_relations": final_config.get("generate_inverse_relations", True),
         }
+        
+    # Override boolean flags from JSON config if present
+    if "enable_text_cleaning" in final_config:
+        enable_text_cleaning = final_config["enable_text_cleaning"]
+    if "enable_inference" in final_config:
+        enable_inference = final_config["enable_inference"]
     
     
+    # Load custom prompt for graph extraction
+    # Priority: 1. User input (in chunking_config), 2. File-based default
+    graph_extraction_prompt = final_config.get("custom_prompt")
+    
+    if not graph_extraction_prompt:
+        import os
+        from app.core.config import settings
+        
+        prompt_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "data", "prompts", "graph_extraction_prompt.txt")
+        if os.path.exists(prompt_path):
+            try:
+                with open(prompt_path, "r", encoding="utf-8") as pf:
+                    graph_extraction_prompt = pf.read()
+                logger.info(f"Loaded custom graph extraction prompt from file ({len(graph_extraction_prompt)} chars)")
+            except Exception as e:
+                logger.warning(f"Failed to read graph extraction prompt: {e}")
+
+    # Load default examples if not provided
+    final_examples_yaml = extraction_examples_yaml
+    if not final_examples_yaml:
+        # Check config first
+        final_examples_yaml = final_config.get("extraction_examples_yaml")
+        
+    if not final_examples_yaml:
+        default_examples_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "..", "extraction_examples.yaml")
+        if os.path.exists(default_examples_path):
+            try:
+                with open(default_examples_path, "r", encoding="utf-8") as ef:
+                    final_examples_yaml = ef.read()
+                logger.info(f"Loaded default extraction examples ({len(final_examples_yaml)} chars)")
+            except Exception as e:
+                logger.warning(f"Failed to read default examples: {e}")
+
+    # Update Document with Extraction Settings
+    doc.extractor_type = graph_config.get("extractor_type")
+    doc.max_paths = graph_config.get("max_paths_per_chunk")
+    doc.enable_text_cleaning = enable_text_cleaning
+    doc.enable_inference = enable_inference
+    doc.generate_inverse = graph_config.get("generate_inverse_relations")
+    doc.extraction_examples = final_examples_yaml
+    doc.custom_prompt = graph_extraction_prompt
+    
+    await doc.save()
+
     # Call Ingest Service asynchronously
     async def call_ingest_service():
         try:
-            # Load custom prompt for graph extraction from file
-            graph_extraction_prompt = None
-            prompt_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "data", "prompts", "graph_extraction_prompt.txt")
-            if os.path.exists(prompt_path):
-                with open(prompt_path, "r", encoding="utf-8") as pf:
-                    graph_extraction_prompt = pf.read()
-                logger.info(f"[Ingest] Loaded custom graph extraction prompt ({len(graph_extraction_prompt)} chars)")
-            
-            # Load default examples if not provided by user
-            final_examples_yaml = extraction_examples_yaml
-            if not final_examples_yaml:
-                default_examples_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "..", "extraction_examples.yaml")
-                if os.path.exists(default_examples_path):
-                    with open(default_examples_path, "r", encoding="utf-8") as ef:
-                        final_examples_yaml = ef.read()
-                    logger.info(f"[Ingest] Loaded default extraction examples ({len(final_examples_yaml)} chars)")
+            from app.services.ingestion.ingest_client import ingest_client
             
             result = await ingest_client.create_ingest_job(
                 kb_id=kb_id,
@@ -195,6 +239,34 @@ async def delete_document(
     except Exception as e:
         logger.error(f"Failed to initiate deletion for doc {doc_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+class UpdateDocumentRequest(BaseModel):
+    extraction_examples: Optional[str] = None
+    custom_prompt: Optional[str] = None
+
+@router.patch("/{kb_id}/documents/{doc_id}")
+async def update_document(
+    kb_id: str,
+    doc_id: str,
+    body: UpdateDocumentRequest
+):
+    doc = await DocModel.find_one(DocModel.id == doc_id, DocModel.kb_id == kb_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+        
+    updated = False
+    if body.extraction_examples is not None:
+        doc.extraction_examples = body.extraction_examples
+        updated = True
+    if body.custom_prompt is not None:
+        doc.custom_prompt = body.custom_prompt
+        updated = True
+        
+    if updated:
+        doc.updated_at = datetime.utcnow()
+        await doc.save()
+        
+    return doc
 
 @router.get("/{kb_id}/documents/{doc_id}/chunks")
 async def get_document_chunks(kb_id: str, doc_id: str):

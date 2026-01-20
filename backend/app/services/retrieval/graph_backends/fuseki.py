@@ -102,7 +102,7 @@ class FusekiBackend(GraphBackend):
                             db_prompt = await PromptTemplate.find_one(PromptTemplate.name == "sparql_generation_prompt")
                             if db_prompt:
                                 mongo_prompt_content = db_prompt.content
-                                log_trace(f"[Fuseki] Using Prompt from Global Collection (Fallback)")
+                                log_trace(f"[Fuseki] Using Prompt from Global Collection (DB)")
     
                     except Exception as e_prompt:
                         log_trace(f"[Fuseki] WARNING: Failed to fetch prompt: {e_prompt}")
@@ -187,16 +187,54 @@ class FusekiBackend(GraphBackend):
 
                         log_trace(f"[Fuseki] Found {len(found_entities)} entities from graph: {list(found_entities)[:5]}...")
                         
-                        # [CRITICAL FIX] Perform Secondary Lookup to find REAL triples for these entities
-                        # The LLM generated query (e.g. SELECT ?label) does not return the S-P-O structure we need for mapping.
-                        # We must query the graph again to find triples connecting these found entities.
-                        # Now also fetch sourceNodeId from Reification for direct chunk mapping.
-                        
+                        # [NEW] Try to extract triples directly from LLM query result
+                        # If the LLM followed the updated templates, it should return ?subject, ?predicate, ?object
                         real_triples = []
                         discovered_chunk_ids = set()
                         
-                        if found_uris:
-                            # Construct a query to fetch triples involving these URIs + Reification sourceNodeId
+                        for binding in bindings:
+                            # Check if binding contains subject/predicate/object pattern
+                            has_spo = ("subject" in binding or "s1" in binding) and ("predicate" in binding or "p1" in binding) and ("object" in binding or "o1" in binding)
+                            has_spo_alt = "subjectLabel" in binding and "objectLabel" in binding
+                            
+                            if has_spo or has_spo_alt:
+                                # Extract triple directly from binding
+                                subj = binding.get("subject", binding.get("s1", binding.get("subjectLabel", {})))
+                                pred = binding.get("predicate", binding.get("p1", {}))
+                                obj = binding.get("object", binding.get("o1", binding.get("objectLabel", {})))
+                                
+                                subj_val = subj.get("value", "") if isinstance(subj, dict) else str(subj)
+                                pred_val = pred.get("value", "") if isinstance(pred, dict) else str(pred)
+                                obj_val = obj.get("value", "") if isinstance(obj, dict) else str(obj)
+                                
+                                # Clean up URIs to readable names
+                                subj_clean = subj_val.split("/")[-1] if "/" in subj_val else subj_val
+                                pred_clean = pred_val.split("/")[-1] if "/" in pred_val else pred_val
+                                obj_clean = obj_val.split("/")[-1] if "/" in obj_val else obj_val
+                                
+                                # Use labels if available
+                                subj_label = binding.get("subjectLabel", binding.get("startLabel", {}))
+                                obj_label = binding.get("objectLabel", binding.get("resultLabel", binding.get("midLabel", {})))
+                                
+                                if isinstance(subj_label, dict) and subj_label.get("value"):
+                                    subj_clean = subj_label.get("value")
+                                if isinstance(obj_label, dict) and obj_label.get("value"):
+                                    obj_clean = obj_label.get("value")
+                                
+                                if subj_clean and pred_clean and obj_clean:
+                                    real_triples.append({
+                                        "subject": subj_clean,
+                                        "predicate": pred_clean,
+                                        "object": obj_clean
+                                    })
+                        
+                        if real_triples:
+                            log_trace(f"[Fuseki] Extracted {len(real_triples)} triples directly from LLM query result!")
+                            print(f"[DEBUG FUSEKI] Direct triples: {real_triples[:3]}", flush=True)
+                        
+                        # If no direct triples found, fall back to secondary lookup
+                        if not real_triples and found_uris:
+                            # Construct a query to fetch triples involving these URIs
                             print(f"[DEBUG FUSEKI] found_uris for secondary lookup: {found_uris}", flush=True)
                             
                             union_clauses = []
@@ -208,7 +246,6 @@ class FusekiBackend(GraphBackend):
                             
                             union_body = " UNION ".join(union_clauses)
                             
-                            # Step 1: Get triples
                             secondary_query = f"""
                             PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
                             PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
@@ -230,10 +267,7 @@ class FusekiBackend(GraphBackend):
                             log_trace(f"[Fuseki] Executing Secondary Lookup for Real Triples...")
                             sec_results = fuseki_client.query_sparql(kb_id, secondary_query)
                             sec_bindings = sec_results.get("results", {}).get("bindings", [])
-                            print(f"[DEBUG FUSEKI] Secondary bindings count: {len(sec_bindings)}", flush=True)
-                            if sec_bindings:
-                                print(f"[DEBUG FUSEKI] First binding: {sec_bindings[0]}", flush=True)
-
+                            
                             for b in sec_bindings:
                                 s = b["s"]["value"].split("/")[-1]
                                 p = b["p"]["value"].split("/")[-1]
@@ -245,23 +279,35 @@ class FusekiBackend(GraphBackend):
                                 })
                             
                             log_trace(f"[Fuseki] Secondary lookup retrieved {len(real_triples)} real triples.")
+
+                        # [MOVED & IMPROVED] Query Reification for sourceNodeId if ANY URIs found
+                        # This should run even if real_triples were extracted directly from LLM
+                        if found_uris:
+                            # Optimize: Use VALUES for faster filtering
+                            uri_list = " ".join([f"<{u}>" for u in found_uris])
                             
-                            # Step 2: Query Reification for sourceNodeId
-                            # Find Statement nodes that match our triples
-                            if real_triples:
-                                reification_query = f"""
-                                PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
-                                PREFIX meta: <http://rag.local/meta/>
-                                SELECT ?sourceNodeId
-                                FROM <urn:x-arq:UnionGraph>
-                                WHERE {{
-                                  ?stmt rdf:type rdf:Statement ;
-                                        meta:sourceNodeId ?sourceNodeId .
-                                }}
-                                LIMIT 100
-                                """
-                                
-                                print(f"[DEBUG FUSEKI] Reification Query for sourceNodeId...", flush=True)
+                            reification_query = f"""
+                            PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+                            PREFIX meta: <http://rag.local/meta/>
+                            SELECT DISTINCT ?sourceNodeId
+                            FROM <urn:x-arq:UnionGraph>
+                            WHERE {{
+                              VALUES ?target {{ {uri_list} }} .
+                              {{
+                                ?stmt rdf:type rdf:Statement ;
+                                      rdf:subject ?target ;
+                                      meta:sourceNodeId ?sourceNodeId .
+                              }} UNION {{
+                                ?stmt rdf:type rdf:Statement ;
+                                      rdf:object ?target ;
+                                      meta:sourceNodeId ?sourceNodeId .
+                              }}
+                            }}
+                            LIMIT 100
+                            """
+                            
+                            print(f"[DEBUG FUSEKI] Reification Query for sourceNodeId...", flush=True)
+                            try:
                                 reif_results = fuseki_client.query_sparql(kb_id, reification_query)
                                 reif_bindings = reif_results.get("results", {}).get("bindings", [])
                                 
@@ -272,6 +318,8 @@ class FusekiBackend(GraphBackend):
                                             discovered_chunk_ids.add(node_id)
                                 
                                 log_trace(f"[Fuseki] Found {len(discovered_chunk_ids)} unique sourceNodeIds from Reification")
+                            except Exception as e:
+                                log_trace(f"[Fuseki] Warning: Reification query failed: {e}")
 
                         # Use real_triples if found, otherwise fall back to dummy triples (which will fail mapping but show entity)
                         final_triples = real_triples if real_triples else triples

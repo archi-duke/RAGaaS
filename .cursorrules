@@ -23,6 +23,7 @@ This is a RAG (Retrieval-Augmented Generation) Management System built with:
 
 # Frontend (React/TypeScript) Rules
 - **Components**: Use strict Functional Components with TypeScript interfaces for Props.
+- **Language**: All UI text must be in English.
 - **State Management**: Use React Hooks (`useState`, `useEffect`, `useCallback`) properly. Avoid class components.
 - **Typing**: Explicitly define types/interfaces. Do not use `any`; use `unknown` if type is truly ambiguous.
 - **Styling**: Currently using inline styles or CSS modules. Maintain consistency with existing style patterns.

@@ -1,6 +1,8 @@
-import { useState } from 'react';
-import { X, ChevronRight, ChevronDown, Loader2, Edit2, Check, XCircle } from 'lucide-react';
+import React, { useState } from 'react';
+import { X, Loader2 } from 'lucide-react';
 import { docApi } from '../services/api';
+import { Grid, GridColumn } from '@progress/kendo-react-grid';
+import ChunkDetailModal from './ChunkDetailModal';
 
 interface Chunk {
     chunk_id: string;
@@ -21,123 +23,77 @@ interface ChunksModalProps {
     isLoading: boolean;
     kbId: string;
     onChunkUpdated: () => void;
+    isGraphEnabled?: boolean;
 }
 
-export default function ChunksModal({ isOpen, onClose, document, chunks, isLoading, kbId, onChunkUpdated }: ChunksModalProps) {
-    const [expandedParents, setExpandedParents] = useState<Record<string, boolean>>({});
-    const [expandedChunks, setExpandedChunks] = useState<Record<number, boolean>>({});
-    const [editingChunk, setEditingChunk] = useState<string | null>(null);
-    const [editContent, setEditContent] = useState<string>('');
-    const [isSaving, setIsSaving] = useState(false);
+export default function ChunksModal({ isOpen, onClose, document, chunks, isLoading, kbId, onChunkUpdated, isGraphEnabled = false }: ChunksModalProps) {
+    const [selectedChunk, setSelectedChunk] = useState<{ id: string; content: string } | null>(null);
+    const [skip, setSkip] = useState(0);
+    const [take, setTake] = useState(10);
 
     if (!isOpen || !document) return null;
 
-    // Group chunks by parent
-    const parentChunks = chunks.filter(c => !c.parent_id);
-    const childrenByParent = chunks.reduce((acc, chunk) => {
-        if (chunk.parent_id) {
-            if (!acc[chunk.parent_id]) acc[chunk.parent_id] = [];
-            acc[chunk.parent_id].push(chunk);
-        }
-        return acc;
-    }, {} as Record<string, Chunk[]>);
-
-    const hasParentChild = parentChunks.length > 0 && Object.keys(childrenByParent).length > 0;
-
-    const handleEditClick = (chunk: Chunk) => {
-        setEditingChunk(chunk.chunk_id);
-        setEditContent(chunk.content);
+    const handleChunkClick = (chunk: Chunk) => {
+        setSelectedChunk({
+            id: chunk.chunk_id,
+            content: chunk.content
+        });
     };
 
-    const handleCancelEdit = () => {
-        setEditingChunk(null);
-        setEditContent('');
-    };
-
-    const handleSaveEdit = async (chunkId: string) => {
-        if (!editContent.trim()) return;
-
-        setIsSaving(true);
+    const handleSaveChunk = async (newContent: string) => {
+        if (!selectedChunk) return;
         try {
-            await docApi.updateChunk(kbId, document.id, chunkId, editContent);
-            setEditingChunk(null);
-            setEditContent('');
-            onChunkUpdated(); // Refresh chunks
+            await docApi.updateChunk(kbId, document.id, selectedChunk.id, newContent);
+            setSelectedChunk(prev => prev ? { ...prev, content: newContent } : null);
+            onChunkUpdated(); // Refresh chunks in parent
             alert('Chunk updated successfully!');
         } catch (error) {
             console.error('Failed to update chunk:', error);
-            alert('Failed to update chunk');
-        } finally {
-            setIsSaving(false);
+            throw error;
         }
     };
 
-    const renderChunkContent = (chunk: Chunk, isExpanded: boolean) => {
-        const isEditing = editingChunk === chunk.chunk_id;
+    const pageChange = (event: any) => {
+        setSkip(event.page.skip);
+        setTake(event.page.take);
+    };
 
-        if (isEditing) {
-            return (
-                <div style={{ marginTop: '0.5rem' }}>
-                    <textarea
-                        value={editContent}
-                        onChange={(e) => setEditContent(e.target.value)}
-                        className="input"
-                        style={{
-                            width: '100%',
-                            minHeight: '150px',
-                            fontSize: '0.875rem',
-                            lineHeight: '1.5',
-                            fontFamily: 'inherit',
-                            resize: 'vertical'
-                        }}
-                        disabled={isSaving}
-                    />
-                    <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
-                        <button
-                            className="btn btn-primary"
-                            onClick={() => handleSaveEdit(chunk.chunk_id)}
-                            disabled={isSaving || !editContent.trim()}
-                            style={{ fontSize: '0.75rem', padding: '0.5rem 1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}
-                        >
-                            {isSaving ? <Loader2 size={14} className="spin" /> : <Check size={14} />}
-                            Save
-                        </button>
-                        <button
-                            className="btn"
-                            onClick={handleCancelEdit}
-                            disabled={isSaving}
-                            style={{ fontSize: '0.75rem', padding: '0.5rem 1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}
-                        >
-                            <XCircle size={14} />
-                            Cancel
-                        </button>
-                    </div>
-                </div>
-            );
-        }
-
+    const ChunkIdCell = (props: any) => {
         return (
-            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-start' }}>
-                <div style={{ flex: 1, fontSize: '0.875rem', lineHeight: '1.5', maxHeight: isExpanded ? 'none' : '4.5em', overflow: 'hidden' }}>
-                    {chunk.content}
-                </div>
-                <button
-                    className="btn"
-                    onClick={() => handleEditClick(chunk)}
+            <td style={{ textAlign: 'center' }}>
+                <span
+                    onClick={() => handleChunkClick(props.dataItem)}
                     style={{
-                        padding: '0.25rem',
-                        background: 'transparent',
-                        border: 'none',
-                        color: 'var(--text-secondary)',
-                        flexShrink: 0
+                        color: '#3b82f6',
+                        textDecoration: 'underline',
+                        cursor: 'pointer',
+                        fontWeight: 500
                     }}
-                    title="Edit chunk"
                 >
-                    <Edit2 size={14} />
-                </button>
-            </div>
+                    {props.dataItem.chunk_id.substring(0, 8)}...
+                </span>
+            </td>
         );
     };
+
+    const ContentPreviewCell = (props: any) => {
+        return (
+            <td style={{ fontSize: '0.85rem', color: '#64748b' }}>
+                <div style={{
+                    maxHeight: '1.5em',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                    cursor: 'pointer'
+                }} onClick={() => handleChunkClick(props.dataItem)}>
+                    {props.dataItem.content}
+                </div>
+            </td>
+        );
+    };
+
+    const processedChunks = chunks.map((c, i) => ({ ...c, index: i + 1 }));
+    const pagedChunks = processedChunks.slice(skip, skip + take);
 
     return (
         <div
@@ -151,7 +107,7 @@ export default function ChunksModal({ isOpen, onClose, document, chunks, isLoadi
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                zIndex: 50
+                zIndex: 1000
             }}
             onClick={onClose}
         >
@@ -159,104 +115,92 @@ export default function ChunksModal({ isOpen, onClose, document, chunks, isLoadi
                 className="card"
                 style={{
                     width: '90%',
-                    maxWidth: '900px',
-                    maxHeight: '90vh',
-                    overflow: 'auto',
-                    position: 'relative'
+                    maxWidth: '1000px',
+                    height: '80vh',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    padding: '24px',
+                    backgroundColor: 'white',
+                    borderRadius: '12px',
+                    boxShadow: '0 20px 50px rgba(0,0,0,0.3)'
                 }}
                 onClick={(e) => e.stopPropagation()}
             >
                 {/* Header */}
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', paddingBottom: '1rem', borderBottom: '1px solid var(--border)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', borderBottom: '1px solid #e2e8f0', paddingBottom: '1rem' }}>
                     <div>
-                        <h2 style={{ margin: 0, fontSize: '1.5rem' }}>Document Chunks</h2>
-                        <p style={{ margin: '0.25rem 0 0 0', color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
-                            {document.filename}
+                        <h2 style={{ margin: 0, fontSize: '1.5rem', fontWeight: 700, color: '#1e293b' }}>Document Chunks</h2>
+                        <p style={{ margin: '0.25rem 0 0 0', color: '#64748b', fontSize: '0.9rem' }}>
+                            {document.filename} ({chunks.length} chunks)
                         </p>
                     </div>
                     <button
-                        className="btn"
+                        className="btn btn-icon"
                         onClick={onClose}
-                        style={{ padding: '0.5rem' }}
+                        style={{ padding: '8px' }}
                     >
-                        <X size={20} />
+                        <X size={24} />
                     </button>
                 </div>
 
                 {/* Content */}
-                {isLoading ? (
-                    <div style={{ padding: '2rem', textAlign: 'center' }}>
-                        <Loader2 size={32} className="spin" style={{ margin: '0 auto' }} />
-                        <p style={{ marginTop: '1rem', color: 'var(--text-secondary)' }}>Loading chunks...</p>
-                    </div>
-                ) : chunks.length === 0 ? (
-                    <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
-                        No chunks found
-                    </div>
-                ) : hasParentChild ? (
-                    // Parent-Child view
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                        {parentChunks.map((parent) => {
-                            const children = childrenByParent[parent.chunk_id] || [];
-                            const isExpanded = expandedParents[parent.chunk_id];
-
-                            return (
-                                <div key={parent.chunk_id} className="card" style={{ background: '#f9fafb' }}>
-                                    <div
-                                        onClick={() => setExpandedParents(prev => ({ ...prev, [parent.chunk_id]: !prev[parent.chunk_id] }))}
-                                        style={{ cursor: 'pointer', display: 'flex', alignItems: 'flex-start', gap: '0.5rem' }}
-                                    >
-                                        {isExpanded ? <ChevronDown size={20} /> : <ChevronRight size={20} />}
-                                        <div style={{ flex: 1 }}>
-                                            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>
-                                                Parent Chunk • {children.length} children
-                                            </div>
-                                            {renderChunkContent(parent, isExpanded)}
-                                        </div>
-                                    </div>
-
-                                    {isExpanded && children.length > 0 && (
-                                        <div style={{ marginTop: '1rem', paddingLeft: '1.5rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                                            {children.map((child, idx) => (
-                                                <div key={child.chunk_id} style={{ background: 'white', padding: '1rem', borderRadius: '8px', borderLeft: '3px solid var(--primary)' }}>
-                                                    <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>
-                                                        Child {idx + 1}
-                                                    </div>
-                                                    {renderChunkContent(child, true)}
-                                                </div>
-                                            ))}
-                                        </div>
-                                    )}
-                                </div>
-                            );
-                        })}
-                    </div>
-                ) : (
-                    // Regular chunks view
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                        {chunks.map((chunk, idx) => {
-                            const isExpanded = expandedChunks[idx];
-                            return (
-                                <div key={chunk.chunk_id} className="card" style={{ background: '#f9fafb' }}>
-                                    <div
-                                        onClick={() => !editingChunk && setExpandedChunks(prev => ({ ...prev, [idx]: !prev[idx] }))}
-                                        style={{ cursor: editingChunk ? 'default' : 'pointer', display: 'flex', alignItems: 'flex-start', gap: '0.5rem' }}
-                                    >
-                                        {!editingChunk && (isExpanded ? <ChevronDown size={20} /> : <ChevronRight size={20} />)}
-                                        {editingChunk && <div style={{ width: '20px' }} />}
-                                        <div style={{ flex: 1 }}>
-                                            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>
-                                                Chunk {idx + 1}
-                                            </div>
-                                            {renderChunkContent(chunk, isExpanded)}
-                                        </div>
-                                    </div>
-                                </div>
-                            );
-                        })}
-                    </div>
-                )}
+                <div style={{ flex: 1, overflow: 'hidden' }}>
+                    {isLoading ? (
+                        <div style={{ height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+                            <Loader2 size={40} className="spin" color="#3b82f6" />
+                            <p style={{ marginTop: '1rem', color: '#64748b' }}>Loading chunks...</p>
+                        </div>
+                    ) : (
+                        <div style={{ height: '100%' }}>
+                            <style>{`
+                                .k-grid th {
+                                    text-align: center !important;
+                                    font-weight: bold !important;
+                                    background-color: #f8fafc !important;
+                                    font-size: 0.8rem !important;
+                                }
+                                .k-grid td {
+                                    vertical-align: middle !important;
+                                    padding: 12px !important;
+                                }
+                                .k-pager {
+                                    font-size: 0.75rem !important;
+                                }
+                            `}</style>
+                            <Grid
+                                style={{ height: '100%' }}
+                                data={pagedChunks}
+                                skip={skip}
+                                take={take}
+                                total={processedChunks.length}
+                                pageable={{
+                                    buttonCount: 5,
+                                    info: true,
+                                    type: 'numeric',
+                                    pageSizes: [10, 20, 50],
+                                    previousNext: true
+                                }}
+                                onPageChange={pageChange}
+                                resizable={true}
+                            >
+                                <GridColumn field="index" title="#" width="60px" />
+                                <GridColumn field="chunk_id" title="Chunk ID" width="150px" cell={ChunkIdCell} />
+                                <GridColumn field="content" title="Content Preview" cell={ContentPreviewCell} />
+                            </Grid>
+                        </div>
+                    )}
+                </div>
             </div>
+
+            {/* Unified Detail Modal */}
+            <ChunkDetailModal
+                isOpen={!!selectedChunk}
+                onClose={() => setSelectedChunk(null)}
+                chunk={selectedChunk}
+                title="Chunk Detail View"
+                onSave={handleSaveChunk}
+                isGraphEnabled={isGraphEnabled}
+            />
         </div>
     );
 }

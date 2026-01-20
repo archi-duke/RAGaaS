@@ -28,12 +28,23 @@
    (예: `MATCH (n:Entity {name: "성기훈"})-[:`MENTIONED_IN`]->(c:Chunk) RETURN c.text`)
 6. 결과 형식: `RETURN` 구문을 사용하며, 변수명은 질문의 의도를 잘 반영하도록 지정하세요 (예: n.name AS answer).
 7. 결과 정제: 가능한 중복을 제거하기 위해 `DISTINCT`를 사용하거나 리스트로 수집(`collect`)하세요.
+8. **[중요] 트리플 정보 반환**: 반드시 결과에 **관계 정보(subject, predicate, object)**를 포함하세요!
+   - subject: 시작 노드
+   - predicate: 관계 타입 (type(r))
+   - object: 도착 노드
+   - 예시:
+   ```cypher
+   MATCH (subject:Entity {name: $startValue})-[r]->(object)
+   RETURN subject AS subject, type(r) AS predicate, object AS object,
+          subject.name AS subjectLabel, object.name AS objectLabel
+   ```
+   이렇게 하면 Graph RAG 시스템이 관계 맥락을 즉시 활용할 수 있습니다.
 
 반드시 아래 JSON 형식으로만 응답하세요:
 ```json
 {
   "thought": "질문을 분석한 논리적 과정. 대상이 독립된 노드(Entity)로 존재할 가능성과, 다른 노드의 속성값(Property value)으로 존재할 가능성을 모두 고려했는지 명시하세요.",
-  "cypher": "생성된 Cypher 쿼리문. 노드의 name 매칭뿐 아니라, 속성값 내 텍스트 포함 여부(CONTAINS)를 검색하는 패턴도 적극 활용하세요.",
+  "cypher": "생성된 Cypher 쿼리문. RETURN에 subject, predicate, object를 반드시 포함하세요.",
   "entities": ["추출된 엔티티 리스트"],
   "relations": ["추출된 관계 리스트"]
 }

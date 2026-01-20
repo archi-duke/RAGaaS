@@ -20,6 +20,15 @@ class Document(Document):
     status: str = DocumentStatus.PENDING.value
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
+    
+    # Extraction Settings
+    extractor_type: Optional[str] = None
+    max_paths: Optional[int] = None
+    enable_text_cleaning: Optional[bool] = False
+    enable_inference: Optional[bool] = False
+    generate_inverse: Optional[bool] = False
+    extraction_examples: Optional[str] = None
+    custom_prompt: Optional[str] = None
 
     class Settings:
         name = "documents"

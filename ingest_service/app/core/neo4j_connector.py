@@ -67,13 +67,16 @@ class Neo4jConnector:
                 MERGE (o:Entity {name: $obj, kb_id: $kb_id})
                 WITH s, o
                 CALL apoc.merge.relationship(s, $pred, {}, $props, o, $props) YIELD rel
+                SET rel.source_node_id = $source_node_id
+                SET rel.doc_id = $doc_id
                 RETURN rel
                 """
                 
+                source_node_id = triple.get("source_node_id", "")
                 props = {
                     "doc_id": doc_id,
                     "is_inverse": triple.get("is_inverse", False),
-                    "source_node_id": triple.get("source_node_id", ""),
+                    "source_node_id": source_node_id,
                 }
                 
                 self.execute_query(query, {
@@ -82,6 +85,8 @@ class Neo4jConnector:
                     "pred": predicate,
                     "kb_id": kb_id,
                     "props": props,
+                    "source_node_id": source_node_id,
+                    "doc_id": doc_id
                 })
                 inserted_count += 1
                 
@@ -94,6 +99,8 @@ class Neo4jConnector:
                         MERGE (o:Entity {name: $obj, kb_id: $kb_id})
                         WITH s, o
                         CALL apoc.merge.relationship(o, $pred, {}, $props, s, $props) YIELD rel
+                        SET rel.source_node_id = $source_node_id
+                        SET rel.doc_id = $doc_id
                         RETURN rel
                         """
                         inverse_props = {**props, "is_inverse": True}
@@ -103,6 +110,8 @@ class Neo4jConnector:
                             "pred": inverse_pred,
                             "kb_id": kb_id,
                             "props": inverse_props,
+                            "source_node_id": source_node_id,
+                            "doc_id": doc_id
                         })
                         inserted_count += 1
                 

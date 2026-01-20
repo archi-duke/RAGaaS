@@ -22,3 +22,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# License files
+telerik-license.txt
+kendo-ui-license.txt

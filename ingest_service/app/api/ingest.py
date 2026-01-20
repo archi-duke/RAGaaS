@@ -627,3 +627,109 @@ async def discard_preview(preview_id: str):
         "message": "Preview discarded successfully.",
     }
 
+
+# ============================================================
+# Chunk Extract Endpoint (Extract Test Feature)
+# ============================================================
+
+class ChunkExtractRequest(BaseModel):
+    """Chunk Extract Request - Extract triples from chunk text directly"""
+    chunk_text: str
+    extractor_type: str = "simple"  # simple | dynamic | schema
+    max_paths_per_chunk: int = Field(default=10, ge=1, le=50)
+    max_triplets_per_chunk: int = Field(default=20, ge=1, le=100)
+    num_workers: int = Field(default=4, ge=1, le=16)
+    generate_inverse_relations: bool = True
+    extraction_examples_yaml: Optional[str] = None
+    custom_prompt: Optional[str] = None
+
+
+class ChunkExtractResponse(BaseModel):
+    """Chunk Extract Response"""
+    triples: List[Dict[str, Any]]
+    triple_count: int
+    message: str
+
+
+@router.post("/extract-chunk", response_model=ChunkExtractResponse)
+async def extract_from_chunk(request: ChunkExtractRequest):
+    """Extract triples from a single chunk text without saving.
+    
+    This endpoint is used for testing extraction settings on a single chunk
+    before applying them to full document ingestion.
+    """
+    try:
+        print(f"[ExtractChunk] Starting extraction for chunk ({len(request.chunk_text)} chars)")
+        
+        # Map string extractor_type to enum
+        extractor_type_map = {
+            "simple": GraphExtractorType.SIMPLE,
+            "dynamic": GraphExtractorType.DYNAMIC,
+            "schema": GraphExtractorType.SCHEMA,
+            "none": GraphExtractorType.NONE,
+        }
+        extractor_type = extractor_type_map.get(request.extractor_type, GraphExtractorType.SIMPLE)
+        
+        if extractor_type == GraphExtractorType.NONE:
+            return ChunkExtractResponse(
+                triples=[],
+                triple_count=0,
+                message="Extractor type is 'none', no extraction performed."
+            )
+        
+        # Create a temporary node from chunk text
+        from llama_index.core.schema import TextNode
+        temp_node = TextNode(text=request.chunk_text, id_="temp_chunk")
+        
+        # Prepare graph config
+        graph_config = {
+            "max_paths_per_chunk": request.max_paths_per_chunk,
+            "max_triplets_per_chunk": request.max_triplets_per_chunk,
+            "num_workers": request.num_workers,
+        }
+        
+        # Extract triples using pipeline
+        triples = ingest_pipeline.extract_graph(
+            nodes=[temp_node],
+            extractor_type=extractor_type,
+            config=graph_config,
+            examples=request.extraction_examples_yaml,
+            custom_prompt=request.custom_prompt
+        )
+        
+        # Generate inverse relations if requested
+        if request.generate_inverse_relations and triples:
+            inverse_triples = []
+            inverse_mapping = {
+                "스승": "제자", "제자": "스승",
+                "부모": "자녀", "자녀": "부모",
+                "선생": "학생", "학생": "선생",
+                "상사": "부하", "부하": "상사",
+            }
+            for t in triples:
+                pred = t.get("predicate", "")
+                if pred in inverse_mapping:
+                    inverse_triples.append({
+                        "subject": t["object"],
+                        "predicate": inverse_mapping[pred],
+                        "object": t["subject"],
+                        "source_node_id": t.get("source_node_id"),
+                        "confidence": t.get("confidence", 0.7),
+                        "is_inverse": True,
+                    })
+            triples.extend(inverse_triples)
+        
+        print(f"[ExtractChunk] Extracted {len(triples)} triples")
+        
+        return ChunkExtractResponse(
+            triples=triples,
+            triple_count=len(triples),
+            message=f"Successfully extracted {len(triples)} triples from chunk."
+        )
+        
+    except Exception as e:
+        import traceback
+        print(f"[ExtractChunk] ❌ Extraction failed: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+

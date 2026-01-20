@@ -448,7 +448,9 @@ async def chat_with_kb(
         if "error" in log_lower or "failed" in log_lower or "generation failed" in log_lower:
             has_error = True
         if "fallback" in log_lower or "entity-guided" in log_lower:
-            used_fallback = True
+            # Exclude false positives like "No fallback search performed"
+            if "no fallback" not in log_lower and "fallback search disabled" not in log_lower:
+                used_fallback = True
     
     return ChatResponse(
         answer=answer,

@@ -156,7 +156,7 @@ class CleanupService:
             except Exception as query_e:
                 print(f"[Cleanup] Milvus pre-delete query warning: {query_e}")
             
-            # Delete with retry
+            # Delete with verification loop
             max_retries = 3
             for attempt in range(max_retries):
                 try:
@@ -167,28 +167,37 @@ class CleanupService:
                     collection.flush()
                     print(f"[Cleanup] Milvus flush complete for doc {doc_id}")
                     
-                    # Release collection from memory to ensure clean state
-                    try:
-                        collection.release()
-                        print(f"[Cleanup] Milvus collection released from memory")
-                    except Exception as release_e:
-                        print(f"[Cleanup] Milvus release warning: {release_e}")
+                    # Verify deletion
+                    verify_res = collection.query(expr, output_fields=["chunk_id"])
+                    if not verify_res:
+                        print(f"[Cleanup] ✅ Milvus deletion verified (0 entities remaining)")
+                        
+                        # Release collection from memory to ensure clean state
+                        try:
+                            collection.release()
+                            print(f"[Cleanup] Milvus collection released from memory")
+                        except Exception as release_e:
+                            print(f"[Cleanup] Milvus release warning: {release_e}")
+                        
+                        # Compact to actually remove deleted entities (prevents ghost data)
+                        try:
+                            collection.compact()
+                            print(f"[Cleanup] Milvus compaction triggered for doc {doc_id}")
+                        except Exception as compact_e:
+                            print(f"[Cleanup] Milvus compact warning: {compact_e}")
+                        
+                        break  # Success
+                    else:
+                        print(f"[Cleanup] ⚠️ Verification failed: {len(verify_res)} entities remain. Retrying...")
+                        if attempt == max_retries - 1:
+                            print(f"[Cleanup] ❌ Milvus deletion failed after {max_retries} attempts. Garbage may persist.")
                     
-                    # Compact to actually remove deleted entities (prevents ghost data)
-                    try:
-                        collection.compact()
-                        print(f"[Cleanup] Milvus compaction triggered for doc {doc_id}")
-                    except Exception as compact_e:
-                        print(f"[Cleanup] Milvus compact warning: {compact_e}")
-                    
-                    break  # Success
+                    await asyncio.sleep(1)  # Wait before retry
                 except Exception as delete_e:
                     print(f"[Cleanup] Milvus delete attempt {attempt+1} failed: {delete_e}")
                     if attempt == max_retries - 1:
                         raise
-                    await asyncio.sleep(1)  # Wait before retry
-            
-            print(f"[Cleanup] Milvus cleanup complete for doc {doc_id}")
+                    await asyncio.sleep(1)
         except Exception as e:
             print(f"[Cleanup] ❌ Milvus cleanup error for {doc_id}: {e}")
             import traceback
