@@ -69,6 +69,7 @@ class IngestRequest(BaseModel):
     graph: GraphConfig = GraphConfig()
     graph_store: str = "neo4j"  # "neo4j" or "fuseki"
     enable_text_cleaning: bool = False  # Remove bullets, numbers, etc.
+    enable_subject_restoration: bool = True  # Restore omitted subjects in Korean text
     enable_inference: bool = False  # Rule-based relationship inference
     extraction_examples_yaml: Optional[str] = None
     custom_prompt: Optional[str] = None
@@ -117,6 +118,12 @@ async def process_ingest_job(job_id: str, request: IngestRequest):
             with open(file_path, "r", encoding="utf-8") as f:
                 text = f.read()
             print(f"[IngestJob] Read text file: {len(text)} chars")
+        
+        # 1.5 Subject Restoration (Optional)
+        if request.enable_subject_restoration:
+            from app.core.subject_restoration import restore_subjects
+            text = await restore_subjects(text)
+            print(f"[IngestJob] Subject restoration applied: {len(text)} chars")
         
         jobs[job_id]["progress"] = 10
 
@@ -362,6 +369,7 @@ class PreviewRequest(BaseModel):
     graph: GraphConfig = GraphConfig()
     graph_store: str = "neo4j"
     enable_text_cleaning: bool = False
+    enable_subject_restoration: bool = True  # Restore omitted subjects in Korean text
     extraction_examples_yaml: Optional[str] = None
     custom_prompt: Optional[str] = None
 
@@ -407,6 +415,12 @@ async def create_preview(request: PreviewRequest):
             with open(file_path, "r", encoding="utf-8") as f:
                 text = f.read()
             print(f"[Preview] Read text file: {len(text)} chars")
+        
+        # 1.5 Subject Restoration (Optional)
+        if request.enable_subject_restoration:
+            from app.core.subject_restoration import restore_subjects
+            text = await restore_subjects(text)
+            print(f"[Preview] Subject restoration applied: {len(text)} chars")
         
         # 2. Prepare configs
         chunking_config = {

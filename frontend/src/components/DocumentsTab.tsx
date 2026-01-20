@@ -14,6 +14,7 @@ interface Document {
     extractor_type?: string;
     max_paths?: number;
     enable_text_cleaning?: boolean;
+    enable_subject_restoration?: boolean;
     enable_inference?: boolean;
     generate_inverse?: boolean;
     extraction_examples?: string;
@@ -97,6 +98,7 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
                                 <th style={{ padding: '1rem', textAlign: 'left', fontWeight: 600, fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Extractor</th>
                                 <th style={{ padding: '1rem', textAlign: 'center', fontWeight: 600, fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Paths</th>
                                 <th style={{ padding: '1rem', textAlign: 'center', fontWeight: 600, fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Clean</th>
+                                <th style={{ padding: '1rem', textAlign: 'center', fontWeight: 600, fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Subject</th>
                                 <th style={{ padding: '1rem', textAlign: 'center', fontWeight: 600, fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Infer</th>
                                 <th style={{ padding: '1rem', textAlign: 'center', fontWeight: 600, fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Inverse</th>
                                 <th style={{ padding: '1rem', textAlign: 'left', fontWeight: 600, fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Updated</th>
@@ -106,7 +108,7 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
                         <tbody>
                             {documents.length === 0 ? (
                                 <tr>
-                                    <td colSpan={6} style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+                                    <td colSpan={10} style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
                                         <FileText size={48} style={{ margin: '0 auto 1rem', opacity: 0.2 }} />
                                         <p style={{ margin: 0 }}>No documents uploaded yet</p>
                                     </td>
@@ -133,13 +135,16 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
                                         <td style={{ padding: '1rem', fontSize: '0.85rem' }}>{doc.extractor_type || '-'}</td>
                                         <td style={{ padding: '1rem', textAlign: 'center', fontSize: '0.85rem' }}>{doc.max_paths || '-'}</td>
                                         <td style={{ padding: '1rem', textAlign: 'center' }}>
-                                            {doc.enable_text_cleaning ? <Check size={16} color="var(--success)" /> : <XIcon size={16} color="var(--text-tertiary)" />}
+                                            {doc.enable_text_cleaning ? <Check size={16} color="#3b82f6" /> : <XIcon size={16} color="var(--text-tertiary)" />}
                                         </td>
                                         <td style={{ padding: '1rem', textAlign: 'center' }}>
-                                            {doc.enable_inference ? <Check size={16} color="var(--success)" /> : <XIcon size={16} color="var(--text-tertiary)" />}
+                                            {doc.enable_subject_restoration ? <Check size={16} color="#3b82f6" /> : <XIcon size={16} color="var(--text-tertiary)" />}
                                         </td>
                                         <td style={{ padding: '1rem', textAlign: 'center' }}>
-                                            {doc.generate_inverse ? <Check size={16} color="var(--success)" /> : <XIcon size={16} color="var(--text-tertiary)" />}
+                                            {doc.enable_inference ? <Check size={16} color="#3b82f6" /> : <XIcon size={16} color="var(--text-tertiary)" />}
+                                        </td>
+                                        <td style={{ padding: '1rem', textAlign: 'center' }}>
+                                            {doc.generate_inverse ? <Check size={16} color="#3b82f6" /> : <XIcon size={16} color="var(--text-tertiary)" />}
                                         </td>
                                         <td style={{ padding: '1rem', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>
                                             {doc.updated_at ? new Date(doc.updated_at).toLocaleString() : '-'}

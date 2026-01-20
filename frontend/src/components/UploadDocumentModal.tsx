@@ -105,6 +105,7 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
         allowed_entity_types: [] as string[],
         allowed_relation_types: [] as string[],
         enable_text_cleaning: false,  // Format char removal
+        enable_subject_restoration: true,  // Restore omitted subjects (Korean)
         enable_inference: false,  // Rule-based inference
         extraction_examples_yaml: '', // Few-Shot Examples (YAML)
         custom_prompt: '', // Custom Extraction Prompt
@@ -214,6 +215,7 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                 },
                 graph_store: kbConfig?.graph_backend === 'neo4j' ? 'neo4j' : 'fuseki',
                 enable_text_cleaning: graphParams.enable_text_cleaning,
+                enable_subject_restoration: graphParams.enable_subject_restoration,
                 extraction_examples_yaml: graphParams.extraction_examples_yaml || undefined,
                 custom_prompt: graphParams.custom_prompt || undefined,
             });
@@ -401,7 +403,7 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                                             type="checkbox"
                                             checked={graphParams.generate_inverse_relations}
                                             onChange={(e) => setGraphParams({ ...graphParams, generate_inverse_relations: e.target.checked })}
-                                            style={{ width: '1.1rem', height: '1.1rem' }}
+                                            style={{ width: '1.1rem', height: '1.1rem', accentColor: '#3b82f6', flexShrink: 0 }}
                                         />
                                         <div>
                                             <span style={{ color: '#334155', fontWeight: 500, fontSize: '0.9rem' }}>Generate Inverse</span>
@@ -414,11 +416,24 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                                             type="checkbox"
                                             checked={graphParams.enable_text_cleaning}
                                             onChange={(e) => setGraphParams({ ...graphParams, enable_text_cleaning: e.target.checked })}
-                                            style={{ width: '1.1rem', height: '1.1rem' }}
+                                            style={{ width: '1.1rem', height: '1.1rem', accentColor: '#3b82f6', flexShrink: 0 }}
                                         />
                                         <div>
                                             <span style={{ color: '#334155', fontWeight: 500, fontSize: '0.9rem' }}>Clean Text</span>
                                             <div style={{ fontSize: '0.75rem', color: '#64748b' }}>Remove bullets, numbers</div>
+                                        </div>
+                                    </label>
+
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', marginBottom: '1rem' }}>
+                                        <input
+                                            type="checkbox"
+                                            checked={graphParams.enable_subject_restoration}
+                                            onChange={(e) => setGraphParams({ ...graphParams, enable_subject_restoration: e.target.checked })}
+                                            style={{ width: '1.1rem', height: '1.1rem', accentColor: '#3b82f6', flexShrink: 0 }}
+                                        />
+                                        <div>
+                                            <span style={{ color: '#334155', fontWeight: 500, fontSize: '0.9rem' }}>Subject Restoration</span>
+                                            <div style={{ fontSize: '0.75rem', color: '#64748b' }}>Resolve omitted subjects (KR)</div>
                                         </div>
                                     </label>
 
@@ -427,7 +442,7 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                                             type="checkbox"
                                             checked={graphParams.enable_inference}
                                             onChange={(e) => setGraphParams({ ...graphParams, enable_inference: e.target.checked })}
-                                            style={{ width: '1.1rem', height: '1.1rem' }}
+                                            style={{ width: '1.1rem', height: '1.1rem', accentColor: '#3b82f6', flexShrink: 0 }}
                                         />
                                         <div>
                                             <span style={{ color: '#334155', fontWeight: 500, fontSize: '0.9rem' }}>Inference</span>

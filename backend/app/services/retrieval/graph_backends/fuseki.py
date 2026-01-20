@@ -196,37 +196,42 @@ class FusekiBackend(GraphBackend):
                             # Check if binding contains subject/predicate/object pattern
                             has_spo = ("subject" in binding or "s1" in binding) and ("predicate" in binding or "p1" in binding) and ("object" in binding or "o1" in binding)
                             has_spo_alt = "subjectLabel" in binding and "objectLabel" in binding
+                            has_multi_hop = "s2" in binding or "midLabel" in binding
                             
                             if has_spo or has_spo_alt:
-                                # Extract triple directly from binding
-                                subj = binding.get("subject", binding.get("s1", binding.get("subjectLabel", {})))
-                                pred = binding.get("predicate", binding.get("p1", {}))
-                                obj = binding.get("object", binding.get("o1", binding.get("objectLabel", {})))
+                                # Helper function to clean URI to label
+                                def get_label(binding, *keys):
+                                    for key in keys:
+                                        val = binding.get(key, {})
+                                        if isinstance(val, dict) and val.get("value"):
+                                            result = val.get("value")
+                                            return result.split("/")[-1] if "/" in result else result
+                                    return None
                                 
-                                subj_val = subj.get("value", "") if isinstance(subj, dict) else str(subj)
-                                pred_val = pred.get("value", "") if isinstance(pred, dict) else str(pred)
-                                obj_val = obj.get("value", "") if isinstance(obj, dict) else str(obj)
+                                # Extract 1st hop triple
+                                subj1 = get_label(binding, "subjectLabel", "startLabel", "subject", "s1")
+                                pred1 = get_label(binding, "predicate", "p1")
+                                obj1 = get_label(binding, "midLabel", "objectLabel", "object", "o1")
                                 
-                                # Clean up URIs to readable names
-                                subj_clean = subj_val.split("/")[-1] if "/" in subj_val else subj_val
-                                pred_clean = pred_val.split("/")[-1] if "/" in pred_val else pred_val
-                                obj_clean = obj_val.split("/")[-1] if "/" in obj_val else obj_val
-                                
-                                # Use labels if available
-                                subj_label = binding.get("subjectLabel", binding.get("startLabel", {}))
-                                obj_label = binding.get("objectLabel", binding.get("resultLabel", binding.get("midLabel", {})))
-                                
-                                if isinstance(subj_label, dict) and subj_label.get("value"):
-                                    subj_clean = subj_label.get("value")
-                                if isinstance(obj_label, dict) and obj_label.get("value"):
-                                    obj_clean = obj_label.get("value")
-                                
-                                if subj_clean and pred_clean and obj_clean:
+                                if subj1 and pred1 and obj1:
                                     real_triples.append({
-                                        "subject": subj_clean,
-                                        "predicate": pred_clean,
-                                        "object": obj_clean
+                                        "subject": subj1,
+                                        "predicate": pred1,
+                                        "object": obj1
                                     })
+                                
+                                # Extract 2nd hop triple if exists (multi-hop query)
+                                if has_multi_hop:
+                                    subj2 = get_label(binding, "midLabel", "o1")  # mid becomes subject of 2nd hop
+                                    pred2 = get_label(binding, "p2")
+                                    obj2 = get_label(binding, "resultLabel", "o2")
+                                    
+                                    if subj2 and pred2 and obj2:
+                                        real_triples.append({
+                                            "subject": subj2,
+                                            "predicate": pred2,
+                                            "object": obj2
+                                        })
                         
                         if real_triples:
                             log_trace(f"[Fuseki] Extracted {len(real_triples)} triples directly from LLM query result!")

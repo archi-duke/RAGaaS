@@ -43,6 +43,10 @@ export const docApi = {
             if (config.enable_text_cleaning !== undefined) {
                 formData.append('enable_text_cleaning', String(config.enable_text_cleaning));
             }
+            // Send enable_subject_restoration as separate form field
+            if (config.enable_subject_restoration !== undefined) {
+                formData.append('enable_subject_restoration', String(config.enable_subject_restoration));
+            }
             // Send enable_inference as separate form field
             if (config.enable_inference !== undefined) {
                 formData.append('enable_inference', String(config.enable_inference));
@@ -154,6 +158,7 @@ export const extractionApi = {
         graph?: any;
         graph_store?: string;
         enable_text_cleaning?: boolean;
+        enable_subject_restoration?: boolean;
         extraction_examples_yaml?: string;
         custom_prompt?: string;
     }) => ingestApi.post('/preview', data),

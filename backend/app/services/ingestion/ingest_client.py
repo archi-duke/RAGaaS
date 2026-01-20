@@ -26,6 +26,7 @@ class IngestServiceClient:
         graph_config: Dict[str, Any],
         graph_store: str = "neo4j",
         enable_text_cleaning: bool = False,
+        enable_subject_restoration: bool = True,
         enable_inference: bool = False,
         extraction_examples_yaml: Optional[str] = None,
         custom_prompt: Optional[str] = None,
@@ -40,6 +41,7 @@ class IngestServiceClient:
             "graph": graph_config,
             "graph_store": graph_store,
             "enable_text_cleaning": enable_text_cleaning,
+            "enable_subject_restoration": enable_subject_restoration,
             "enable_inference": enable_inference,
             "extraction_examples_yaml": extraction_examples_yaml,
             "custom_prompt": custom_prompt,
@@ -47,7 +49,7 @@ class IngestServiceClient:
         }
 
         
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=3600.0) as client:
             response = await client.post(
                 f"{self.base_url}/api/ingest",
                 json=payload
