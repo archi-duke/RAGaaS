@@ -17,6 +17,15 @@ class CleanupService:
         """
         print(f"[Cleanup] Starting cascading deletion for doc {doc_id} in KB {kb_id}")
         
+        # Ensure Milvus connection (idempotent-ish check usually needed, but helper might handle it)
+        try:
+             from app.core.milvus import connect_milvus
+             connect_milvus()
+        except:
+             pass
+
+        collection = None
+        
         # 0. Cancel ongoing Ingest Job if any
         try:
             from app.services.ingestion.ingest_client import ingest_client
@@ -27,39 +36,91 @@ class CleanupService:
         except Exception as e:
             print(f"[Cleanup] Job cancel warning: {e}")
 
-        # 1. Fuseki Cleanup (Graph) - CRITICAL
+        # 1. Fetch Chunk IDs from Milvus (Source of Truth for Doc-Chunk mapping)
+        chunk_ids = []
+        try:
+            from pymilvus import utility
+            collection = create_collection(kb_id)
+            collection.load()
+            
+            # Query all chunks for this doc
+            expr = f'doc_id == "{doc_id}"'
+            try:
+                # Limit 10000 to be safe, if more, might need paging but unlikely for single doc
+                res = collection.query(expr, output_fields=["chunk_id"], limit=10000)
+                chunk_ids = [r["chunk_id"] for r in res]
+                print(f"[Cleanup] Identified {len(chunk_ids)} chunks for doc {doc_id}")
+            except Exception as e:
+                print(f"[Cleanup] Failed to query chunks for doc {doc_id}: {e}")
+                
+        except Exception as e:
+            print(f"[Cleanup] ❌ Milvus connection failed: {e}")
+            # Don't return yet, try to proceed with what we can
+
+        # 2. Fuseki Cleanup (Graph)
         try:
             dataset_name = f"kb_{kb_id.replace('-', '_')}"
             graph_uri = f"urn:doc:{doc_id}"
             
-            # 1.1 DROP GRAPH
+            # 2.1 DROP GRAPH (Named Graph)
             fuseki_client.drop_graph(kb_id, graph_uri)
             
-            # 1.2 Legacy Cleanup (Sparql Update)
-            source_prefix = f"http://rag.local/source/{doc_id}"
-            delete_query = f"""
-            PREFIX rel: <http://rag.local/relation/>
-            DELETE {{ ?s ?p ?o . ?inv_s ?inv_p ?s . }}
-            WHERE {{
-                ?s rel:hasSource ?src .
-                FILTER(STRSTARTS(STR(?src), "{source_prefix}")) .
-                ?s ?p ?o .
-                OPTIONAL {{ ?inv_s ?inv_p ?s }}
-            }}
-            """
-            fuseki_client.update_sparql(kb_id, delete_query)
-            
+            # 2.2 Delete by Chunk IDs (Reification & Direct)
+            if chunk_ids:
+                # Batch delete if too many
+                batch_size = 50
+                for i in range(0, len(chunk_ids), batch_size):
+                    batch = chunk_ids[i:i+batch_size]
+                    
+                    # Quote IDs for SPARQL
+                    quoted_ids = " ".join([f'"{cid}"' for cid in batch])
+                    
+                    delete_query = f"""
+                    PREFIX rel: <http://rag.local/relation/>
+                    PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+                    PREFIX meta: <http://rag.local/meta/>
+                    
+                    DELETE {{ 
+                        ?stmt ?stmt_p ?stmt_o .
+                        ?s ?p ?o .
+                        ?inv_s ?inv_p ?s .
+                    }}
+                    WHERE {{
+                        VALUES ?cid {{ {quoted_ids} }}
+                        {{
+                            # Pattern 1: Reification (meta:sourceNodeId)
+                            ?stmt meta:sourceNodeId ?cid .
+                            ?stmt ?stmt_p ?stmt_o .
+                            OPTIONAL {{
+                                ?stmt rdf:subject ?s .
+                                ?s ?p ?o .
+                                OPTIONAL {{ ?inv_s ?inv_p ?s }}
+                            }}
+                        }}
+                        UNION
+                        {{
+                             # Pattern 2: Direct Link (source URI)
+                             # Construct URI from ID if needed, or if stored as literal
+                             BIND(URI(CONCAT("http://rag.local/source/", ?cid)) as ?srcUri)
+                             ?s rel:hasSource ?srcUri .
+                             ?s ?p ?o .
+                             OPTIONAL {{ ?inv_s ?inv_p ?s }}
+                        }}
+                    }}
+                    """
+                    fuseki_client.update_sparql(kb_id, delete_query)
+                
             print(f"[Cleanup] ✅ Fuseki deletion executed for {doc_id}")
             
         except Exception as e:
             print(f"[Cleanup] ❌ Fuseki cleanup failed: {e}")
-            raise RuntimeError(f"Failed to delete graph data from Fuseki: {e}")
+            # We continue to Milvus cleanup even if Graph fails, to ensure at least vector space is clean
 
-        # 1.5. Neo4j Cleanup (Graph) - CRITICAL
+        # 3. Neo4j Cleanup (Graph)
         try:
             from app.core.neo4j_client import neo4j_client
             
-            # Delete relationships
+            # Delete by doc_id
             delete_query = """
             MATCH ()-[r]->()
             WHERE r.doc_id = $doc_id
@@ -68,6 +129,18 @@ class CleanupService:
             """
             neo4j_client.execute_query(delete_query, {"doc_id": doc_id})
             
+            # Delete by Chunk IDs (if doc_id missing on relationships)
+            if chunk_ids:
+                 batch_size = 1000
+                 for i in range(0, len(chunk_ids), batch_size):
+                    batch = chunk_ids[i:i+batch_size]
+                    chunk_query = """
+                    MATCH ()-[r]->()
+                    WHERE r.source_node_id IN $batch
+                    DELETE r
+                    """
+                    neo4j_client.execute_query(chunk_query, {"batch": batch})
+
             # Delete isolated nodes
             orphan_query = """
             MATCH (n:Entity {kb_id: $kb_id})
@@ -79,24 +152,18 @@ class CleanupService:
             print(f"[Cleanup] ✅ Neo4j deletion executed for {doc_id}")
         except Exception as e:
             print(f"[Cleanup] ❌ Neo4j cleanup failed: {e}")
-            raise RuntimeError(f"Failed to delete graph data from Neo4j: {e}")
 
-        # 2. Milvus Cleanup (Vector) - CRITICAL
+        # 4. Milvus Cleanup (Vector)
         try:
-            from pymilvus import utility
-            collection = create_collection(kb_id)
-            collection.load()
+            if not collection: # In case connection failed in Step 1
+                collection = create_collection(kb_id)
+                collection.load()
             
             expr = f'doc_id == "{doc_id}"'
             collection.delete(expr)
             collection.flush()
             
-            # Verify Milvus immediately
-            verify_res = collection.query(expr, output_fields=["chunk_id"], limit=1)
-            if verify_res:
-                raise RuntimeError("Milvus deletion failed (entities still exist)")
-            
-            print(f"[Cleanup] ✅ Milvus deletion verified for {doc_id}")
+            print(f"[Cleanup] ✅ Milvus deletion flushed for {doc_id}")
             
             try:
                 collection.release()

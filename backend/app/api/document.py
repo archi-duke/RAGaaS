@@ -238,6 +238,17 @@ async def delete_document(
         doc.status = DocumentStatus.DELETING.value
         await doc.save()
         
+        # Broadcast DELETING status to frontend
+        try:
+            from app.core.websocket_manager import manager
+            await manager.broadcast(kb_id, {
+                "type": "document_status_update", 
+                "doc_id": doc_id, 
+                "status": "deleting"
+            })
+        except Exception as ws_error:
+            logger.warning(f"WebSocket broadcast failed: {ws_error}")
+        
         from app.services.ingestion.cleanup_service import cleanup_service
         background_tasks.add_task(cleanup_service.perform_cascading_deletion, kb_id, doc_id)
         

@@ -336,7 +336,7 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
 
                     {/* Graph Settings Section - 3 Column Layout */}
                     {isGraphEnabled && (
-                        <div style={{ marginBottom: '1.5rem', background: '#f8fafc', padding: '1.25rem', borderRadius: '12px', border: '1px solid #e2e8f0' }}>
+                        <div style={{ marginBottom: '1.5rem', background: '#eff6ff', padding: '1.25rem', borderRadius: '12px', border: '1px solid #bfdbfe' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1.25rem', color: '#3b82f6', fontWeight: 600 }}>
                                 <Database size={18} />
                                 <span>Graph Extraction Settings (LlamaIndex)</span>

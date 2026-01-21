@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { kbApi } from '../services/api';
-import { Plus, Database, Trash2, ArrowRight, FileText, HardDrive } from 'lucide-react';
+import { Plus, Database, Trash2, ArrowRight, FileText, HardDrive, Layers } from 'lucide-react';
 import ConfirmDialog from '../components/ConfirmDialog';
 import CreateKnowledgeBaseModal from '../components/CreateKnowledgeBaseModal';
 
@@ -12,6 +12,7 @@ interface KnowledgeBase {
     created_at: string;
     updated_at: string;
     chunking_strategy?: string;
+    chunking_config?: any;
     document_count?: number;
     total_size?: number;
     graph_backend?: string;
@@ -113,34 +114,50 @@ export default function Dashboard() {
                                         </h3>
                                         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
                                             {/* Chunking strategy */}
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
                                                 <Database size={12} />
-                                                <span>
-                                                    {kb.chunking_strategy === 'size' && 'Fixed Size'}
-                                                    {kb.chunking_strategy === 'parent_child' && 'Parent-Child'}
-                                                    {kb.chunking_strategy === 'context_aware' && 'Context Aware'}
-                                                    {!kb.chunking_strategy && 'N/A'}
-                                                </span>
+
                                                 {kb.graph_backend && kb.graph_backend !== 'none' && (
                                                     <span style={{
                                                         backgroundColor:
                                                             kb.graph_backend === 'ontology'
-                                                                ? (kb.is_promoted ? '#1e40af' : '#bfdbfe') // #bfdbfe is ~30% brighter than #2563eb
+                                                                ? (kb.is_promoted ? '#1e40af' : '#bfdbfe')
                                                                 : '#166534',
-                                                        color: kb.graph_backend === 'ontology' && !kb.is_promoted ? '#1e40af' : 'white', // Darker text for light background
-                                                        fontSize: '0.7rem',
-                                                        padding: '2px 8px',
+                                                        color: kb.graph_backend === 'ontology' && !kb.is_promoted ? '#1e40af' : 'white',
+                                                        fontSize: '0.65rem',
+                                                        padding: '1px 8px',
                                                         borderRadius: '12px',
-                                                        fontWeight: 700,
-                                                        lineHeight: 1,
-                                                        marginLeft: '4px',
-                                                        boxShadow: '0 1px 2px rgba(0,0,0,0.1)'
+                                                        fontWeight: 800,
+                                                        lineHeight: 1.4,
+                                                        boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
+                                                        textTransform: 'uppercase',
+                                                        letterSpacing: '0.025em'
                                                     }}>
                                                         {kb.graph_backend === 'ontology' && kb.is_promoted
                                                             ? 'Ontology'
                                                             : 'Graph'}
                                                     </span>
                                                 )}
+
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', marginLeft: '2px' }}>
+                                                    <Layers size={12} />
+                                                    <span style={{ fontSize: '0.75rem' }}>
+                                                        {(kb.chunking_strategy === 'size' || kb.chunking_strategy === 'fixed_size') && 'Fixed Size'}
+                                                        {kb.chunking_strategy === 'parent_child' && 'Parent-Child'}
+                                                        {kb.chunking_strategy === 'context_aware' && 'Context Aware'}
+                                                        {!kb.chunking_strategy && 'N/A'}
+
+                                                        {kb.chunking_config && (
+                                                            <span style={{ marginLeft: '4px', opacity: 0.8 }}>
+                                                                {kb.chunking_strategy === 'parent_child' ? (
+                                                                    `(${kb.chunking_config.child_size || 0}/${kb.chunking_config.child_overlap || 0})`
+                                                                ) : (
+                                                                    `(${kb.chunking_config.chunk_size || 0}/${kb.chunking_config.chunk_overlap || 0})`
+                                                                )}
+                                                            </span>
+                                                        )}
+                                                    </span>
+                                                </div>
                                             </div>
                                             {/* Document count and size */}
                                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>

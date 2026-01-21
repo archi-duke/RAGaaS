@@ -23,6 +23,7 @@ interface ChunkDetailModalProps {
     title?: string;
     onSave?: (content: string) => Promise<void>;
     isGraphEnabled?: boolean;
+    kbId?: string; // Knowledge Base ID for saving triples
 }
 
 // LabelWithTooltip Component (reused from UploadDocumentModal)
@@ -82,7 +83,7 @@ const LabelWithTooltip = ({ label, tooltip }: { label: string, tooltip: string }
     );
 };
 
-export default function ChunkDetailModal({ isOpen, onClose, chunk, title = 'Chunk Content', onSave, isGraphEnabled = false }: ChunkDetailModalProps) {
+export default function ChunkDetailModal({ isOpen, onClose, chunk, title = 'Chunk Content', onSave, isGraphEnabled = false, kbId }: ChunkDetailModalProps) {
     const [isEditing, setIsEditing] = useState(false);
     const [editContent, setEditContent] = useState('');
     const [isSaving, setIsSaving] = useState(false);
@@ -92,6 +93,8 @@ export default function ChunkDetailModal({ isOpen, onClose, chunk, title = 'Chun
     const [isExtracting, setIsExtracting] = useState(false);
     const [extractedTriples, setExtractedTriples] = useState<Triple[]>([]);
     const [showResults, setShowResults] = useState(false);
+    const [selectedTriples, setSelectedTriples] = useState<Set<number>>(new Set());
+    const [isSavingTriples, setIsSavingTriples] = useState(false);
 
     // Modal states for Examples and Prompt
     const [showExampleModal, setShowExampleModal] = useState(false);
@@ -146,6 +149,7 @@ export default function ChunkDetailModal({ isOpen, onClose, chunk, title = 'Chun
         setShowExtractionSettings(false);
         setExtractedTriples([]);
         setShowResults(false);
+        setSelectedTriples(new Set());
     }, [chunk]);
 
     // Load default extraction prompt
@@ -201,11 +205,59 @@ export default function ChunkDetailModal({ isOpen, onClose, chunk, title = 'Chun
             });
             setExtractedTriples(res.data.triples || []);
             setShowResults(true);
+            setSelectedTriples(new Set()); // Reset selection
         } catch (error: any) {
             console.error('Extract failed:', error);
             alert(error.response?.data?.detail || '트리플 추출 중 오류가 발생했습니다.');
         } finally {
             setIsExtracting(false);
+        }
+    };
+
+    const handleToggleTriple = (index: number) => {
+        const newSelected = new Set(selectedTriples);
+        if (newSelected.has(index)) {
+            newSelected.delete(index);
+        } else {
+            newSelected.add(index);
+        }
+        setSelectedTriples(newSelected);
+    };
+
+    const handleToggleAll = () => {
+        if (selectedTriples.size === extractedTriples.length) {
+            setSelectedTriples(new Set());
+        } else {
+            setSelectedTriples(new Set(extractedTriples.map((_, idx) => idx)));
+        }
+    };
+
+    const handleApplyTriples = async () => {
+        if (selectedTriples.size === 0) return;
+        if (!kbId) {
+            alert('Knowledge Base ID가 없습니다.');
+            return;
+        }
+
+        setIsSavingTriples(true);
+        try {
+            const triplesToSave = Array.from(selectedTriples).map(idx => extractedTriples[idx]);
+
+            // Save triples to the triple store
+            await extractionApi.saveChunkTriples({
+                kb_id: kbId,
+                chunk_id: chunk.id,
+                triples: triplesToSave,
+            });
+
+            alert(`${selectedTriples.size}개의 트리플이 성공적으로 저장되었습니다.`);
+            setSelectedTriples(new Set());
+            setShowResults(false);
+        } catch (error: any) {
+            console.error('Save triples failed:', error);
+            alert(error.response?.data?.detail || '트리플 저장 중 오류가 발생했습니다.');
+        } finally {
+            setIsSavingTriples(false);
         }
     };
 
@@ -304,7 +356,7 @@ export default function ChunkDetailModal({ isOpen, onClose, chunk, title = 'Chun
 
                 {/* Graph Extraction Settings Panel */}
                 {showExtractionSettings && isGraphEnabled && (
-                    <div style={{ marginBottom: '1.25rem', background: '#f8fafc', padding: '1.25rem', borderRadius: '12px', border: '1px solid #e2e8f0' }}>
+                    <div style={{ marginBottom: '1.25rem', background: '#eff6ff', padding: '1.25rem', borderRadius: '12px', border: '1px solid #bfdbfe' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1.25rem', color: '#3b82f6', fontWeight: 600, fontSize: '0.95rem' }}>
                             <Database size={16} />
                             <span>Graph Extraction Settings (LlamaIndex)</span>
@@ -484,32 +536,62 @@ export default function ChunkDetailModal({ isOpen, onClose, chunk, title = 'Chun
 
                 {/* Extracted Triples Results */}
                 {showResults && extractedTriples.length > 0 && (
-                    <div style={{ marginBottom: '1.25rem', background: '#f0fdf4', padding: '1rem', borderRadius: '12px', border: '1px solid #86efac' }}>
+                    <div style={{ marginBottom: '1.25rem', background: '#eff6ff', padding: '1rem', borderRadius: '12px', border: '1px solid #bfdbfe' }}>
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
-                            <span style={{ fontWeight: 600, color: '#166534', fontSize: '0.9rem' }}>
-                                ✅ Extracted Triples ({extractedTriples.length} results)
+                            <span style={{ fontWeight: 600, color: '#1e40af', fontSize: '0.9rem' }}>
+                                🔹 Extracted Triples ({extractedTriples.length} results, {selectedTriples.size} selected)
                             </span>
-                            <button
-                                className="btn"
-                                onClick={() => setShowResults(false)}
-                                style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }}
-                            >
-                                Hide
-                            </button>
+                            <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                <button
+                                    className="btn btn-primary"
+                                    onClick={handleApplyTriples}
+                                    disabled={selectedTriples.size === 0 || isSavingTriples}
+                                    style={{
+                                        padding: '0.25rem 0.75rem',
+                                        fontSize: '0.75rem',
+                                        minWidth: '80px'
+                                    }}
+                                >
+                                    {isSavingTriples ? '저장 중...' : `Apply (${selectedTriples.size})`}
+                                </button>
+                                <button
+                                    className="btn"
+                                    onClick={() => setShowResults(false)}
+                                    style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }}
+                                >
+                                    Hide
+                                </button>
+                            </div>
                         </div>
                         <div style={{ /* maxHeight removed to show full list */ }}>
                             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
                                 <thead>
-                                    <tr style={{ backgroundColor: '#dcfce7' }}>
-                                        <th style={{ padding: '8px', textAlign: 'left', borderBottom: '1px solid #86efac' }}>Subject</th>
-                                        <th style={{ padding: '8px', textAlign: 'center', borderBottom: '1px solid #86efac' }}>Predicate</th>
-                                        <th style={{ padding: '8px', textAlign: 'left', borderBottom: '1px solid #86efac' }}>Object</th>
-                                        <th style={{ padding: '8px', textAlign: 'center', borderBottom: '1px solid #86efac', width: '80px' }}>Conf.</th>
+                                    <tr style={{ backgroundColor: '#dbeafe' }}>
+                                        <th style={{ padding: '8px', textAlign: 'center', borderBottom: '1px solid #bfdbfe', width: '40px' }}>
+                                            <input
+                                                type="checkbox"
+                                                checked={selectedTriples.size === extractedTriples.length && extractedTriples.length > 0}
+                                                onChange={handleToggleAll}
+                                                style={{ width: '1rem', height: '1rem', cursor: 'pointer' }}
+                                            />
+                                        </th>
+                                        <th style={{ padding: '8px', textAlign: 'left', borderBottom: '1px solid #bfdbfe' }}>Subject</th>
+                                        <th style={{ padding: '8px', textAlign: 'center', borderBottom: '1px solid #bfdbfe' }}>Predicate</th>
+                                        <th style={{ padding: '8px', textAlign: 'left', borderBottom: '1px solid #bfdbfe' }}>Object</th>
+                                        <th style={{ padding: '8px', textAlign: 'center', borderBottom: '1px solid #bfdbfe', width: '80px' }}>Conf.</th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     {extractedTriples.map((triple, idx) => (
                                         <tr key={idx} style={{ backgroundColor: triple.is_inverse ? '#fef9c3' : 'white' }}>
+                                            <td style={{ padding: '8px', textAlign: 'center', borderBottom: '1px solid #e2e8f0' }}>
+                                                <input
+                                                    type="checkbox"
+                                                    checked={selectedTriples.has(idx)}
+                                                    onChange={() => handleToggleTriple(idx)}
+                                                    style={{ width: '1rem', height: '1rem', cursor: 'pointer' }}
+                                                />
+                                            </td>
                                             <td style={{ padding: '8px', borderBottom: '1px solid #e2e8f0' }}>{triple.subject}</td>
                                             <td style={{ padding: '8px', textAlign: 'center', borderBottom: '1px solid #e2e8f0', fontStyle: 'italic', color: '#0284c7' }}>
                                                 {triple.predicate}

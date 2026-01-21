@@ -747,3 +747,84 @@ async def extract_from_chunk(request: ChunkExtractRequest):
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
+
+# ============================================================
+# Save Chunk Triples Endpoint
+# ============================================================
+
+class SaveChunkTriplesRequest(BaseModel):
+    """Save Chunk Triples Request"""
+    kb_id: str
+    chunk_id: str
+    triples: List[Dict[str, Any]]
+
+
+class SaveChunkTriplesResponse(BaseModel):
+    """Save Chunk Triples Response"""
+    kb_id: str
+    chunk_id: str
+    triple_count: int
+    message: str
+
+
+@router.post("/save-chunk-triples", response_model=SaveChunkTriplesResponse)
+async def save_chunk_triples(request: SaveChunkTriplesRequest):
+    """Save selected triples from chunk extraction to the triple store.
+    
+    This endpoint allows users to selectively save triples that were extracted
+    from a single chunk during the Extract Test feature.
+    """
+    try:
+        print(f"[SaveChunkTriples] Saving {len(request.triples)} triples for chunk {request.chunk_id} in KB {request.kb_id}")
+        
+        # Format triples with chunk_id as source_node_id
+        formatted_triples = []
+        for triple in request.triples:
+            formatted_triple = {
+                "subject": triple.get("subject"),
+                "predicate": triple.get("predicate"),
+                "object": triple.get("object"),
+                "source_node_id": request.chunk_id,  # Link triple to chunk
+                "confidence": triple.get("confidence", 0.8),
+            }
+            formatted_triples.append(formatted_triple)
+        
+        # Try to save to Fuseki (default)
+        try:
+            # We need to query which graph backend the KB uses
+            # For now, we'll try Fuseki first, then fall back to Neo4j
+            print(f"[SaveChunkTriples] Attempting to save to Fuseki...")
+            await fuseki_connector.insert_triples(
+                kb_id=request.kb_id,
+                doc_id=f"manual_{request.chunk_id}",  # Create a pseudo doc_id
+                triples=formatted_triples,
+                generate_inverse=False  # User already selected the triples they want
+            )
+            print(f"[SaveChunkTriples] ✅ Saved {len(formatted_triples)} triples to Fuseki")
+            
+        except Exception as fuseki_error:
+            print(f"[SaveChunkTriples] Fuseki failed: {fuseki_error}, trying Neo4j...")
+            try:
+                await neo4j_connector.insert_triples(
+                    kb_id=request.kb_id,
+                    doc_id=f"manual_{request.chunk_id}",
+                    triples=formatted_triples,
+                    generate_inverse=False
+                )
+                print(f"[SaveChunkTriples] ✅ Saved {len(formatted_triples)} triples to Neo4j")
+            except Exception as neo4j_error:
+                print(f"[SaveChunkTriples] Both Fuseki and Neo4j failed")
+                raise Exception(f"Failed to save to both backends. Fuseki: {fuseki_error}, Neo4j: {neo4j_error}")
+        
+        return SaveChunkTriplesResponse(
+            kb_id=request.kb_id,
+            chunk_id=request.chunk_id,
+            triple_count=len(formatted_triples),
+            message=f"Successfully saved {len(formatted_triples)} triples for chunk {request.chunk_id}"
+        )
+        
+    except Exception as e:
+        import traceback
+        print(f"[SaveChunkTriples] ❌ Save failed: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))

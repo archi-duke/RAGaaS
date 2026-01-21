@@ -61,6 +61,7 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
         const statusMap: Record<string, { class: string; label: string }> = {
             completed: { class: 'badge-success', label: 'Completed' },
             processing: { class: 'badge-warning', label: 'Processing' },
+            deleting: { class: 'badge-warning', label: 'Deleting...' },
             error: { class: 'badge-danger', label: 'Error' }
         };
         const config = statusMap[status] || { class: 'badge-secondary', label: status };

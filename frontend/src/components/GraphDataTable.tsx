@@ -256,6 +256,7 @@ export default function GraphDataTable({ kbId, backend }: GraphDataTableProps) {
                 onClose={() => setSelectedChunk(null)}
                 chunk={selectedChunk}
                 isGraphEnabled={true}
+                kbId={kbId}
             />
         </div>
     );

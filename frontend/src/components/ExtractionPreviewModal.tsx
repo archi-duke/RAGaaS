@@ -95,7 +95,7 @@ export default function ExtractionPreviewModal({
                         }}>
                             <thead>
                                 <tr style={{
-                                    backgroundColor: '#f8fafc',
+                                    backgroundColor: '#eff6ff',
                                     position: 'sticky',
                                     top: 0
                                 }}>

@@ -200,6 +200,7 @@ export default function ChunksModal({ isOpen, onClose, document, chunks, isLoadi
                 title="Chunk Detail View"
                 onSave={handleSaveChunk}
                 isGraphEnabled={isGraphEnabled}
+                kbId={kbId}
             />
         </div>
     );

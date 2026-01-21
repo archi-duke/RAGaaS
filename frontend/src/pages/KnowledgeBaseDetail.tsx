@@ -376,20 +376,23 @@ export default function KnowledgeBaseDetail() {
 
     const confirmDelete = async () => {
         if (!deleteDocId) return;
+
+        const docIdToDelete = deleteDocId;
+        setDeleteDocId(null); // Close modal immediately
+
         try {
-            await docApi.delete(id!, deleteDocId);
+            // Call delete API - backend will set status to 'deleting' and broadcast via WebSocket
+            await docApi.delete(id!, docIdToDelete);
 
-            // Optimistic update: Remove from local state immediately
-            setDocuments(prevDocs => prevDocs.filter(doc => doc.id !== deleteDocId));
-
-            setDeleteDocId(null);
-
-            // Re-fetch to confirm state (slightly delayed to ensure DB consistency)
-            setTimeout(() => loadDocs(), 500);
+            // WebSocket will handle status updates:
+            // 1. Backend sends 'deleting' status immediately (from document.py)
+            // 2. Backend sends 'deleted' status when cleanup completes (from cleanup_service.py)
+            // 3. Frontend removes document when status === 'deleted' (see line 147)
         } catch (error) {
             console.error('Failed to delete document:', error);
             alert('Failed to delete document');
-            loadDocs(); // Revert on failure
+            // Revert by reloading from server
+            loadDocs();
         }
     };
 

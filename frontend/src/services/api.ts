@@ -185,7 +185,13 @@ export const extractionApi = {
         extraction_examples_yaml?: string;
         custom_prompt?: string;
     }) => ingestApi.post('/extract-chunk', data),
+
+    // Save selected triples from chunk extraction to the triple store
+    saveChunkTriples: (data: {
+        kb_id: string;
+        chunk_id: string;
+        triples: any[];
+    }) => ingestApi.post('/save-chunk-triples', data),
 };
 
 export default api;
-
