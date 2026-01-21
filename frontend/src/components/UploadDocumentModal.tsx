@@ -398,18 +398,9 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                                 <div>
                                     <h4 style={{ margin: '0 0 1rem 0', fontSize: '0.9rem', color: '#475569' }}>Options</h4>
 
-                                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', marginBottom: '1rem' }}>
-                                        <input
-                                            type="checkbox"
-                                            checked={graphParams.generate_inverse_relations}
-                                            onChange={(e) => setGraphParams({ ...graphParams, generate_inverse_relations: e.target.checked })}
-                                            style={{ width: '1.1rem', height: '1.1rem', accentColor: '#3b82f6', flexShrink: 0 }}
-                                        />
-                                        <div>
-                                            <span style={{ color: '#334155', fontWeight: 500, fontSize: '0.9rem' }}>Generate Inverse</span>
-                                            <div style={{ fontSize: '0.75rem', color: '#64748b' }}>e.g. Teacher → Student</div>
-                                        </div>
-                                    </label>
+                                    {/* [REMOVED] Generate Inverse Relations checkbox
+                                        Inverse relations are now inferred at query time, not stored physically.
+                                    */}
 
                                     <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', marginBottom: '1rem' }}>
                                         <input

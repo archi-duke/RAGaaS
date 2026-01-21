@@ -12,23 +12,9 @@ import yaml
 
 logger = logging.getLogger(__name__)
 
-# Inverse Relations Dictionary (Global Default)
-# Format: "Original" : "Inverse"
-INVERSE_RELATIONS = {
-    "스승": "제자",
-    "제자": "스승",
-    "부모": "자식",
-    "자식": "부모",
-    "선배": "후배",
-    "후배": "선배",
-    "형": "동생",
-    "동생": "형",
-    "언니": "동생",
-    "누나": "동생",
-    "오빠": "동생",
-    "남편": "아내",
-    "아내": "남편"
-}
+# [REMOVED] Inverse Relations Dictionary
+# Inverse relations are now handled at query time via bidirectional search,
+# not by physically duplicating triples at ingestion time.
 
 
 class GraphProcessor:
@@ -303,18 +289,8 @@ Example Output:
             # Triple: Subject - Predicate - Object
             rdf_triples.append(f"{s_uri} {p_uri} {o_uri} .")
 
-            # Auto-generate Inverse Relation
-            if item['predicate'] in INVERSE_RELATIONS:
-                inv_pred = INVERSE_RELATIONS[item['predicate']]
-                inv_pred_safe = self._sanitize_uri(inv_pred)
-                p_inv_uri = f"<{self.namespace_relation}{inv_pred_safe}>"
-                
-                # Inverse Triple: Object - InversePredicate - Subject
-                # e.g. (성기훈, 제자, 오일남) -> (오일남, 스승, 성기훈)
-                # "오일남 is 스승 of 성기훈"
-                rdf_triples.append(f"{o_uri} {p_inv_uri} {s_uri} .")
-                # print(f"[Graph] Auto-generated inverse: {item['object']} --{inv_pred}--> {item['subject']}")
-
+            # [REMOVED] Auto-generate Inverse Relation
+            # Inverse relations are now inferred at query time, not stored physically.
             
             # Link Subject to Chunk (provenance)
             rdf_triples.append(f"{s_uri} <{self.namespace_relation}hasSource> {chunk_uri} .")

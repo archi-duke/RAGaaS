@@ -444,6 +444,7 @@ class FusekiBackend(GraphBackend):
                                 LIMIT 50
                                 """
                                 try:
+                                    log_trace(f"[Fuseki] Pattern 1 Fast Path SPARQL:\n{incoming_query}")
                                     fast_results = fuseki_client.query_sparql(kb_id, incoming_query)
                                     fast_bindings = fast_results.get("results", {}).get("bindings", [])
                                     if fast_bindings:
@@ -491,6 +492,7 @@ class FusekiBackend(GraphBackend):
                                 LIMIT 50
                                 """
                                 try:
+                                    log_trace(f"[Fuseki] Pattern 3 Fast Path SPARQL:\n{outgoing_query}")
                                     fast_results = fuseki_client.query_sparql(kb_id, outgoing_query)
                                     fast_bindings = fast_results.get("results", {}).get("bindings", [])
                                     if fast_bindings:
@@ -548,6 +550,7 @@ class FusekiBackend(GraphBackend):
                             }}
                             """
                             try:
+                                log_trace(f"[Fuseki] Pattern 2 Fast Path SPARQL:\n{direct_triple_query}")
                                 fast_results = fuseki_client.query_sparql(kb_id, direct_triple_query)
                                 fast_bindings = fast_results.get("results", {}).get("bindings", [])
                                 
