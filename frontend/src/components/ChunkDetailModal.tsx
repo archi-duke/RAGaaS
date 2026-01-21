@@ -1,0 +1,617 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
+import { Database, ChevronDown, ChevronUp, FlaskConical } from 'lucide-react';
+import { extractionApi, kbApi } from '../services/api';
+import ExtractionExampleModal from './ExtractionExampleModal';
+import ExtractionPromptModal from './ExtractionPromptModal';
+
+interface Triple {
+    subject: string;
+    predicate: string;
+    object: string;
+    confidence?: number;
+    is_inverse?: boolean;
+}
+
+interface ChunkDetailModalProps {
+    isOpen: boolean;
+    onClose: () => void;
+    chunk: {
+        id: string;
+        content: string;
+    } | null;
+    title?: string;
+    onSave?: (content: string) => Promise<void>;
+    isGraphEnabled?: boolean;
+}
+
+// LabelWithTooltip Component (reused from UploadDocumentModal)
+const LabelWithTooltip = ({ label, tooltip }: { label: string, tooltip: string }) => {
+    const [show, setShow] = useState(false);
+    return (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.3rem', position: 'relative' }}>
+            <label style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)' }}>{label}</label>
+            <div
+                style={{ cursor: 'help', display: 'flex', alignItems: 'center' }}
+                onMouseEnter={() => setShow(true)}
+                onMouseLeave={() => setShow(false)}
+            >
+                <div style={{
+                    width: '14px',
+                    height: '14px',
+                    borderRadius: '50%',
+                    border: '1px solid #94a3b8',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: '9px',
+                    color: '#94a3b8',
+                    fontWeight: 'bold',
+                    flexShrink: 0,
+                    lineHeight: 1
+                }}>i</div>
+                {show && (
+                    <div style={{
+                        position: 'absolute',
+                        bottom: '120%',
+                        left: '0',
+                        backgroundColor: '#333',
+                        color: '#fff',
+                        padding: '0.5rem 0.75rem',
+                        borderRadius: '4px',
+                        fontSize: '0.75rem',
+                        whiteSpace: 'normal',
+                        width: '200px',
+                        zIndex: 100,
+                        boxShadow: '0 2px 8px rgba(0,0,0,0.2)',
+                        pointerEvents: 'none'
+                    }}>
+                        {tooltip}
+                        <div style={{
+                            position: 'absolute',
+                            top: '100%',
+                            left: '10px',
+                            borderWidth: '5px',
+                            borderStyle: 'solid',
+                            borderColor: '#333 transparent transparent transparent'
+                        }}></div>
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+};
+
+export default function ChunkDetailModal({ isOpen, onClose, chunk, title = 'Chunk Content', onSave, isGraphEnabled = false }: ChunkDetailModalProps) {
+    const [isEditing, setIsEditing] = useState(false);
+    const [editContent, setEditContent] = useState('');
+    const [isSaving, setIsSaving] = useState(false);
+
+    // Extract Test states
+    const [showExtractionSettings, setShowExtractionSettings] = useState(false);
+    const [isExtracting, setIsExtracting] = useState(false);
+    const [extractedTriples, setExtractedTriples] = useState<Triple[]>([]);
+    const [showResults, setShowResults] = useState(false);
+
+    // Modal states for Examples and Prompt
+    const [showExampleModal, setShowExampleModal] = useState(false);
+    const [showPromptModal, setShowPromptModal] = useState(false);
+
+    // Selection state for partial extraction
+    const contentRef = useRef<HTMLDivElement>(null);
+    const [selectionText, setSelectionText] = useState('');
+
+    // Track text selection within the content area
+    useEffect(() => {
+        const handleSelectionChange = () => {
+            const selection = window.getSelection();
+            if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
+                if (selectionText) setSelectionText(''); // Optimize check
+                return;
+            }
+
+            const text = selection.toString().trim();
+            // Check if selection is inside contentRef
+            if (contentRef.current && contentRef.current.contains(selection.anchorNode)) {
+                if (text !== selectionText) setSelectionText(text);
+            } else {
+                if (selectionText) setSelectionText('');
+            }
+        };
+
+        document.addEventListener('selectionchange', handleSelectionChange);
+        return () => document.removeEventListener('selectionchange', handleSelectionChange);
+    }, [selectionText]);
+
+    // Graph Params (same structure as UploadDocumentModal)
+    const [graphParams, setGraphParams] = useState({
+        extractor_type: 'simple' as 'simple' | 'dynamic' | 'schema',
+        max_paths_per_chunk: 10,
+        max_triplets_per_chunk: 20,
+        num_workers: 4,
+        generate_inverse_relations: true,
+        enable_text_cleaning: false,
+        enable_subject_restoration: true,
+        enable_inference: false,
+        extraction_examples_yaml: '',
+        custom_prompt: '',
+    });
+
+    useEffect(() => {
+        if (chunk) {
+            setEditContent(chunk.content);
+        }
+        setIsEditing(false);
+        // Reset extraction states when chunk changes
+        setShowExtractionSettings(false);
+        setExtractedTriples([]);
+        setShowResults(false);
+    }, [chunk]);
+
+    // Load default extraction prompt
+    useEffect(() => {
+        const loadPrompt = async () => {
+            try {
+                const promptRes = await kbApi.getExtractionPrompt();
+                const serverPrompt = promptRes.data?.content;
+                if (serverPrompt && serverPrompt !== 'Prompt not found in DB.') {
+                    setGraphParams(prev => ({ ...prev, custom_prompt: serverPrompt }));
+                }
+            } catch (err) {
+                console.warn('Failed to load extraction prompt:', err);
+            }
+        };
+        if (isOpen && isGraphEnabled) {
+            loadPrompt();
+        }
+    }, [isOpen, isGraphEnabled]);
+
+    if (!isOpen || !chunk) return null;
+
+    const handleSave = async () => {
+        if (!onSave || !editContent.trim()) return;
+        setIsSaving(true);
+        try {
+            await onSave(editContent);
+            setIsEditing(false);
+        } catch (error) {
+            console.error('Failed to save chunk:', error);
+            alert('Failed to save chunk content');
+        } finally {
+            setIsSaving(false);
+        }
+    };
+
+    const handleExtract = async () => {
+        setIsExtracting(true);
+        // Use selected text if available, otherwise full content
+        const textToExtract = selectionText || chunk.content;
+
+        try {
+            const res = await extractionApi.extractChunk({
+                chunk_text: textToExtract,
+                extractor_type: graphParams.extractor_type,
+                max_paths_per_chunk: graphParams.max_paths_per_chunk,
+                max_triplets_per_chunk: graphParams.max_triplets_per_chunk,
+                num_workers: graphParams.num_workers,
+                generate_inverse_relations: graphParams.generate_inverse_relations,
+                enable_subject_restoration: graphParams.enable_subject_restoration,
+                enable_text_cleaning: graphParams.enable_text_cleaning,
+                custom_prompt: graphParams.custom_prompt || undefined,
+            });
+            setExtractedTriples(res.data.triples || []);
+            setShowResults(true);
+        } catch (error: any) {
+            console.error('Extract failed:', error);
+            alert(error.response?.data?.detail || '트리플 추출 중 오류가 발생했습니다.');
+        } finally {
+            setIsExtracting(false);
+        }
+    };
+
+    return createPortal(
+        <div
+            style={{
+                position: 'fixed',
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                backgroundColor: 'rgba(0,0,0,0.5)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                zIndex: 99999
+            }}
+            onClick={onClose}
+        >
+            <div
+                className="card"
+                style={{
+                    width: '90%',
+                    maxWidth: '900px',
+                    maxHeight: '90vh',
+                    overflow: 'auto',
+                    backgroundColor: 'white',
+                    padding: '24px',
+                    borderRadius: '12px',
+                    boxShadow: '0 20px 50px rgba(0,0,0,0.3)',
+                    border: '1px solid #e2e8f0'
+                }}
+                onClick={(e) => e.stopPropagation()}
+            >
+                {/* Header */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
+                    <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 700, color: '#1e293b', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        📄 {title}
+                    </h3>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                        {/* Extract Test Button - only for graph-enabled KBs */}
+                        {isGraphEnabled && !isEditing && (
+                            <button
+                                className="k-button k-button-sm k-rounded-md k-button-solid"
+                                onClick={() => setShowExtractionSettings(!showExtractionSettings)}
+                                style={{
+                                    cursor: 'pointer',
+                                    fontWeight: 600,
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '5px',
+                                    fontSize: '0.85rem',
+                                    backgroundColor: showExtractionSettings ? '#3b82f6' : '#f1f5f9',
+                                    color: showExtractionSettings ? 'white' : '#3b82f6',
+                                    border: '1px solid #3b82f6'
+                                }}
+                            >
+                                <FlaskConical size={14} />
+                                Extract Test
+                                {showExtractionSettings ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                            </button>
+                        )}
+                        {onSave && !isEditing && (
+                            <button
+                                onClick={() => setIsEditing(true)}
+                                style={{ cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem' }}
+                            >
+                                Edit
+                            </button>
+                        )}
+                        <button
+                            className="k-button k-button-sm k-rounded-md k-button-solid k-button-solid-base"
+                            onClick={onClose}
+                            style={{ cursor: 'pointer', fontSize: '0.85rem' }}
+                        >
+                            Close
+                        </button>
+                    </div>
+                </div>
+
+                {/* Meta Info */}
+                <div style={{
+                    fontSize: '0.85rem',
+                    color: '#64748b',
+                    marginBottom: '1.25rem',
+                    padding: '8px 12px',
+                    backgroundColor: '#f1f5f9',
+                    borderRadius: '6px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px'
+                }}>
+                    <span style={{ fontWeight: 600 }}>Chunk ID:</span>
+                    <code style={{ fontFamily: 'monospace', color: '#0f172a' }}>{chunk.id}</code>
+                </div>
+
+                {/* Graph Extraction Settings Panel */}
+                {showExtractionSettings && isGraphEnabled && (
+                    <div style={{ marginBottom: '1.25rem', background: '#f8fafc', padding: '1.25rem', borderRadius: '12px', border: '1px solid #e2e8f0' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1.25rem', color: '#3b82f6', fontWeight: 600, fontSize: '0.95rem' }}>
+                            <Database size={16} />
+                            <span>Graph Extraction Settings (LlamaIndex)</span>
+                        </div>
+
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem' }}>
+                            {/* Column 1: Config Parameters */}
+                            <div>
+                                <h4 style={{ margin: '0 0 1rem 0', fontSize: '0.85rem', color: '#475569' }}>Configuration</h4>
+
+                                <LabelWithTooltip label="Extractor Type" tooltip="Select LlamaIndex extractor type" />
+                                <select
+                                    className="input"
+                                    value={graphParams.extractor_type}
+                                    onChange={(e) => setGraphParams({ ...graphParams, extractor_type: e.target.value as 'simple' | 'dynamic' | 'schema' })}
+                                    style={{ width: '100%', padding: '0.5rem', fontSize: '0.85rem', marginBottom: '1rem' }}
+                                >
+                                    <option value="simple">Simple LLM (Default)</option>
+                                    <option value="dynamic">Dynamic LLM</option>
+                                    <option value="schema">Schema-based</option>
+                                </select>
+
+                                {graphParams.extractor_type === 'simple' && (
+                                    <div style={{ marginBottom: '1rem' }}>
+                                        <LabelWithTooltip label={`Max Paths: ${graphParams.max_paths_per_chunk}`} tooltip="Max triples per chunk" />
+                                        <input
+                                            type="range" min="5" max="50" step="5"
+                                            value={graphParams.max_paths_per_chunk}
+                                            onChange={(e) => setGraphParams({ ...graphParams, max_paths_per_chunk: parseInt(e.target.value) })}
+                                            style={{ width: '100%', cursor: 'pointer', accentColor: '#3b82f6' }}
+                                        />
+                                    </div>
+                                )}
+
+                                {graphParams.extractor_type === 'dynamic' && (
+                                    <div style={{ marginBottom: '1rem' }}>
+                                        <LabelWithTooltip label={`Max Triplets: ${graphParams.max_triplets_per_chunk}`} tooltip="Max triples per chunk" />
+                                        <input
+                                            type="range" min="10" max="100" step="10"
+                                            value={graphParams.max_triplets_per_chunk}
+                                            onChange={(e) => setGraphParams({ ...graphParams, max_triplets_per_chunk: parseInt(e.target.value) })}
+                                            style={{ width: '100%', cursor: 'pointer', accentColor: '#3b82f6' }}
+                                        />
+                                    </div>
+                                )}
+
+                                <div>
+                                    <LabelWithTooltip label={`Workers: ${graphParams.num_workers}`} tooltip="Number of parallel workers" />
+                                    <input
+                                        type="range" min="1" max="8" step="1"
+                                        value={graphParams.num_workers}
+                                        onChange={(e) => setGraphParams({ ...graphParams, num_workers: parseInt(e.target.value) })}
+                                        style={{ width: '100%', cursor: 'pointer', accentColor: '#3b82f6' }}
+                                    />
+                                </div>
+                            </div>
+
+                            {/* Column 2: Checkbox Options */}
+                            <div>
+                                <h4 style={{ margin: '0 0 1rem 0', fontSize: '0.85rem', color: '#475569' }}>Options</h4>
+
+                                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', marginBottom: '1rem' }}>
+                                    <input
+                                        type="checkbox"
+                                        checked={graphParams.generate_inverse_relations}
+                                        onChange={(e) => setGraphParams({ ...graphParams, generate_inverse_relations: e.target.checked })}
+                                        style={{ width: '1.1rem', height: '1.1rem' }}
+                                    />
+                                    <div>
+                                        <span style={{ color: '#334155', fontWeight: 500, fontSize: '0.9rem' }}>Generate Inverse</span>
+                                        <div style={{ fontSize: '0.75rem', color: '#64748b' }}>e.g. Teacher → Student</div>
+                                    </div>
+                                </label>
+
+                                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', marginBottom: '1rem' }}>
+                                    <input
+                                        type="checkbox"
+                                        checked={graphParams.enable_text_cleaning}
+                                        onChange={(e) => setGraphParams({ ...graphParams, enable_text_cleaning: e.target.checked })}
+                                        style={{ width: '1.1rem', height: '1.1rem' }}
+                                    />
+                                    <div>
+                                        <span style={{ color: '#334155', fontWeight: 500, fontSize: '0.9rem' }}>Clean Text</span>
+                                        <div style={{ fontSize: '0.75rem', color: '#64748b' }}>Remove bullets, numbers</div>
+                                    </div>
+                                </label>
+
+                                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', marginBottom: '1rem' }}>
+                                    <input
+                                        type="checkbox"
+                                        checked={graphParams.enable_subject_restoration}
+                                        onChange={(e) => setGraphParams({ ...graphParams, enable_subject_restoration: e.target.checked })}
+                                        style={{ width: '1.1rem', height: '1.1rem' }}
+                                    />
+                                    <div>
+                                        <span style={{ color: '#334155', fontWeight: 500, fontSize: '0.9rem' }}>Subject Restoration</span>
+                                        <div style={{ fontSize: '0.75rem', color: '#64748b' }}>Resolve omitted subjects (KR)</div>
+                                    </div>
+                                </label>
+
+                                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                                    <input
+                                        type="checkbox"
+                                        checked={graphParams.enable_inference}
+                                        onChange={(e) => setGraphParams({ ...graphParams, enable_inference: e.target.checked })}
+                                        style={{ width: '1.1rem', height: '1.1rem' }}
+                                    />
+                                    <div>
+                                        <span style={{ color: '#334155', fontWeight: 500, fontSize: '0.9rem' }}>Inference</span>
+                                        <div style={{ fontSize: '0.75rem', color: '#64748b' }}>Apply reasoning rules</div>
+                                    </div>
+                                </label>
+                            </div>
+
+                            {/* Column 3: Customization Actions */}
+                            <div>
+                                <h4 style={{ margin: '0 0 1rem 0', fontSize: '0.85rem', color: '#475569' }}>Customization</h4>
+
+                                <button
+                                    className="btn"
+                                    style={{ width: '100%', marginBottom: '0.75rem', justifyContent: 'center', background: '#fff', border: '1px solid #cbd5e1' }}
+                                    onClick={() => setShowExampleModal(true)}
+                                >
+                                    Manage Examples
+                                </button>
+                                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'default', marginBottom: '1.25rem', justifyContent: 'center' }}>
+                                    <input
+                                        type="checkbox"
+                                        checked={!!graphParams.extraction_examples_yaml}
+                                        readOnly
+                                        style={{ width: '0.9rem', height: '0.9rem', accentColor: '#3b82f6' }}
+                                    />
+                                    <span style={{ fontSize: '0.75rem', color: '#64748b' }}>Examples Added</span>
+                                </label>
+
+                                <button
+                                    className="btn"
+                                    style={{ width: '100%', marginBottom: '0.75rem', justifyContent: 'center', background: '#fff', border: '1px solid #cbd5e1' }}
+                                    onClick={() => setShowPromptModal(true)}
+                                >
+                                    Edit Extraction Prompt
+                                </button>
+                                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'default', justifyContent: 'center' }}>
+                                    <input
+                                        type="checkbox"
+                                        checked={!!graphParams.custom_prompt}
+                                        readOnly
+                                        style={{ width: '0.9rem', height: '0.9rem', accentColor: '#3b82f6' }}
+                                    />
+                                    <span style={{ fontSize: '0.75rem', color: '#64748b' }}>Custom Prompt Active</span>
+                                </label>
+
+                                {/* Extract Button at the bottom of Column 3 */}
+                                <button
+                                    className="btn btn-primary"
+                                    onClick={handleExtract}
+                                    disabled={isExtracting}
+                                    style={{
+                                        width: '100%',
+                                        marginTop: '1rem',
+                                        padding: '0.65rem 1rem',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        gap: '0.5rem',
+                                        fontSize: '0.9rem',
+                                        fontWeight: 600
+                                    }}
+                                >
+                                    <FlaskConical size={16} />
+                                    {isExtracting ? 'Extracting...' : (selectionText ? 'Extract (Selection)' : 'Extract')}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* Extracted Triples Results */}
+                {showResults && extractedTriples.length > 0 && (
+                    <div style={{ marginBottom: '1.25rem', background: '#f0fdf4', padding: '1rem', borderRadius: '12px', border: '1px solid #86efac' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
+                            <span style={{ fontWeight: 600, color: '#166534', fontSize: '0.9rem' }}>
+                                ✅ Extracted Triples ({extractedTriples.length} results)
+                            </span>
+                            <button
+                                className="btn"
+                                onClick={() => setShowResults(false)}
+                                style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }}
+                            >
+                                Hide
+                            </button>
+                        </div>
+                        <div style={{ /* maxHeight removed to show full list */ }}>
+                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
+                                <thead>
+                                    <tr style={{ backgroundColor: '#dcfce7' }}>
+                                        <th style={{ padding: '8px', textAlign: 'left', borderBottom: '1px solid #86efac' }}>Subject</th>
+                                        <th style={{ padding: '8px', textAlign: 'center', borderBottom: '1px solid #86efac' }}>Predicate</th>
+                                        <th style={{ padding: '8px', textAlign: 'left', borderBottom: '1px solid #86efac' }}>Object</th>
+                                        <th style={{ padding: '8px', textAlign: 'center', borderBottom: '1px solid #86efac', width: '80px' }}>Conf.</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {extractedTriples.map((triple, idx) => (
+                                        <tr key={idx} style={{ backgroundColor: triple.is_inverse ? '#fef9c3' : 'white' }}>
+                                            <td style={{ padding: '8px', borderBottom: '1px solid #e2e8f0' }}>{triple.subject}</td>
+                                            <td style={{ padding: '8px', textAlign: 'center', borderBottom: '1px solid #e2e8f0', fontStyle: 'italic', color: '#0284c7' }}>
+                                                {triple.predicate}
+                                                {triple.is_inverse && <span style={{ marginLeft: '4px', fontSize: '0.7rem', color: '#ca8a04' }}>(inv)</span>}
+                                            </td>
+                                            <td style={{ padding: '8px', borderBottom: '1px solid #e2e8f0' }}>{triple.object}</td>
+                                            <td style={{ padding: '8px', textAlign: 'center', borderBottom: '1px solid #e2e8f0', color: '#64748b' }}>
+                                                {triple.confidence?.toFixed(2) || '-'}
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                )}
+
+                {showResults && extractedTriples.length === 0 && (
+                    <div style={{ marginBottom: '1.25rem', background: '#fef3c7', padding: '1rem', borderRadius: '12px', border: '1px solid #f59e0b', textAlign: 'center', color: '#92400e' }}>
+                        ⚠️ 추출된 트리플이 없습니다. 다른 설정으로 다시 시도해보세요.
+                    </div>
+                )}
+
+                {/* Content Area */}
+                <div style={{ position: 'relative' }}>
+                    {isEditing ? (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                            <textarea
+                                value={editContent}
+                                onChange={(e) => setEditContent(e.target.value)}
+                                style={{
+                                    width: '100%',
+                                    minHeight: '400px',
+                                    padding: '16px',
+                                    borderRadius: '8px',
+                                    border: '2px solid #3b82f6',
+                                    fontSize: '0.95rem',
+                                    lineHeight: 1.6,
+                                    fontFamily: 'inherit',
+                                    resize: 'vertical',
+                                    outline: 'none'
+                                }}
+                                autoFocus
+                                disabled={isSaving}
+                            />
+                            <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+                                <button
+                                    className="btn"
+                                    onClick={() => setIsEditing(false)}
+                                    disabled={isSaving}
+                                    style={{ padding: '0.5rem 1.5rem' }}
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    className="btn btn-primary"
+                                    onClick={handleSave}
+                                    disabled={isSaving || !editContent.trim()}
+                                    style={{ padding: '0.5rem 2rem', minWidth: '100px' }}
+                                >
+                                    {isSaving ? 'Saving...' : 'Save Changes'}
+                                </button>
+                            </div>
+                        </div>
+                    ) : (
+                        <div
+                            style={{
+                                padding: '20px',
+                                backgroundColor: '#f8fafc',
+                                borderRadius: '10px',
+                                whiteSpace: 'pre-wrap',
+                                lineHeight: 1.7,
+                                border: '1px solid #e2e8f0',
+                                fontSize: '1rem',
+                                color: '#334155',
+                                maxHeight: showExtractionSettings || showResults ? '40vh' : '60vh',
+                                overflowY: 'auto'
+                            }}
+                            ref={contentRef}
+                        >
+                            {chunk.content.replace(/(\r\n|\n|\r){2,}/gm, '\n')}
+                        </div>
+                    )}
+                </div>
+            </div>
+
+            {/* Extraction Example Modal */}
+            <ExtractionExampleModal
+                isOpen={showExampleModal}
+                onClose={() => setShowExampleModal(false)}
+                initialYaml={graphParams.extraction_examples_yaml}
+                onSave={(yaml) => setGraphParams(prev => ({ ...prev, extraction_examples_yaml: yaml }))}
+            />
+
+            {/* Extraction Prompt Modal */}
+            <ExtractionPromptModal
+                isOpen={showPromptModal}
+                onClose={() => setShowPromptModal(false)}
+                initialPrompt={graphParams.custom_prompt}
+                onSave={(prompt) => setGraphParams(prev => ({ ...prev, custom_prompt: prompt }))}
+            />
+        </div>,
+        document.body
+    );
+}

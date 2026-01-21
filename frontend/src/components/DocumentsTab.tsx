@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
-import { Upload, FileText, Trash2 } from 'lucide-react';
+import { Upload, FileText, Trash2, Code, ScrollText, Check, X as XIcon } from 'lucide-react';
 import UploadDocumentModal from './UploadDocumentModal';
+import PromptDialog from './PromptDialog';
+import { docApi } from '../services/api';
 
 interface Document {
     id: string;
@@ -9,6 +11,14 @@ interface Document {
     status: string;
     created_at: string;
     updated_at: string;
+    extractor_type?: string;
+    max_paths?: number;
+    enable_text_cleaning?: boolean;
+    enable_subject_restoration?: boolean;
+    enable_inference?: boolean;
+    generate_inverse?: boolean;
+    extraction_examples?: string;
+    custom_prompt?: string;
 }
 
 interface DocumentsTabProps {
@@ -22,6 +32,30 @@ interface DocumentsTabProps {
 
 export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocument, onViewChunks }: DocumentsTabProps) {
     const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
+
+    // Prompt/Example Management
+    const [promptDialog, setPromptDialog] = useState<{
+        isOpen: boolean;
+        docId: string;
+        mode: 'extraction_examples' | 'extraction_prompt';
+        initialContent: string;
+        title: string;
+    } | null>(null);
+
+    const handleUpdate = async (content: string) => {
+        if (!promptDialog) return;
+
+        try {
+            await docApi.update(kbId, promptDialog.docId, {
+                [promptDialog.mode === 'extraction_examples' ? 'extraction_examples' : 'custom_prompt']: content
+            });
+            onRefresh(); // Refresh to update local state
+        } catch (error) {
+            console.error("Failed to update document:", error);
+            alert("Failed to update settings");
+        }
+    };
+
 
     const getStatusBadge = (status: string) => {
         const statusMap: Record<string, { class: string; label: string }> = {
@@ -61,7 +95,12 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
                                 <th style={{ padding: '1rem', textAlign: 'left', fontWeight: 600, fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Filename</th>
                                 <th style={{ padding: '1rem', textAlign: 'left', fontWeight: 600, fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Type</th>
                                 <th style={{ padding: '1rem', textAlign: 'left', fontWeight: 600, fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Status</th>
-                                <th style={{ padding: '1rem', textAlign: 'left', fontWeight: 600, fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Uploaded</th>
+                                <th style={{ padding: '1rem', textAlign: 'left', fontWeight: 600, fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Extractor</th>
+                                <th style={{ padding: '1rem', textAlign: 'center', fontWeight: 600, fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Paths</th>
+                                <th style={{ padding: '1rem', textAlign: 'center', fontWeight: 600, fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Clean</th>
+                                <th style={{ padding: '1rem', textAlign: 'center', fontWeight: 600, fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Subject</th>
+                                <th style={{ padding: '1rem', textAlign: 'center', fontWeight: 600, fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Infer</th>
+                                <th style={{ padding: '1rem', textAlign: 'center', fontWeight: 600, fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Inverse</th>
                                 <th style={{ padding: '1rem', textAlign: 'left', fontWeight: 600, fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Updated</th>
                                 <th style={{ padding: '1rem', textAlign: 'center', fontWeight: 600, fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Actions</th>
                             </tr>
@@ -69,7 +108,7 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
                         <tbody>
                             {documents.length === 0 ? (
                                 <tr>
-                                    <td colSpan={6} style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+                                    <td colSpan={10} style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
                                         <FileText size={48} style={{ margin: '0 auto 1rem', opacity: 0.2 }} />
                                         <p style={{ margin: 0 }}>No documents uploaded yet</p>
                                     </td>
@@ -93,38 +132,74 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
                                             <span className="badge badge-secondary" style={{ fontSize: '0.75rem' }}>{doc.file_type.toUpperCase()}</span>
                                         </td>
                                         <td style={{ padding: '1rem' }}>{getStatusBadge(doc.status)}</td>
-                                        <td style={{ padding: '1rem', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>
-                                            {new Date(doc.created_at).toLocaleString()}
+                                        <td style={{ padding: '1rem', fontSize: '0.85rem' }}>{doc.extractor_type || '-'}</td>
+                                        <td style={{ padding: '1rem', textAlign: 'center', fontSize: '0.85rem' }}>{doc.max_paths || '-'}</td>
+                                        <td style={{ padding: '1rem', textAlign: 'center' }}>
+                                            {doc.enable_text_cleaning ? <Check size={16} color="#3b82f6" /> : <XIcon size={16} color="var(--text-tertiary)" />}
+                                        </td>
+                                        <td style={{ padding: '1rem', textAlign: 'center' }}>
+                                            {doc.enable_subject_restoration ? <Check size={16} color="#3b82f6" /> : <XIcon size={16} color="var(--text-tertiary)" />}
+                                        </td>
+                                        <td style={{ padding: '1rem', textAlign: 'center' }}>
+                                            {doc.enable_inference ? <Check size={16} color="#3b82f6" /> : <XIcon size={16} color="var(--text-tertiary)" />}
+                                        </td>
+                                        <td style={{ padding: '1rem', textAlign: 'center' }}>
+                                            {doc.generate_inverse ? <Check size={16} color="#3b82f6" /> : <XIcon size={16} color="var(--text-tertiary)" />}
                                         </td>
                                         <td style={{ padding: '1rem', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>
                                             {doc.updated_at ? new Date(doc.updated_at).toLocaleString() : '-'}
                                         </td>
                                         <td style={{ padding: '1rem', textAlign: 'center' }}>
-                                            <button
-                                                className="btn btn-icon danger"
-                                                onClick={(e) => {
-                                                    e.stopPropagation();
-                                                    onDeleteDocument(doc.id);
-                                                }}
-                                                title="Delete Document"
-                                                style={{
-                                                    color: 'var(--error)',
-                                                    opacity: 0.7,
-                                                    transition: 'opacity 0.2s',
-                                                    padding: '0.5rem',
-                                                    borderRadius: '4px'
-                                                }}
-                                                onMouseEnter={(e) => {
-                                                    e.currentTarget.style.opacity = '1';
-                                                    e.currentTarget.style.backgroundColor = 'rgba(239, 68, 68, 0.1)';
-                                                }}
-                                                onMouseLeave={(e) => {
-                                                    e.currentTarget.style.opacity = '0.7';
-                                                    e.currentTarget.style.backgroundColor = 'transparent';
-                                                }}
-                                            >
-                                                <Trash2 size={18} />
-                                            </button>
+                                            <div style={{ display: 'flex', justifyContent: 'center', gap: '0.5rem' }}>
+                                                <button
+                                                    className="btn btn-icon"
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        setPromptDialog({
+                                                            isOpen: true,
+                                                            docId: doc.id,
+                                                            mode: 'extraction_examples',
+                                                            initialContent: doc.extraction_examples || '',
+                                                            title: `Extraction Examples - ${doc.filename}`
+                                                        });
+                                                    }}
+                                                    title="Manage Examples"
+                                                    style={{ color: doc.extraction_examples ? '#3b82f6' : 'var(--text-tertiary)' }}
+                                                >
+                                                    <ScrollText size={18} />
+                                                </button>
+                                                <button
+                                                    className="btn btn-icon"
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        setPromptDialog({
+                                                            isOpen: true,
+                                                            docId: doc.id,
+                                                            mode: 'extraction_prompt',
+                                                            initialContent: doc.custom_prompt || '',
+                                                            title: `Extraction Prompt - ${doc.filename}`
+                                                        });
+                                                    }}
+                                                    title="Manage Prompt"
+                                                    style={{ color: doc.custom_prompt ? '#3b82f6' : 'var(--text-tertiary)' }}
+                                                >
+                                                    <Code size={18} />
+                                                </button>
+                                                <button
+                                                    className="btn btn-icon danger"
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        onDeleteDocument(doc.id);
+                                                    }}
+                                                    title="Delete Document"
+                                                    style={{
+                                                        color: 'var(--error)',
+                                                        opacity: 0.7
+                                                    }}
+                                                >
+                                                    <Trash2 size={18} />
+                                                </button>
+                                            </div>
                                         </td>
                                     </tr>
                                 ))
@@ -140,6 +215,17 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
                 kbId={kbId}
                 onUploadComplete={onRefresh}
             />
+
+            {promptDialog && (
+                <PromptDialog
+                    isOpen={promptDialog.isOpen}
+                    onClose={() => setPromptDialog(null)}
+                    initialPrompt={promptDialog.initialContent}
+                    onSave={handleUpdate}
+                    mode={promptDialog.mode}
+                    title={promptDialog.title}
+                />
+            )}
         </>
     );
 }

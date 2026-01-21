@@ -17,6 +17,7 @@ services:
       interval: 30s
       timeout: 20s
       retries: 3
+    restart: unless-stopped
 
   minio:
     container_name: milvus-minio
@@ -35,6 +36,7 @@ services:
       interval: 30s
       timeout: 20s
       retries: 3
+    restart: unless-stopped
 
   standalone:
     container_name: milvus-standalone
@@ -53,6 +55,7 @@ services:
     depends_on:
       - "etcd"
       - "minio"
+    restart: unless-stopped
 
   fuseki:
     container_name: ragaas-fuseki
@@ -98,13 +101,14 @@ services:
       - NEO4J_URI=bolt://neo4j:7687
       - NEO4J_USER=neo4j
       - NEO4J_PASSWORD=password
-      - DATABASE_URL=sqlite+aiosqlite:////app/data/rag_system.db
-      - PYTHONPATH=/Doc2Onto
+      - MONGO_URI=mongodb://root:example@mongo:27017
+      - MONGO_DB=ragaas
+      - INGEST_SERVICE_URL=http://ingest-service:8001
+      - SHARED_STORAGE_PATH=/data/uploads
     volumes:
       - ./backend:/app
       - ./backend/data:/app/data
-      - /Users/dukekimm/Works/Doc2Onto:/Doc2Onto
-      - /Users/dukekimm/Works/Doc2Onto/doc2onto:/app/app/doc2onto
+      - ./data/uploads:/data/uploads
 
     ports:
       - "8000:8000"
@@ -112,6 +116,58 @@ services:
       - standalone
       - fuseki
       - neo4j
+      - mongo
+      - ingest-service
+    restart: unless-stopped
+
+  mongo:
+    image: mongo:latest
+    container_name: ragaas-mongo
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: example
+    ports:
+      - "27017:27017"
+    volumes:
+      - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/mongo:/data/db
+    restart: unless-stopped
+
+  redis:
+    container_name: ragaas-redis
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/redis:/data
+    restart: unless-stopped
+
+  ingest-service:
+    container_name: ragaas-ingest
+    build:
+      context: ./ingest_service
+      dockerfile: Dockerfile
+    environment:
+      - PYTHONUNBUFFERED=1
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - REDIS_URL=redis://redis:6379/0
+      - MILVUS_HOST=standalone
+      - MILVUS_PORT=19530
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD=password
+      - FUSEKI_URL=http://fuseki:3030
+      - SHARED_STORAGE_PATH=/data/uploads
+      - MAIN_BACKEND_URL=http://backend:8000
+    volumes:
+      - ./ingest_service:/app
+      - ./data/uploads:/data/uploads
+    ports:
+      - "8001:8001"
+    depends_on:
+      - standalone
+      - redis
+      - neo4j
+      - fuseki
     restart: unless-stopped
 
   frontend:
@@ -120,7 +176,11 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       target: builder
+      args:
+        - TELERIK_LICENSE=${TELERIK_LICENSE}
     command: npm run dev -- --host
+    environment:
+      - TELERIK_LICENSE=${TELERIK_LICENSE}
     volumes:
       - ./frontend:/app
       - /app/node_modules

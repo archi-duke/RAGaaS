@@ -6,8 +6,15 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
+# Copy license file if it exists (optional, for local builds)
+COPY telerik-license.txt* ./
+
+# Accept license key as build argument (for CI/CD)
+ARG TELERIK_LICENSE
+ENV TELERIK_LICENSE=${TELERIK_LICENSE}
+
 # Install dependencies
-RUN npm ci
+RUN npm install
 
 # Copy source code
 COPY . .

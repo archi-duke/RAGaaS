@@ -1,9 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from app.schemas import RetrievalRequest, RetrievalResult
 from app.services.retrieval import retrieval_factory, reranking_service
-from app.core.database import get_db
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.future import select
 from typing import List, Optional, Dict
 from pydantic import BaseModel
 import openai
@@ -91,14 +88,12 @@ async def update_rerank_prompt(request: PromptUpdateRequest):
 async def retrieve_chunks(
     kb_id: str,
     request: RetrievalRequest,
-    db: AsyncSession = Depends(get_db)
+    # db: AsyncSession = Depends(get_db) # Removed SQL Session
 ):
     print(f"[DEBUG] Retrieve Request: brute={request.use_brute_force} bf_top_k={request.brute_force_top_k} bf_thresh={request.brute_force_threshold}")
-    # ... (rest of retrieve_chunks mostly unchanged, but we can't easily attach logs here since return type is List[RetrievalResult])
-    # For now, focus on chat API which returns ChatResponse
+    
     from app.models.knowledge_base import KnowledgeBase
-    result = await db.execute(select(KnowledgeBase).filter(KnowledgeBase.id == kb_id))
-    kb = result.scalars().first()
+    kb = await KnowledgeBase.get(kb_id)
     
     with open("backend_debug.log", "a") as f:
         f.write(f"\n--- REQ ---\nDefault TopK: {request.top_k}\nBF: {request.use_brute_force}\n")
@@ -196,22 +191,16 @@ async def retrieve_chunks(
 async def chat_with_kb(
     kb_id: str,
     request: ChatRequest,
-    db: AsyncSession = Depends(get_db)
+    # db: AsyncSession = Depends(get_db)
 ):
     start_time = time.time()
     
     # 파라미터 로깅 (프론트엔드 → 백엔드 전달 확인)
     print("=" * 80)
     print("📥 [Backend] Received Chat Request")
-    # ... (skipping prints for brevity in replacement args if they are identical, but must include them if I replace the whole block)
-    # Actually I should replace specifically the block that handles the response construction.
     
-    # ... (prints)
-    
-    # ... (DB fetch code)
     from app.models.knowledge_base import KnowledgeBase
-    result = await db.execute(select(KnowledgeBase).filter(KnowledgeBase.id == kb_id))
-    kb = result.scalars().first()
+    kb = await KnowledgeBase.get(kb_id)
     if not kb:
         raise HTTPException(status_code=404, detail="Knowledge Base not found")
         
@@ -459,7 +448,9 @@ async def chat_with_kb(
         if "error" in log_lower or "failed" in log_lower or "generation failed" in log_lower:
             has_error = True
         if "fallback" in log_lower or "entity-guided" in log_lower:
-            used_fallback = True
+            # Exclude false positives like "No fallback search performed"
+            if "no fallback" not in log_lower and "fallback search disabled" not in log_lower:
+                used_fallback = True
     
     return ChatResponse(
         answer=answer,
@@ -471,3 +462,34 @@ async def chat_with_kb(
         has_error=has_error,
         used_fallback=used_fallback
     )
+
+@router.get("/{kb_id}/chunks/{chunk_id}")
+async def get_chunk(kb_id: str, chunk_id: str):
+    """
+    Fetch a single chunk content from Milvus by ID.
+    Used for previewing chunk content in the Graph Data View.
+    """
+    from app.core.milvus import create_collection
+    try:
+        # Load collection (using create_collection handles name mapping and loading)
+        collection = create_collection(kb_id)
+        collection.load()
+        
+        # Search for the chunk by chunk_id (VARCHAR), not internal id (INT64)
+        expr = f'chunk_id == "{chunk_id}"'
+        res = collection.query(
+            expr=expr,
+            output_fields=["content", "metadata"],
+            limit=1
+        )
+        
+        if not res:
+            # Fallback: Try searching by id if implicit conversion works or for legacy reasons? 
+            # But schema says id is INT64. Let's assume chunk_id is the correct field.
+            raise HTTPException(status_code=404, detail=f"Chunk {chunk_id} not found")
+            
+        return res[0]
+    except Exception as e:
+        print(f"[ChunkPreview] Error fetching chunk {chunk_id}: {e}")
+        # Milvus error or connection error
+        raise HTTPException(status_code=500, detail=str(e))

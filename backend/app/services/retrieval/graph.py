@@ -145,12 +145,15 @@ class GraphRetrievalStrategy(RetrievalStrategy):
             all_entities = list(set(all_entities))
             
         if not results or (len(results) == 1 and results[0].get("chunk_id") == "GRAPH_METADATA_ONLY"):
-            log(f"DEBUG: 🔄 Fallback triggered. Reason: No direct graph-to-chunk matches found.")
-            log(f"DEBUG: Executing Entity-Guided Hybrid Search with entities: {all_entities}")
-            fallback_results = await self._fallback_search(kb_id, query, all_entities, top_k)
-            if fallback_results:
-                log(f"DEBUG: ✅ Entity-Guided Search success! Retrieved {len(fallback_results)} chunks.")
-                results = fallback_results
+             # [MODIFIED] Fallback Removed as per user request
+             # log(f"DEBUG: 🔄 Fallback triggered. Reason: No direct graph-to-chunk matches found.")
+             # log(f"DEBUG: Executing Entity-Guided Hybrid Search with entities: {all_entities}")
+             # fallback_results = await self._fallback_search(kb_id, query, all_entities, top_k)
+             # if fallback_results:
+             #     log(f"DEBUG: ✅ Entity-Guided Search success! Retrieved {len(fallback_results)} chunks.")
+             #     results = fallback_results
+             log(f"DEBUG: Strict Mode - Fallback search disabled. Returning empty/metadata-only results.")
+
         
         # 7. Add graph metadata
         metadata = {

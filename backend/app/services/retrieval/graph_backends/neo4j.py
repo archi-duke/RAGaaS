@@ -118,16 +118,13 @@ class Neo4jBackend(GraphBackend):
                     "trace_logs": trace_logs
                 }
             
-            # 순수 그래프에서 트리플 조회 (MENTIONED_IN 없음)
-            triples = self._fetch_triples_from_graph(kb_id, entities, list(discovered_entities), trace_logs)
-            
-            # SQLite에서 트리플 오프셋 정보 조회
-            triples_with_offset, chunk_ids = await self._attach_offsets_to_triples(kb_id, triples)
+            # 순수 그래프에서 트리플 조회 (source_node_id 포함)
+            triples, chunk_ids = self._fetch_triples_from_graph(kb_id, entities, list(discovered_entities), trace_logs)
 
             return {
-                "chunk_ids": chunk_ids,  # 그래프 검색으로 발견된 관련 청크 ID
+                "chunk_ids": chunk_ids,  # Neo4j에서 직접 추출한 source_node_id 목록
                 "sparql_query": cypher_query,
-                "triples": triples_with_offset,
+                "triples": triples,
                 "thought": thought,
                 "found_entities": list(discovered_entities),
                 "trace_logs": trace_logs
@@ -140,17 +137,22 @@ class Neo4jBackend(GraphBackend):
             trace_logs.append(f"[Neo4j] Error: {str(e)}")
             return {"chunk_ids": [], "sparql_query": "Error", "triples": [], "trace_logs": trace_logs}
 
-    def _fetch_triples_from_graph(self, kb_id: str, input_entities: List[str], discovered_entities: List[str], trace_logs: List[str] = None) -> List[Dict[str, str]]:
-        """순수 그래프에서 관련 트리플 조회 (Chunk 노드 없음)"""
+    def _fetch_triples_from_graph(self, kb_id: str, input_entities: List[str], discovered_entities: List[str], trace_logs: List[str] = None) -> Tuple[List[Dict[str, str]], List[str]]:
+        """순수 그래프에서 관련 트리플 조회 (source_node_id 포함)
+        
+        Returns:
+            Tuple[List[Dict], List[str]]: (트리플 목록, 청크 ID 목록)
+        """
         triples = []
+        chunk_ids = set()
         try:
             # Combine entities for focus
             focus_entities = list(set(input_entities + discovered_entities))[:30]
             
             if not focus_entities:
-                return []
+                return [], []
             
-            # 순수 Entity-Relation 그래프에서 트리플 조회
+            # 순수 Entity-Relation 그래프에서 트리플 조회 (source_node_id 포함)
             triples_query = """
             MATCH (s:Entity)-[r]->(o:Entity)
             WHERE s.kb_id = $kb_id
@@ -160,7 +162,8 @@ class Neo4jBackend(GraphBackend):
                 s.name as subj, 
                 type(r) as pred, 
                 o.name as obj,
-                r.is_inverse as is_inverse
+                r.is_inverse as is_inverse,
+                r.source_node_id as source_node_id
             LIMIT 30
             """
             
@@ -178,57 +181,18 @@ class Neo4jBackend(GraphBackend):
                         "subject": r["subj"], 
                         "predicate": r["pred"], 
                         "object": r["obj"],
-                        "is_inverse": r.get("is_inverse", False)
+                        "is_inverse": r.get("is_inverse", False),
+                        "source_node_id": r.get("source_node_id")
                     })
+                    # source_node_id가 있으면 청크 ID로 수집
+                    if r.get("source_node_id"):
+                        chunk_ids.add(r["source_node_id"])
+                        
+            if trace_logs is not None:
+                trace_logs.append(f"[Neo4j] Fetched {len(triples)} triples, {len(chunk_ids)} unique chunk IDs from source_node_id")
+                        
         except Exception as e:
             logger.error(f"Error in _fetch_triples_from_graph: {e}")
         
-        return triples
+        return triples, list(chunk_ids)
 
-    async def _attach_offsets_to_triples(self, kb_id: str, triples: List[Dict]) -> Tuple[List[Dict], List[str]]:
-        """SQLite에서 트리플의 소스 오프셋 정보 조회하여 첨부"""
-        from app.models.triple_chunk_mapping import compute_triple_hash
-        from app.core.database import SessionLocal
-        from sqlalchemy.future import select
-        from app.models.triple_chunk_mapping import TripleChunkMapping
-        
-        discovered_chunk_ids = set()
-        
-        try:
-            async with SessionLocal() as db:
-                for triple in triples:
-                    triple_hash = compute_triple_hash(
-                        triple["subject"],
-                        triple["predicate"],
-                        triple["object"]
-                    )
-                    
-                    result = await db.execute(
-                        select(TripleChunkMapping)
-                        .filter(TripleChunkMapping.kb_id == kb_id)
-                        .filter(TripleChunkMapping.triple_hash == triple_hash)
-                    )
-                    mappings = result.scalars().all()
-                    
-                    if mappings:
-                        # 오프셋은 첫 번째 매핑의 것 사용 (어차피 동일)
-                        triple["source_start"] = mappings[0].source_start
-                        triple["source_end"] = mappings[0].source_end
-                        
-                        # 관련된 청크 ID 수집
-                        for m in mappings:
-                            if m.chunk_id:
-                                discovered_chunk_ids.add(m.chunk_id)
-                    else:
-                        # 매핑이 없으면 오프셋 없음
-                        triple["source_start"] = None
-                        triple["source_end"] = None
-                        
-        except Exception as e:
-            logger.warning(f"Error attaching offsets to triples: {e}")
-            # Continue without offsets
-            for triple in triples:
-                triple["source_start"] = None
-                triple["source_end"] = None
-        
-        return triples, list(discovered_chunk_ids)

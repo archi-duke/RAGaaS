@@ -30,7 +30,7 @@ async def root():
     return {"message": "Welcome to RAG Management System API"}
 
 from app.api import knowledge_base, document, retrieval
-from app.core.database import engine, Base
+from app.core.database import init_db # engine, Base removed
 from app.core.milvus import connect_milvus
 from app.core.websocket_manager import manager
 from fastapi import WebSocket, WebSocketDisconnect
@@ -57,49 +57,55 @@ async def startup():
     import sys
     print("[Startup] RAGaaS Backend Starting...", file=sys.stdout, flush=True)
 
-    # Create tables
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    
+    # Initialize MongoDB (Beanie)
+    await init_db()
+    print("[Startup] MongoDB Connected & Beanie Initialized.", file=sys.stdout, flush=True)
+
     # Connect to Milvus
     try:
         connect_milvus()
         print("[Startup] Milvus Connected.", file=sys.stdout, flush=True)
     except Exception as e:
         print(f"[Startup] Failed to connect to Milvus: {e}", file=sys.stdout, flush=True)
-        
-    # Recovery Task: Resume incomplete deletions
+    
+    # Seed improved extraction prompt if not exists
     try:
-        from app.models.document import Document, DocumentStatus
-        from app.services.ingestion.cleanup_service import cleanup_service
-        from app.core.database import SessionLocal
-        from sqlalchemy.future import select
-        import asyncio
+        from app.models.prompt import PromptTemplate
+        import os
         
-        print("[Startup] Checking for incomplete deletions...", file=sys.stdout, flush=True)
-        
-        async with SessionLocal() as db:
-            result = await db.execute(select(Document).filter(Document.status == DocumentStatus.DELETING.value))
-            deleting_docs = result.scalars().all()
+        prompt_path = os.path.join(os.path.dirname(__file__), "data", "prompts", "graph_extraction_prompt.txt")
+        if os.path.exists(prompt_path):
+            with open(prompt_path, "r", encoding="utf-8") as f:
+                file_content = f.read()
             
-            if deleting_docs:
-                print(f"[Recovery] Found {len(deleting_docs)} documents in DELETING state. Resuming cleanup...", file=sys.stdout, flush=True)
-                for doc in deleting_docs:
-                    # We use asyncio.create_task to run in background
-                    # Wrap in specific error handling
-                    async def safe_cleanup(kb_id, doc_id):
-                        try:
-                            await cleanup_service.perform_cascading_deletion(kb_id, doc_id)
-                        except Exception as e:
-                            print(f"[Recovery] Cleanup failed for {doc_id}: {e}", file=sys.stdout, flush=True)
-                            
-                    asyncio.create_task(safe_cleanup(doc.kb_id, doc.id))
-                    print(f"[Recovery] Queued cleanup for doc {doc.id}", file=sys.stdout, flush=True)
+            existing = await PromptTemplate.find_one(PromptTemplate.name == "graph_extraction_prompt")
+            if not existing:
+                # Insert new
+                new_prompt = PromptTemplate(
+                    name="graph_extraction_prompt",
+                    content=file_content,
+                    type="extraction"
+                )
+                await new_prompt.insert()
+                print(f"[Startup] Seeded extraction prompt ({len(file_content)} chars)", file=sys.stdout, flush=True)
+            elif existing.content != file_content:
+                # Update if file changed (e.g. placeholder fix)
+                existing.content = file_content
+                await existing.save()
+                print(f"[Startup] Updated extraction prompt ({len(file_content)} chars)", file=sys.stdout, flush=True)
             else:
-                print("[Recovery] No incomplete deletions found.", file=sys.stdout, flush=True)
-                
+                print("[Startup] Extraction prompt up-to-date.", file=sys.stdout, flush=True)
+        else:
+            print(f"[Startup] Prompt file not found: {prompt_path}", file=sys.stdout, flush=True)
     except Exception as e:
-        print(f"[Recovery] Failed to resume deletion tasks: {e}", file=sys.stdout, flush=True)
+        print(f"[Startup] Failed to seed extraction prompt: {e}", file=sys.stdout, flush=True)
+        
+    # Recovery Task: Resume incomplete deletions (Temporarily disabled for Mongo migration)
+    # try:
+    #     # TODO: Re-implement using Beanie
+    #     pass
+    # except Exception as e:
+    #     print(f"[Recovery] Failed to resume deletion tasks: {e}", file=sys.stdout, flush=True)
 
 
 

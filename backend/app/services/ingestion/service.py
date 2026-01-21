@@ -8,13 +8,9 @@ from app.models.knowledge_base import KnowledgeBase
 from app.core.fuseki import fuseki_client
 from app.core.neo4j_client import neo4j_client
 from app.services.ingestion.graph import graph_processor
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.future import select
-from typing import List
+from app.core.database import client # or remove completely if not used directly
 
-from app.core.database import SessionLocal, get_db
-from app.services.ingestion.doc2onto import doc2onto_processor
-
+from typing import List, Optional, Dict, Any
 
 class IngestionService:
     def _normalize_whitespace(self, text: str) -> str:
@@ -56,15 +52,8 @@ class IngestionService:
         chunking_config: str = "{}"
     ):
         try:
-            # Check if Graph RAG is enabled (Doc2Onto)
-            use_doc2onto = False
-            graph_backend = "ontology"
-            async with SessionLocal() as db:
-                result = await db.execute(select(KnowledgeBase).filter(KnowledgeBase.id == kb_id))
-                kb_check = result.scalars().first()
-                if kb_check and kb_check.enable_graph_rag and getattr(kb_check, 'graph_backend', '') in ['neo4j', 'ontology']:
-                    use_doc2onto = True
-                    graph_backend = getattr(kb_check, 'graph_backend', 'ontology')
+            # NOTE: Graph RAG is now handled by the LlamaIndex Ingest Service (document.py)
+            # This legacy method is kept for non-graph document processing fallback only.
 
             # 1. Parse File
             text = ""
@@ -177,125 +166,38 @@ class IngestionService:
             collection.insert(data)
             collection.flush() # Ensure data is visible
 
-            # 4.5. Doc2Onto Graph Ingestion (if enabled)
-            # Doc2Onto handles triple extraction and links to RAGaaS chunks
-            
-            # FORCE FALLBACK to RAGaaS extraction (User Request)
-            print("[Ingestion] Forcing Fallback Graph Extraction (Skipping Doc2Onto)")
-            await self._fallback_graph_extraction(
-                text, doc_id, kb_id, texts_to_embed, graph_backend, config, chunks=chunks
-            )
-            
-            # Original Doc2Onto logic (Disabled)
-            if False and use_doc2onto and doc2onto_processor.enabled:
-                import tempfile
-                import os
-                
-                print(f"[Doc2Onto] Starting graph extraction for {doc_id}...")
-                print(f"[Doc2Onto] Backend: {graph_backend}, Chunks: {len(texts_to_embed)}")
-                
-                # Export RAGaaS chunks to temp file for Doc2Onto
-                chunks_jsonl_path = None
-                tmp_doc_path = None
-                
-                try:
-                    # Create temp directory for this document
-                    tmp_dir = tempfile.mkdtemp(prefix=f"doc2onto_{doc_id}_")
-                    
-                    # Export chunks to JSONL
-                    chunks_jsonl_path = os.path.join(tmp_dir, "ragaas_chunks.jsonl")
-                    with open(chunks_jsonl_path, "w", encoding="utf-8") as f:
-                        for i, chunk_text in enumerate(texts_to_embed):
-                            chunk_data = {
-                                "chunk_id": f"{doc_id}_{i}",
-                                "doc_id": doc_id,
-                                "doc_ver": "v1",
-                                "text": chunk_text,
-                                "chunk_idx": i,
-                                "start_offset": None,  # RAGaaS doesn't track offsets
-                                "end_offset": None,
-                                "section_path": None,
-                                "chunk_hash": ""
-                            }
-                            f.write(json.dumps(chunk_data, ensure_ascii=False) + "\n")
-                    
-                    # Save document to temp file
-                    suffix = ".pdf" if filename.endswith(".pdf") else ".txt"
-                    tmp_doc_path = os.path.join(tmp_dir, f"{doc_id}{suffix}")
-                    with open(tmp_doc_path, "w", encoding="utf-8") as f:
-                        f.write(text)
-                    
-                    # Call Doc2Onto with external chunks
-                    doc2onto_result = await doc2onto_processor.process_document_full(
-                        file_path=tmp_doc_path,
-                        kb_id=kb_id,
-                        doc_id=doc_id,
-                        graph_backend=graph_backend,
-                        chunking_strategy=chunking_strategy,
-                        external_chunks_path=chunks_jsonl_path,
-                        config=config
-                    )
-                    
-                    if doc2onto_result.get("status") == "success":
-                        print(f"[Doc2Onto] Graph extraction completed: {doc2onto_result.get('result', {})}")
-                    elif doc2onto_result.get("status") == "skipped":
-                        print(f"[Doc2Onto] Skipped: {doc2onto_result.get('reason')}. Using fallback LLM extraction.")
-                        # Fallback to legacy extraction if Doc2Onto is skipped
-                        await self._fallback_graph_extraction(
-                            text, doc_id, kb_id, texts_to_embed, graph_backend, config
-                        )
-                    else:
-                        print(f"[Doc2Onto] Unexpected result: {doc2onto_result}")
-                        
-                except Exception as e:
-                    print(f"[Doc2Onto] Error during graph extraction: {e}")
-                    import traceback
-                    traceback.print_exc()
-                    # Continue without graph - don't fail the entire ingestion
-                    
-                finally:
-                    # Cleanup temp files
-                    if tmp_dir and os.path.exists(tmp_dir):
-                        import shutil
-                        # Keep for debugging, uncomment to clean up
-                        # shutil.rmtree(tmp_dir, ignore_errors=True)
-                        pass
-            
+
             # 5. Update Status to COMPLETED
-            async with SessionLocal() as db:
-                result = await db.execute(select(Document).filter(Document.id == doc_id))
-                doc = result.scalars().first()
-                if doc:
-                    doc.status = DocumentStatus.COMPLETED.value
-                    await db.commit()
-                    
-                    # Broadcast WebSocket notification
-                    from app.core.websocket_manager import manager
-                    await manager.broadcast(kb_id, {
-                        "type": "document_status_update",
-                        "doc_id": doc_id,
-                        "status": DocumentStatus.COMPLETED.value,
-                        "filename": filename
-                    })
+            doc = await Document.get(doc_id)
+            if doc:
+                doc.status = DocumentStatus.COMPLETED.value
+                await doc.save()
+                
+                # Broadcast WebSocket notification
+                from app.core.websocket_manager import manager
+                await manager.broadcast(kb_id, {
+                    "type": "document_status_update",
+                    "doc_id": doc_id,
+                    "status": DocumentStatus.COMPLETED.value,
+                    "filename": filename
+                })
         except Exception as e:
             # Update status to ERROR on failure
             print(f"Error processing document {doc_id}: {str(e)}")
             try:
-                async with SessionLocal() as db:
-                    result = await db.execute(select(Document).filter(Document.id == doc_id))
-                    doc = result.scalars().first()
-                    if doc:
-                        doc.status = DocumentStatus.ERROR.value
-                        await db.commit()
-                        
-                        # Broadcast WebSocket notification for error
-                        from app.core.websocket_manager import manager
-                        await manager.broadcast(kb_id, {
-                            "type": "document_status_update",
-                            "doc_id": doc_id,
-                            "status": DocumentStatus.ERROR.value,
-                            "filename": filename
-                        })
+                doc = await Document.get(doc_id)
+                if doc:
+                    doc.status = DocumentStatus.ERROR.value
+                    await doc.save()
+                    
+                    # Broadcast WebSocket notification for error
+                    from app.core.websocket_manager import manager
+                    await manager.broadcast(kb_id, {
+                        "type": "document_status_update",
+                        "doc_id": doc_id,
+                        "status": DocumentStatus.ERROR.value,
+                        "filename": filename
+                    })
             except Exception as db_err:
                 print(f"Error updating document status to ERROR: {str(db_err)}")
 
@@ -307,11 +209,12 @@ class IngestionService:
         def sanitize_uri(text: str) -> str:
             """URI에 사용할 수 있도록 텍스트 정리"""
             clean = re.sub(r'[^a-zA-Z0-9_\uAC00-\uD7A3\u0400-\u04FF]+', '_', text.strip())
-            return urllib.parse.quote(clean)
+            # Return without quote to keep Korean readable (Fuseki supports UTF-8 IRIs)
+            return clean
         
         rdf_lines = []
-        namespace_entity = "http://rag.local/entity/"
-        namespace_relation = "http://rag.local/relation/"
+        namespace_entity = "http://rag.local/inst/"
+        namespace_relation = "http://rag.local/rel/"
         
         for t in triples:
             subj = sanitize_uri(t.get("subject", ""))
@@ -421,10 +324,10 @@ class IngestionService:
                 final_triples = filtered_triples
                 print(f"[Fallback] Inverse relations disabled, using {len(final_triples)} triples")
             
-            # 3. 트리플-오프셋 매핑 저장 (SQLite)
-            await self._save_triple_mappings(kb_id, doc_id, final_triples, chunks)
+            # Note: Triple-chunk mappings are no longer stored in MongoDB.
+            # source_node_id is stored directly in Neo4j/Fuseki and retrieved at query time.
             
-            # 4. 백엔드별 적재
+            # 백엔드별 적재
             if is_neo4j:
                 all_triples = final_triples
             else:
@@ -459,81 +362,8 @@ class IngestionService:
                     print(f"Error inserting triple: {e}")
             
             print(f"[Fallback] Neo4j insertion complete.")
-            
-            # NOTE: Chunk 노드 및 MENTIONED_IN 관계 생성 로직 제거됨
-            # 트리플-청크 매핑은 SQLite 해시 테이블로 관리
-            
             print(f"[Fallback] Graph ingestion complete for {kb_id}")
 
-    async def _save_triple_mappings(self, kb_id: str, doc_id: str, triples: List[dict], chunks: List[dict] = None):
-        """트리플-오프셋 매핑을 SQLite에 저장"""
-        from app.models.triple_chunk_mapping import TripleChunkMapping, compute_triple_hash
-        import uuid
-        
-        # Pre-process chunks for faster lookup
-        doc_chunks = []
-        if chunks:
-            for i, c in enumerate(chunks):
-                meta = c.get("metadata", {})
-                start = meta.get("start_index")
-                end = meta.get("end_index")
-                # 청크 ID 생성 (process_document와 동일한 로직)
-                # 주의: process_document에서 id를 명시적으로 전달받지 않았으므로 재비생
-                chunk_id = f"{doc_id}_{i}"
-                if start is not None and end is not None:
-                     doc_chunks.append({"id": chunk_id, "start": int(start), "end": int(end)})
-        
-        try:
-            async with SessionLocal() as db:
-                count = 0
-                for triple in triples:
-                    # 오프셋 정보가 없으면 스킵
-                    if "source_start" not in triple or "source_end" not in triple:
-                        continue
-                    
-                    t_start = int(triple["source_start"])
-                    t_end = int(triple["source_end"])
-                    
-                    triple_hash = compute_triple_hash(
-                        triple["subject"],
-                        triple["predicate"],
-                        triple["object"]
-                    )
-                    
-                    # Find overlapping chunks
-                    related_chunk_ids = []
-                    if doc_chunks:
-                        for dc in doc_chunks:
-                             # Overlap check: max(s1, s2) < min(e1, e2)
-                             if max(dc["start"], t_start) < min(dc["end"], t_end):
-                                 related_chunk_ids.append(dc["id"])
-                    
-                    # If no related chunks found (or no chunks info), save with None (legacy behavior)
-                    if not related_chunk_ids:
-                        related_chunk_ids = [None]
-                        
-                    for chunk_id in related_chunk_ids:
-                        mapping = TripleChunkMapping(
-                            id=str(uuid.uuid4()),
-                            kb_id=kb_id,
-                            doc_id=doc_id,
-                            chunk_id=chunk_id,
-                            triple_hash=triple_hash,
-                            subject=triple["subject"],
-                            predicate=triple["predicate"],
-                            object=triple["object"],
-                            source_start=t_start,
-                            source_end=t_end
-                        )
-                        db.add(mapping)
-                        count += 1
-                
-                await db.commit()
-                print(f"[Fallback] Saved {count} triple mappings (split by chunks) to SQLite (doc_id: {doc_id})")
-                
-                await db.commit()
-                print(f"[Fallback] Saved {len(triples)} triple mappings to SQLite (doc_id: {doc_id})")
-        except Exception as e:
-            print(f"[Fallback] Error saving triple mappings: {e}")
 
 ingestion_service = IngestionService()
+

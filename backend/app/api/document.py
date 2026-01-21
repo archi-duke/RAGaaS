@@ -1,12 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, BackgroundTasks
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.future import select
-from typing import List
-from app.core.database import get_db
+from typing import List, Optional, Dict, Any
+from pydantic import BaseModel
+from datetime import datetime
 from app.models.document import Document as DocModel, DocumentStatus
 from app.models.knowledge_base import KnowledgeBase as KBModel
 from app.schemas import Document
-from app.services.ingestion import ingestion_service
 import logging
 
 logger = logging.getLogger(__name__)
@@ -18,19 +16,18 @@ async def upload_document(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     chunking_config: str = Form(None),
-    db: AsyncSession = Depends(get_db)
+    enable_text_cleaning: bool = Form(False),
+    enable_subject_restoration: bool = Form(True),
+    enable_inference: bool = Form(False),
+    extraction_examples_yaml: str = Form(None)
 ):
-    # Fetch Knowledge Base to get chunking config
-    result = await db.execute(select(KBModel).filter(KBModel.id == kb_id))
-    kb = result.scalars().first()
+    # Fetch Knowledge Base
+    kb = await KBModel.get(kb_id)
     if not kb:
         raise HTTPException(status_code=404, detail="Knowledge Base not found")
 
     # Check for duplicate filename
-    result = await db.execute(
-        select(DocModel).filter(DocModel.kb_id == kb_id, DocModel.filename == file.filename)
-    )
-    existing_doc = result.scalars().first()
+    existing_doc = await DocModel.find_one(DocModel.kb_id == kb_id, DocModel.filename == file.filename)
     
     if existing_doc:
         logger.info(f"Overwriting existing document: {file.filename}")
@@ -53,6 +50,7 @@ async def upload_document(
         existing_doc.status = DocumentStatus.PROCESSING.value
         from datetime import datetime
         existing_doc.updated_at = datetime.utcnow()
+        await existing_doc.save()
         
         doc = existing_doc
     else:
@@ -63,15 +61,12 @@ async def upload_document(
             file_type=file.filename.split(".")[-1],
             status=DocumentStatus.PROCESSING.value 
         )
-        db.add(doc)
+        await doc.insert()
 
-    await db.commit()
-    await db.refresh(doc)
-    
     # Read file content
     content = await file.read()
     
-    # Merge chunking config
+    # Merge chunking config from KB defaults and form override
     final_config = kb.chunking_config.copy() if kb.chunking_config else {}
     if chunking_config:
         try:
@@ -81,33 +76,159 @@ async def upload_document(
         except Exception as e:
             logger.error(f"Failed to parse chunking_config override: {e}")
 
-    # Start background task
-    background_tasks.add_task(
-        ingestion_service.process_document,
-        kb_id,
-        doc.id,
-        doc.filename,
-        content,
-        kb.chunking_strategy,
-        final_config
-    )
+    # === LlamaIndex Ingest Service (Only Path) ===
+    import os
+    from app.core.config import settings
+    from app.services.ingestion.ingest_client import ingest_client
     
-    return doc
+    # Save file to shared storage for Ingest Service to read
+    shared_path = settings.SHARED_STORAGE_PATH
+    os.makedirs(shared_path, exist_ok=True)
+    file_path = os.path.join(shared_path, f"{doc.id}_{doc.filename}")
+    
+    with open(file_path, "wb") as f:
+        f.write(content)
+    
+    logger.info(f"[Ingest] File saved to {file_path}")
+    
+    # Build chunking config for LlamaIndex
+    chunking_cfg = {
+        "strategy": kb.chunking_strategy or "fixed_size",
+        "chunk_size": final_config.get("chunk_size", 500),
+        "chunk_overlap": final_config.get("chunk_overlap", 100),
+        "window_size": final_config.get("window_size", 3),
+        "chunk_sizes": final_config.get("chunk_sizes", [2048, 512, 128]),
+        "breakpoint_threshold": final_config.get("breakpoint_threshold", 0.5),
+    }
+    
+    # Build graph config (only used if Graph RAG is enabled)
+    graph_config = {}
+    is_graph_enabled = kb.enable_graph_rag or (kb.graph_backend in ["ontology", "neo4j"])
+    
+    logger.info(f"Uploading document. is_graph_enabled={is_graph_enabled}")
+    logger.info(f"final_config keys: {list(final_config.keys())}")
+    if "extractor_type" in final_config:
+        logger.info(f"final_config contains extractor_type: {final_config['extractor_type']}")
+    else:
+        logger.warning("final_config missing extractor_type")
+
+    if is_graph_enabled:
+        graph_config = {
+            "extractor_type": final_config.get("extractor_type", "simple"),
+            "max_paths_per_chunk": final_config.get("max_paths_per_chunk", 10),
+            "max_triplets_per_chunk": final_config.get("max_triplets_per_chunk", 20),
+            "num_workers": final_config.get("num_workers", 4),
+            "generate_inverse_relations": final_config.get("generate_inverse_relations", True),
+        }
+        
+    # Override boolean flags from JSON config if present
+    if "enable_text_cleaning" in final_config:
+        enable_text_cleaning = final_config["enable_text_cleaning"]
+    if "enable_subject_restoration" in final_config:
+        enable_subject_restoration = final_config["enable_subject_restoration"]
+    if "enable_inference" in final_config:
+        enable_inference = final_config["enable_inference"]
+    
+    
+    # Load custom prompt for graph extraction
+    # Priority: 1. User input (in chunking_config), 2. File-based default
+    graph_extraction_prompt = final_config.get("custom_prompt")
+    
+    if not graph_extraction_prompt:
+        import os
+        from app.core.config import settings
+        
+        prompt_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "data", "prompts", "graph_extraction_prompt.txt")
+        if os.path.exists(prompt_path):
+            try:
+                with open(prompt_path, "r", encoding="utf-8") as pf:
+                    graph_extraction_prompt = pf.read()
+                logger.info(f"Loaded custom graph extraction prompt from file ({len(graph_extraction_prompt)} chars)")
+            except Exception as e:
+                logger.warning(f"Failed to read graph extraction prompt: {e}")
+
+    # Load default examples if not provided
+    final_examples_yaml = extraction_examples_yaml
+    if not final_examples_yaml:
+        # Check config first
+        final_examples_yaml = final_config.get("extraction_examples_yaml")
+        
+    if not final_examples_yaml:
+        default_examples_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "..", "extraction_examples.yaml")
+        if os.path.exists(default_examples_path):
+            try:
+                with open(default_examples_path, "r", encoding="utf-8") as ef:
+                    final_examples_yaml = ef.read()
+                logger.info(f"Loaded default extraction examples ({len(final_examples_yaml)} chars)")
+            except Exception as e:
+                logger.warning(f"Failed to read default examples: {e}")
+
+    # Update Document with Extraction Settings
+    doc.extractor_type = graph_config.get("extractor_type")
+    doc.max_paths = graph_config.get("max_paths_per_chunk")
+    doc.enable_text_cleaning = enable_text_cleaning
+    doc.enable_subject_restoration = enable_subject_restoration
+    doc.enable_inference = enable_inference
+    doc.generate_inverse = graph_config.get("generate_inverse_relations")
+    doc.extraction_examples = final_examples_yaml
+    doc.custom_prompt = graph_extraction_prompt
+    
+    await doc.save()
+
+    # Call Ingest Service asynchronously
+    async def call_ingest_service():
+        try:
+            from app.services.ingestion.ingest_client import ingest_client
+            
+            result = await ingest_client.create_ingest_job(
+                kb_id=kb_id,
+                doc_id=doc.id,
+                file_path=file_path,
+                chunking_config=chunking_cfg,
+                graph_config=graph_config,
+                graph_store="fuseki" if kb.graph_backend == "ontology" else "neo4j",
+                enable_text_cleaning=enable_text_cleaning,
+                enable_subject_restoration=enable_subject_restoration,
+                enable_inference=enable_inference,
+                extraction_examples_yaml=final_examples_yaml,
+                custom_prompt=graph_extraction_prompt,
+                callback_url="http://backend:8000/api/knowledge-bases/ingest/callback"
+            )
+
+            logger.info(f"[Ingest] Job created: {result}")
+        except Exception as e:
+            logger.error(f"[Ingest] Failed to create job: {e}")
+            import traceback
+            traceback.print_exc()
+            # Update document status to ERROR
+            doc_obj = await DocModel.get(doc.id)
+            if doc_obj:
+                doc_obj.status = DocumentStatus.ERROR.value
+                await doc_obj.save()
+    
+    background_tasks.add_task(call_ingest_service)
+    
+    # Return Pydantic model response with injected file_path
+    # We must convert Beanie Document to Dict and add file_path
+    doc_dict = doc.dict()
+    doc_dict['id'] = str(doc.id)  # Beanie ID compatibility
+    doc_dict['file_path'] = file_path
+    
+    return Document(**doc_dict)
+
 
 @router.get("/{kb_id}/documents", response_model=List[Document])
-async def list_documents(kb_id: str, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(DocModel).filter(DocModel.kb_id == kb_id))
-    return result.scalars().all()
+async def list_documents(kb_id: str):
+    docs = await DocModel.find(DocModel.kb_id == kb_id).to_list()
+    return docs
 
 @router.delete("/{kb_id}/documents/{doc_id}")
 async def delete_document(
     kb_id: str, 
     doc_id: str, 
-    background_tasks: BackgroundTasks,
-    db: AsyncSession = Depends(get_db)
+    background_tasks: BackgroundTasks
 ):
-    result = await db.execute(select(DocModel).filter(DocModel.id == doc_id, DocModel.kb_id == kb_id))
-    doc = result.scalars().first()
+    doc = await DocModel.find_one(DocModel.id == doc_id, DocModel.kb_id == kb_id)
     
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
@@ -115,7 +236,7 @@ async def delete_document(
     # Transactional Deletion: Mark as DELETING and run background task
     try:
         doc.status = DocumentStatus.DELETING.value
-        await db.commit()
+        await doc.save()
         
         from app.services.ingestion.cleanup_service import cleanup_service
         background_tasks.add_task(cleanup_service.perform_cascading_deletion, kb_id, doc_id)
@@ -126,14 +247,40 @@ async def delete_document(
         logger.error(f"Failed to initiate deletion for doc {doc_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+class UpdateDocumentRequest(BaseModel):
+    extraction_examples: Optional[str] = None
+    custom_prompt: Optional[str] = None
+
+@router.patch("/{kb_id}/documents/{doc_id}")
+async def update_document(
+    kb_id: str,
+    doc_id: str,
+    body: UpdateDocumentRequest
+):
+    doc = await DocModel.find_one(DocModel.id == doc_id, DocModel.kb_id == kb_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+        
+    updated = False
+    if body.extraction_examples is not None:
+        doc.extraction_examples = body.extraction_examples
+        updated = True
+    if body.custom_prompt is not None:
+        doc.custom_prompt = body.custom_prompt
+        updated = True
+        
+    if updated:
+        doc.updated_at = datetime.utcnow()
+        await doc.save()
+        
+    return doc
+
 @router.get("/{kb_id}/documents/{doc_id}/chunks")
-async def get_document_chunks(kb_id: str, doc_id: str, db: AsyncSession = Depends(get_db)):
+async def get_document_chunks(kb_id: str, doc_id: str):
     from app.core.milvus import create_collection
-    from pymilvus import Collection
     
     # Verify document exists
-    result = await db.execute(select(DocModel).filter(DocModel.id == doc_id, DocModel.kb_id == kb_id))
-    doc = result.scalars().first()
+    doc = await DocModel.find_one(DocModel.id == doc_id, DocModel.kb_id == kb_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
     
@@ -172,8 +319,7 @@ async def update_chunk(
     kb_id: str,
     doc_id: str,
     chunk_id: str,
-    content: str = Form(...),
-    db: AsyncSession = Depends(get_db)
+    content: str = Form(...)
 ):
     """Update chunk content and re-generate embedding"""
     try:
@@ -182,8 +328,7 @@ async def update_chunk(
         from datetime import datetime
         
         # Verify document exists
-        result = await db.execute(select(DocModel).filter(DocModel.id == doc_id, DocModel.kb_id == kb_id))
-        doc = result.scalars().first()
+        doc = await DocModel.find_one(DocModel.id == doc_id, DocModel.kb_id == kb_id)
         if not doc:
             raise HTTPException(status_code=404, detail="Document not found")
         
@@ -235,8 +380,7 @@ async def update_chunk(
         collection.flush()
         
         # Update Graph RAG if enabled
-        kb_result = await db.execute(select(KBModel).filter(KBModel.id == kb_id))
-        kb = kb_result.scalars().first()
+        kb = await KBModel.get(kb_id)
         
         if kb and kb.enable_graph_rag:
             try:
@@ -289,7 +433,7 @@ async def update_chunk(
         
         # Update document's updated_at timestamp
         doc.updated_at = datetime.utcnow()
-        await db.commit()
+        await doc.save()
         
         return {
             "ok": True,
@@ -306,3 +450,39 @@ async def update_chunk(
         print(f"Error updating chunk: {e}")
         print(error_details)
         raise HTTPException(status_code=500, detail=f"Failed to update chunk: {str(e)}")
+
+
+class IngestCallback(BaseModel):
+    job_id: str
+    doc_id: str
+    kb_id: str
+    status: str
+    result: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+
+@router.post("/ingest/callback")
+async def ingest_callback(payload: IngestCallback):
+    """Callback from Ingest Service"""
+    logger.info(f"Received ingest callback: {payload}")
+    
+    doc = await DocModel.find_one(DocModel.id == payload.doc_id, DocModel.kb_id == payload.kb_id)
+    if not doc:
+        logger.error(f"Document not found for callback: {payload.doc_id}")
+        return {"ok": False, "error": "Document not found"}
+    
+    if payload.status == "completed":
+        doc.status = DocumentStatus.COMPLETED.value
+        doc.updated_at = datetime.utcnow()
+        await doc.save()
+        logger.info(f"Document {doc.id} marked as COMPLETED")
+        # Note: Triple-chunk mappings are no longer stored in MongoDB.
+        # source_node_id is retrieved directly from Neo4j/Fuseki at query time.
+            
+    elif payload.status == "failed":
+        doc.status = DocumentStatus.ERROR.value
+        doc.error_message = payload.error
+        await doc.save()
+        logger.info(f"Document {doc.id} marked as ERROR: {payload.error}")
+    
+    return {"ok": True}
+

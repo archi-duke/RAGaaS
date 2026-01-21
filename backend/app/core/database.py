@@ -1,14 +1,26 @@
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-from sqlalchemy.orm import sessionmaker, declarative_base
+from motor.motor_asyncio import AsyncIOMotorClient
+from beanie import init_beanie
 from app.core.config import settings
+from app.models.knowledge_base import KnowledgeBase
+from app.models.prompt import PromptTemplate
+from app.models.document import Document
 
-engine = create_async_engine(
-    settings.DATABASE_URL, connect_args={"check_same_thread": False}
-)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine, class_=AsyncSession, expire_on_commit=False)
+# Client 인스턴스를 전역으로 유지할 수도 있음 (선택사항)
+client: AsyncIOMotorClient = None
 
-Base = declarative_base()
+async def init_db():
+    global client
+    client = AsyncIOMotorClient(settings.MONGO_URI)
+    
+    # Beanie 초기화
+    await init_beanie(
+        database=client[settings.MONGO_DB],
+        document_models=[
+            KnowledgeBase,
+            PromptTemplate,
+            Document
+            # TripleChunkMapping removed - source_node_id is stored directly in Neo4j/Fuseki
+        ]
+    )
 
-async def get_db():
-    async with SessionLocal() as session:
-        yield session
+

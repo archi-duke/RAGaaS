@@ -7,7 +7,9 @@ interface PromptDialogProps {
     onClose: () => void;
     initialPrompt: string;
     onSave: (prompt: string) => void;
-    backendType: 'ontology_plus' | 'ontology_minus' | 'neo4j';
+    backendType?: 'ontology_plus' | 'ontology_minus' | 'neo4j';
+    mode?: 'query' | 'extraction_prompt' | 'extraction_examples';
+    title?: string;
 }
 
 export default function PromptDialog({
@@ -15,7 +17,9 @@ export default function PromptDialog({
     onClose,
     initialPrompt,
     onSave,
-    backendType
+    backendType,
+    mode = 'query',
+    title
 }: PromptDialogProps) {
     const [prompt, setPrompt] = useState(initialPrompt);
     const [systemDefault, setSystemDefault] = useState("");
@@ -25,7 +29,7 @@ export default function PromptDialog({
         if (isOpen) {
             loadDefaultPrompt();
         }
-    }, [isOpen, backendType]);
+    }, [isOpen, backendType, mode]);
 
     // Update prompt when initialPrompt changes (but only if it has a value)
     useEffect(() => {
@@ -35,18 +39,29 @@ export default function PromptDialog({
             // If initial is empty and we have system default, use it
             setPrompt(systemDefault);
         }
-    }, [initialPrompt]);
+    }, [initialPrompt, systemDefault]);
 
     const loadDefaultPrompt = async () => {
         setIsLoading(true);
         try {
-            const res = await kbApi.getQueryPrompt(backendType);
-            const content = res.data.content;
-            setSystemDefault(content);
+            let content = "";
+            if (mode === 'query' && backendType) {
+                const res = await kbApi.getQueryPrompt(backendType);
+                content = res.data.content;
+            } else if (mode === 'extraction_prompt') {
+                const res = await kbApi.getExtractionPrompt();
+                content = res.data.content;
+            } else if (mode === 'extraction_examples') {
+                const res = await kbApi.getExtractionRules();
+                content = res.data.content;
+            }
 
-            // If user hasn't set a custom prompt yet (initialPrompt is empty), show system default
-            if (!initialPrompt) {
-                setPrompt(content);
+            if (content) {
+                setSystemDefault(content);
+                // If user hasn't set a custom prompt yet (initialPrompt is empty), show system default
+                if (!initialPrompt) {
+                    setPrompt(content);
+                }
             }
         } catch (error) {
             console.error("Failed to load default prompt:", error);
@@ -56,6 +71,19 @@ export default function PromptDialog({
     };
 
     if (!isOpen) return null;
+
+    const getTitle = () => {
+        if (title) return title;
+        if (mode === 'extraction_examples') return 'Edit Extraction Examples';
+        if (mode === 'extraction_prompt') return 'Edit Extraction Prompt';
+        return 'Edit Query Prompt';
+    };
+
+    const getDescription = () => {
+        if (mode === 'extraction_examples') return 'Define few-shot examples (YAML) to guide the extraction process.';
+        if (mode === 'extraction_prompt') return 'Customize the instruction prompt used for Graph Extraction.';
+        return 'Customize the instructions given to the LLM for generating graph queries (SPARQL/Cypher).';
+    };
 
     return (
         <div style={{
@@ -68,7 +96,7 @@ export default function PromptDialog({
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '1rem', alignItems: 'center' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                         <Save size={20} color="#3b82f6" />
-                        <h3 style={{ margin: 0 }}>Edit Query Prompt</h3>
+                        <h3 style={{ margin: 0 }}>{getTitle()}</h3>
                     </div>
                     <button className="btn" onClick={onClose} style={{ padding: '0.4rem' }}>
                         <X size={18} />
@@ -76,7 +104,7 @@ export default function PromptDialog({
                 </div>
 
                 <p style={{ fontSize: '0.85rem', color: '#64748b', marginBottom: '1rem' }}>
-                    Customize the instructions given to the LLM for generating graph queries (SPARQL/Cypher).
+                    {getDescription()}
                 </p>
 
                 <div style={{ flex: 1, marginBottom: '1rem', position: 'relative', overflow: 'hidden' }}>
@@ -98,7 +126,7 @@ export default function PromptDialog({
                             lineHeight: '1.6'
                         }}
                         spellCheck={false}
-                        placeholder="Enter custom instructions for query generation..."
+                        placeholder={`Enter custom ${mode === 'extraction_examples' ? 'examples' : 'instructions'}...`}
                     />
                 </div>
 
@@ -108,6 +136,7 @@ export default function PromptDialog({
                         onClick={() => setPrompt(systemDefault)}
                         title="Reset to default"
                         style={{ color: '#64748b', fontSize: '0.85rem' }}
+                        disabled={!systemDefault}
                     >
                         <RotateCcw size={14} />
                         Reset Default

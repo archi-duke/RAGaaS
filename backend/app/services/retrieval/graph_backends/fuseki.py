@@ -14,7 +14,7 @@ class FusekiBackend(GraphBackend):
         self.namespace_relation = "http://rag.local/relation/"
         self.generator = None
         try:
-            from app.doc2onto.qa.sparql_generator import SPARQLGenerator
+            from app.services.retrieval.sparql_generator import SPARQLGenerator
             from app.core.config import settings
             self.generator = SPARQLGenerator(api_key=settings.OPENAI_API_KEY)
             print("DEBUG: [Fuseki] Doc2Onto SPARQLGenerator initialized successfully")
@@ -49,7 +49,7 @@ class FusekiBackend(GraphBackend):
                 # Determine inverse relation mode
                 # Default: if not explicitly set, use 'auto'
                 inv_mode = kwargs.get("inverse_extraction_mode", "auto")
-                enable_inverse = kwargs.get("enable_inverse_search", False)  # 기본값 False로 변경
+                enable_inverse = kwargs.get("enable_inverse_search", True)  # 기본 ON으로 변경
                 
                 # If user explicitly disabled inverse search, override mode
                 if not enable_inverse:
@@ -63,43 +63,58 @@ class FusekiBackend(GraphBackend):
                 if use_schema_mode:
                     try:
                         from app.models.knowledge_base import KnowledgeBase
-                        from app.core.database import SessionLocal
-                        from sqlalchemy.future import select
                         
-                        async with SessionLocal() as db:
-                             result = await db.execute(select(KnowledgeBase).filter(KnowledgeBase.id == kb_id))
-                             kb = result.scalars().first()
-                             if kb and kb.is_promoted and kb.promotion_metadata:
-                                 schema_info = kb.promotion_metadata.get("schema_info")
+                        kb = await KnowledgeBase.get(kb_id)
+                        if kb and kb.is_promoted and kb.promotion_metadata:
+                            schema_info = kb.promotion_metadata.get("schema_info")
                     except Exception as e_schema:
                         log_trace(f"[Fuseki] WARNING: Failed to fetch schema info: {e_schema}")
                 else:
                     # Schema Mode OFF
                     pass
 
-                # Build custom prompt with inverse relation instruction
+                # [NEW] Determine Prompt Source Priority
+                # 1. Pipeline Parameter (kwargs['sparql_prompt_template']) - Highest Priority
+                # 2. Knowledge Base Field (kb.sparql_prompt_template) - Default/Fallback
+                
+                pipeline_prompt = kwargs.get("sparql_prompt_template")
+                
+                # Retrieve custom_prompt (previously missed in refactor)
                 custom_prompt = kwargs.get("custom_query_prompt") or ""
                 
-                # Add strict instruction when inverse search is disabled ONLY for non-promoted KBs
-                # If Promoted (schema_info exists), we want Active Inference regardless of UI toggle
-                if inv_mode == "none" and not schema_info:
-                    no_inverse_instruction = """
-[중요 제약사항 - 반드시 준수]
-- 역방향 관계(^) 연산자를 절대 사용하지 마세요.
-- Property Path에서 | 연산자로 역관계를 조합하지 마세요.
-- 예시: `(rel:스승|^rel:제자)` 형태 사용 금지!
-- 오직 직접 관계만 사용하세요: `rel:스승` (역방향 없이)
-- DB에 저장된 정확한 방향의 관계만 검색하세요.
-"""
-                    custom_prompt = no_inverse_instruction + custom_prompt
+                mongo_prompt_content = None
+                
+                if pipeline_prompt:
+                    mongo_prompt_content = pipeline_prompt
+                    log_trace(f"[Fuseki] Using Prompt from Pipeline Parameters: {len(mongo_prompt_content)} chars")
+                else:
+                    # Fallback to KB field
+                    try:
+                        from app.models.knowledge_base import KnowledgeBase
+                        kb = await KnowledgeBase.get(kb_id)
+                        
+                        if kb and kb.sparql_prompt_template:
+                            mongo_prompt_content = kb.sparql_prompt_template
+                            log_trace(f"[Fuseki] Using Prompt from KnowledgeBase Field: {len(mongo_prompt_content)} chars")
+                        else:
+                            # Final Fallback to global? (Optional, maybe safer to stick to library default if nothing provided)
+                            from app.models.prompt import PromptTemplate
+                            db_prompt = await PromptTemplate.find_one(PromptTemplate.name == "sparql_generation_prompt")
+                            if db_prompt:
+                                mongo_prompt_content = db_prompt.content
+                                log_trace(f"[Fuseki] Using Prompt from Global Collection (DB)")
+    
+                    except Exception as e_prompt:
+                        log_trace(f"[Fuseki] WARNING: Failed to fetch prompt: {e_prompt}")
 
                 gen_result = self.generator.generate(
                     question=query_text,
                     context=f"Entities: {', '.join(entities)}",
                     mode="ontology",
                     inverse_relation=inv_mode,
-                    custom_prompt=custom_prompt if custom_prompt else None,
-                    schema_info=schema_info
+                    custom_prompt=custom_prompt,
+                    schema_info=schema_info,
+                    system_prompt_override=mongo_prompt_content
                 )
                 
                 generated_sparql = gen_result.get("sparql")
@@ -116,72 +131,216 @@ class FusekiBackend(GraphBackend):
                     sparql_body = sparql_body.strip()
                     
                     # Ensure standard prefixes with correct namespaces
+                    # FIX: Must match Doc2Onto's default namespaces (example.org)
                     prefixes = """
                     PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
                     PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
                     PREFIX owl: <http://www.w3.org/2002/07/owl#>
                     PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
-                    PREFIX inst: <http://rag.local/entity/> 
-                    PREFIX rel: <http://rag.local/relation/> 
-                    PREFIX prop: <http://rag.local/property/>
-
+                    PREFIX inst: <http://rag.local/inst/> 
+                    PREFIX rel: <http://rag.local/rel/> 
+                    PREFIX prop: <http://rag.local/prop/>
+                    PREFIX class: <http://rag.local/class/>
                     """
                     
                     
                     # Inject FROM <urn:x-arq:UnionGraph> to search across all named graphs
                     # This is crucial because Doc2Onto loads data (base.trig) into named graphs
-                    if "WHERE" in sparql_body:
+                    if re.search(r'WHERE', sparql_body, re.IGNORECASE):
                         # Simple injection: replace the first 'WHERE' with 'FROM <urn:x-arq:UnionGraph> WHERE'
-                        # This ensures we search across all named graphs where Doc2Onto puts the data
-                        sparql_query_content = sparql_body.replace("WHERE", "FROM <urn:x-arq:UnionGraph>\nWHERE", 1)
+                        print("[DEBUG FUSEKI] Injecting UnionGraph...", flush=True)
+                        sparql_query_content = re.sub(r'WHERE', "FROM <urn:x-arq:UnionGraph>\nWHERE", sparql_body, count=1, flags=re.IGNORECASE)
                     else:
+                        print("[DEBUG FUSEKI] WHERE clause NOT found in query!", flush=True)
                         sparql_query_content = sparql_body
 
                     full_query = prefixes + sparql_query_content
+                    
+                    print(f"[DEBUG FUSEKI] Final Query:\n{full_query}", flush=True)
+                    log_trace(f"[Fuseki] Executing SPARQL:\n{full_query}")
                     
                     # Execute
                     results = fuseki_client.query_sparql(kb_id, full_query)
                     bindings = results.get("results", {}).get("bindings", [])
                     
+                    print(f"[DEBUG FUSEKI] Results count: {len(bindings)}", flush=True)
                     if bindings:
                          sparql_query = full_query
                          
                     if bindings:
                         # Process results from generator query
                         found_entities = set()
+                        found_uris = set() # Keep track of URIs for secondary lookup
+                        
                         for binding in bindings:
-                            # 1. Extract triples for display
                              for var_name, value_dict in binding.items():
                                  val = value_dict.get("value")
-                                 triples.append({
-                                     "subject": "Found Entity",
-                                     "predicate": var_name,
-                                     "object": val.split("/")[-1] if "/" in val else val
-                                 })
                                  
-                                 # 2. Collect entities for Entity-Guided Chunk Retrieval
+                                 # Collect meaningful entities
                                  if val and (val.startswith("http") or len(val) > 1):
-                                     # Simple heuristic: if it's a URI or a meaningful string, treat as entity
                                      clean_val = val.split("/")[-1] if "/" in val else val
-                                     if " " not in clean_val: # Only single word entities usually
+                                     if " " not in clean_val:
                                          found_entities.add(clean_val)
-                        
-                        log_trace(f"[Fuseki] Found {len(found_entities)} entities from graph: {list(found_entities)[:5]}...")
+                                     
+                                     if val.startswith("http"):
+                                         found_uris.add(val)
 
-                        # 오프셋 정보 첨부
-                        triples_with_offset, discovered_chunk_ids = await self._attach_offsets_to_triples(kb_id, triples)
+                        log_trace(f"[Fuseki] Found {len(found_entities)} entities from graph: {list(found_entities)[:5]}...")
+                        
+                        # [NEW] Try to extract triples directly from LLM query result
+                        # If the LLM followed the updated templates, it should return ?subject, ?predicate, ?object
+                        real_triples = []
+                        discovered_chunk_ids = set()
+                        
+                        for binding in bindings:
+                            # Check if binding contains subject/predicate/object pattern
+                            has_spo = ("subject" in binding or "s1" in binding) and ("predicate" in binding or "p1" in binding) and ("object" in binding or "o1" in binding)
+                            has_spo_alt = "subjectLabel" in binding and "objectLabel" in binding
+                            has_multi_hop = "s2" in binding or "midLabel" in binding
+                            
+                            if has_spo or has_spo_alt:
+                                # Helper function to clean URI to label
+                                def get_label(binding, *keys):
+                                    for key in keys:
+                                        val = binding.get(key, {})
+                                        if isinstance(val, dict) and val.get("value"):
+                                            result = val.get("value")
+                                            return result.split("/")[-1] if "/" in result else result
+                                    return None
+                                
+                                # Extract 1st hop triple
+                                subj1 = get_label(binding, "subjectLabel", "startLabel", "subject", "s1")
+                                pred1 = get_label(binding, "predicate", "p1")
+                                obj1 = get_label(binding, "midLabel", "objectLabel", "object", "o1")
+                                
+                                if subj1 and pred1 and obj1:
+                                    real_triples.append({
+                                        "subject": subj1,
+                                        "predicate": pred1,
+                                        "object": obj1
+                                    })
+                                
+                                # Extract 2nd hop triple if exists (multi-hop query)
+                                if has_multi_hop:
+                                    subj2 = get_label(binding, "midLabel", "o1")  # mid becomes subject of 2nd hop
+                                    pred2 = get_label(binding, "p2")
+                                    obj2 = get_label(binding, "resultLabel", "o2")
+                                    
+                                    if subj2 and pred2 and obj2:
+                                        real_triples.append({
+                                            "subject": subj2,
+                                            "predicate": pred2,
+                                            "object": obj2
+                                        })
+                        
+                        if real_triples:
+                            log_trace(f"[Fuseki] Extracted {len(real_triples)} triples directly from LLM query result!")
+                            print(f"[DEBUG FUSEKI] Direct triples: {real_triples[:3]}", flush=True)
+                        
+                        # If no direct triples found, fall back to secondary lookup
+                        if not real_triples and found_uris:
+                            # Construct a query to fetch triples involving these URIs
+                            print(f"[DEBUG FUSEKI] found_uris for secondary lookup: {found_uris}", flush=True)
+                            
+                            union_clauses = []
+                            for uri in found_uris:
+                                clause = f"""{{ BIND(<{uri}> AS ?target) . ?s ?p ?o . FILTER(?o = ?target) }}
+                                UNION
+                                {{ BIND(<{uri}> AS ?target) . ?s ?p ?o . FILTER(?s = ?target) }}"""
+                                union_clauses.append(clause)
+                            
+                            union_body = " UNION ".join(union_clauses)
+                            
+                            secondary_query = f"""
+                            PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+                            PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+                            SELECT DISTINCT ?s ?p ?o
+                            FROM <urn:x-arq:UnionGraph>
+                            WHERE {{
+                              {union_body}
+                              FILTER(?p != rdf:type)
+                              FILTER(?p != rdfs:label)
+                              FILTER(?p != rdfs:comment)
+                              FILTER(?p != rdf:subject)
+                              FILTER(?p != rdf:object)
+                              FILTER(?p != rdf:predicate)
+                            }}
+                            LIMIT 100
+                            """
+
+                            print(f"[DEBUG FUSEKI] Secondary Query:\n{secondary_query}", flush=True)
+                            log_trace(f"[Fuseki] Executing Secondary Lookup for Real Triples...")
+                            sec_results = fuseki_client.query_sparql(kb_id, secondary_query)
+                            sec_bindings = sec_results.get("results", {}).get("bindings", [])
+                            
+                            for b in sec_bindings:
+                                s = b["s"]["value"].split("/")[-1]
+                                p = b["p"]["value"].split("/")[-1]
+                                o = b["o"]["value"].split("/")[-1]
+                                real_triples.append({
+                                    "subject": s,
+                                    "predicate": p,
+                                    "object": o
+                                })
+                            
+                            log_trace(f"[Fuseki] Secondary lookup retrieved {len(real_triples)} real triples.")
+
+                        # [MOVED & IMPROVED] Query Reification for sourceNodeId if ANY URIs found
+                        # This should run even if real_triples were extracted directly from LLM
+                        if found_uris:
+                            # Optimize: Use VALUES for faster filtering
+                            uri_list = " ".join([f"<{u}>" for u in found_uris])
+                            
+                            reification_query = f"""
+                            PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+                            PREFIX meta: <http://rag.local/meta/>
+                            SELECT DISTINCT ?sourceNodeId
+                            FROM <urn:x-arq:UnionGraph>
+                            WHERE {{
+                              VALUES ?target {{ {uri_list} }} .
+                              {{
+                                ?stmt rdf:type rdf:Statement ;
+                                      rdf:subject ?target ;
+                                      meta:sourceNodeId ?sourceNodeId .
+                              }} UNION {{
+                                ?stmt rdf:type rdf:Statement ;
+                                      rdf:object ?target ;
+                                      meta:sourceNodeId ?sourceNodeId .
+                              }}
+                            }}
+                            LIMIT 100
+                            """
+                            
+                            print(f"[DEBUG FUSEKI] Reification Query for sourceNodeId...", flush=True)
+                            try:
+                                reif_results = fuseki_client.query_sparql(kb_id, reification_query)
+                                reif_bindings = reif_results.get("results", {}).get("bindings", [])
+                                
+                                for rb in reif_bindings:
+                                    if "sourceNodeId" in rb:
+                                        node_id = rb["sourceNodeId"]["value"]
+                                        if node_id:
+                                            discovered_chunk_ids.add(node_id)
+                                
+                                log_trace(f"[Fuseki] Found {len(discovered_chunk_ids)} unique sourceNodeIds from Reification")
+                            except Exception as e:
+                                log_trace(f"[Fuseki] Warning: Reification query failed: {e}")
+
+                        # Use real_triples if found, otherwise fall back to dummy triples (which will fail mapping but show entity)
+                        final_triples = real_triples if real_triples else triples
 
                         return {
-                            "chunk_ids": discovered_chunk_ids, # 오프셋에서 발견된 청크 ID
+                            "chunk_ids": list(discovered_chunk_ids),  # Fuseki Reification에서 직접 추출
                             "sparql_query": generated_sparql.strip(),
-                            "triples": triples_with_offset,
-                            "found_entities": list(found_entities), # Pass this back!
+                            "triples": final_triples,
+                            "found_entities": list(found_entities),
                             "trace_logs": trace_logs
                         }
                     else:
                         # If inverse search is disabled and LLM query returned no results,
                         # don't fall back to generic search - return empty results
                         # UNLESS it is a promoted KB (schema_info exists), then we want fallback to capture anything.
+                
                         if inv_mode == "none" and not schema_info:
                             return {
                                 "chunk_ids": [],
@@ -194,206 +353,16 @@ class FusekiBackend(GraphBackend):
             except Exception as e:
                 log_trace(f"[Fuseki] Error during SPARQL generation/execution: {e}")
                 # Fallback continues below
-
-        # Fallback / Default Logic (Original regex-based search)
         
-        if not entities:
-            return {"chunk_ids": [], "sparql_query": "", "triples": [], "trace_logs": trace_logs}
-
-        # Escape entities for SPARQL regex
-        # Replace '\ ' with ' ' because SPARQL regex doesn't support escaped spaces like Python does
-        safe_entities = [re.escape(e).replace(r"\ ", " ") for e in entities]
-        regex_pattern = "|".join(safe_entities)
+        # [MODIFIED] Fallback Logic Removed
+        # If we reached here, it means LLM failed or returned no results (and fallback is requested but we disabled regex fallback)
         
-        # Build relationship filter based on keywords
-        relationship_filter = ""
-        use_rel_filter = kwargs.get("use_relation_filter", True)
-        
-        if use_rel_filter and relationship_keywords:
-            rel_patterns = []
-            for kw in relationship_keywords:
-                if kw == "master":
-                    rel_patterns.extend(["master", "스승", "teacher", "mentor"])
-                elif kw == "student":
-                    rel_patterns.extend(["student", "제자", "학생", "disciple"])
-                elif kw == "전수":
-                    rel_patterns.extend(["전수", "teach", "learn", "inherit"])
-            
-            if rel_patterns:
-                # specific handling for spaces in SPARQL regex
-                rel_regex = "|".join([re.escape(p).replace(r"\ ", " ") for p in rel_patterns])
-                relationship_filter = f'|| regex(str(?pred), "({rel_regex})", "i") || regex(?predLabel, "({rel_regex})", "i")'
-        
-        # Build entity filter clauses for SPARQL
-        # For each entity, we want to check if it's in the label or in the URI
-        entity_filters = []
-        for entity in entities:
-            if not entity: continue
-            # Use CONTAINS which is often more reliable than REGEX for basic substring match
-            entity_filters.append(f'CONTAINS(LCASE(STR(?sLabel)), LCASE("{entity}"))')
-            entity_filters.append(f'CONTAINS(LCASE(STR(?oLabel)), LCASE("{entity}"))')
-            entity_filters.append(f'CONTAINS(LCASE(STR(?s)), LCASE("{entity}"))')
-            entity_filters.append(f'CONTAINS(LCASE(STR(?o)), LCASE("{entity}"))')
-        
-        filter_clause = " || ".join(entity_filters) if entity_filters else "1=1"
-
-        # Enhanced SPARQL query - Search Default Graph (where Fallback data lives)
-        sparql_query = f"""
-        PREFIX rel: <{self.namespace_relation}>
-        PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-        PREFIX onto: <http://example.org/onto/>
-        PREFIX ns1: <http://example.org/onto/rel/>
-        PREFIX inst: <http://example.org/onto/inst/>
-        
-        SELECT DISTINCT ?s ?p ?o ?sLabel ?oLabel ?chunkUri
-        WHERE {{
-            # Search triples matching filters
-            ?s ?p ?o .
-            
-            # Optional labels
-            OPTIONAL {{ ?s rdfs:label ?sLabel }}
-            OPTIONAL {{ ?o rdfs:label ?oLabel }}
-            
-            # Filter Logic
-            FILTER (
-                # Exclude internal types if needed, but keep it broad for now
-                ?p != <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> &&
-                ({filter_clause})
-            )
-            
-            # Try to find source chunks linked to Subject or Object via hasSource
-            OPTIONAL {{ ?s <http://rag.local/relation/hasSource> ?chunkUri }}
-            OPTIONAL {{ ?o <http://rag.local/relation/hasSource> ?chunkUri2 }}
-        }}
-        LIMIT 100
-        """
-        
-        results = fuseki_client.query_sparql(kb_id, sparql_query)
-        bindings = results.get("results", {}).get("bindings", [])
-
-        chunk_ids = []
-        triples = []
-        for binding in bindings:
-            uri = binding.get("chunkUri", {}).get("value", "")
-            
-            # Handle different chunk URI formats
-            if uri.startswith("http://rag.local/source/"):
-                chunk_ids.append(uri.split("/")[-1])
-            elif uri.startswith("urn:ragchunk:"):
-                # Extract info from urn:ragchunk:DOC_ID:v1:INDEX
-                # Example: urn:ragchunk:8e04471c-612b-4afb-a8fe-2e23c369378f:v1:0000
-                parts = uri.replace("urn:ragchunk:", "").split(":")
-                # print(f"DEBUG: [Fuseki] Found urn:ragchunk URI: {uri}, parts: {parts}")
-                if len(parts) >= 3:
-                    doc_id = parts[0]
-                    try:
-                        chunk_idx = int(parts[2])
-                        cid = f"{doc_id}_{chunk_idx}"
-                        chunk_ids.append(cid)
-                        # print(f"DEBUG: [Fuseki] Mapped to chunk_id: {cid}")
-                    except ValueError:
-                        chunk_ids.append(doc_id)
-                elif len(parts) > 0:
-                    chunk_ids.append(parts[0])
-            
-            # Also extract triples from results
-            s_uri = binding.get("s", {}).get("value", "")
-            p_uri = binding.get("p", {}).get("value", "")
-            o_val = binding.get("o", {}).get("value", "")
-            s_label = binding.get("sLabel", {}).get("value", "")
-            o_label = binding.get("oLabel", {}).get("value", "")
-            
-            # Skip metadata predicates (RDF schema, provenance, etc.)
-            if any(noise in p_uri for noise in [
-                "rdf-syntax-ns#",      # rdf:type 등
-                "rdf-schema#",         # rdfs:label, rdfs:comment 등
-                "prov#",               # provenance 정보
-                "evidence/",           # 증거 메타데이터
-                "owl#",                # OWL 온톨로지 메타데이터
-                "hasSource",           # 소스 링크 (내부용)
-            ]):
-                continue
-            
-            s_display = s_label if s_label else (urllib.parse.unquote(s_uri.split("/")[-1]).replace("_", " ") if s_uri else "[Unknown URI]")
-            o_display = o_label if o_label else (urllib.parse.unquote(o_val.split("/")[-1]).replace("_", " ") if o_val.startswith("http") else o_val) or "[Unknown Value]"
-
-            p_display = urllib.parse.unquote(p_uri.split("/")[-1].replace("_", " "))
-            
-            if s_display and p_display and o_display:
-                triples.append({
-                    "subject": s_display,
-                    "predicate": p_display,
-                    "object": o_display
-                })
-        
-        # Note: triples are already extracted in the main query loop above
-        # Deduplicate triples
-        seen = set()
-        unique_triples = []
-        for t in triples:
-            key = (t["subject"], t["predicate"], t["object"])
-            if key not in seen:
-                seen.add(key)
-                unique_triples.append(t)
-        
-        
-        # 오프셋 정보 첨부
-        triples_with_offset, discovered_chunk_ids = await self._attach_offsets_to_triples(kb_id, unique_triples)
-        
-        # 기존 chunk_ids와 오프셋에서 발견된 chunk_ids 합치기
-        all_chunk_ids = list(set(chunk_ids) | set(discovered_chunk_ids))
-                
+        log_trace("[Fuseki] Strict Mode: No fallback search performed.")
         return {
-            "chunk_ids": all_chunk_ids,
-            "sparql_query": sparql_query.strip(),
-            "triples": triples_with_offset,
+            "chunk_ids": [], 
+            "sparql_query": sparql_query.strip() if sparql_query else "No Results / Generation Failed", 
+            "triples": [], 
+            "found_entities": [],
             "trace_logs": trace_logs
         }
 
-    async def _attach_offsets_to_triples(self, kb_id: str, triples: List[Dict]) -> Tuple[List[Dict], List[str]]:
-        """SQLite에서 트리플의 소스 오프셋 정보 조회하여 첨부 (Neo4j 백엔드와 동일 로직)"""
-        from app.models.triple_chunk_mapping import compute_triple_hash
-        from app.core.database import SessionLocal
-        from sqlalchemy.future import select
-        from app.models.triple_chunk_mapping import TripleChunkMapping
-        
-        discovered_chunk_ids = set()
-        
-        try:
-            async with SessionLocal() as db:
-                for triple in triples:
-                    triple_hash = compute_triple_hash(
-                        triple.get("subject", ""),
-                        triple.get("predicate", ""),
-                        triple.get("object", "")
-                    )
-                    
-                    result = await db.execute(
-                        select(TripleChunkMapping)
-                        .filter(TripleChunkMapping.kb_id == kb_id)
-                        .filter(TripleChunkMapping.triple_hash == triple_hash)
-                    )
-                    mappings = result.scalars().all()
-                    
-                    if mappings:
-                        # 오프셋은 첫 번째 매핑의 것 사용 (어차피 동일)
-                        triple["source_start"] = mappings[0].source_start
-                        triple["source_end"] = mappings[0].source_end
-                        
-                        # 관련된 청크 ID 수집
-                        for m in mappings:
-                            if m.chunk_id:
-                                discovered_chunk_ids.add(m.chunk_id)
-                    else:
-                        # 매핑이 없으면 오프셋 없음
-                        triple["source_start"] = None
-                        triple["source_end"] = None
-                        
-        except Exception as e:
-            logger.warning(f"Error attaching offsets to triples: {e}")
-            # Continue without offsets
-            for triple in triples:
-                triple["source_start"] = None
-                triple["source_end"] = None
-        
-        return triples, list(discovered_chunk_ids)

@@ -1,7 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, FileText, X, Settings, Database, Info, Eye, FileCode } from 'lucide-react';
-import { docApi, kbApi } from '../services/api';
+import { Upload, X, FileText, Settings, Database, AlertCircle, Check, Info, Eye } from 'lucide-react';
+import { docApi, kbApi, extractionApi } from '../services/api';
 import MessageDialog from './MessageDialog';
+import PromptDialog from './PromptDialog';
+import ExtractionPreviewModal from './ExtractionPreviewModal';
 
 interface UploadDocumentModalProps {
     isOpen: boolean;
@@ -66,268 +68,26 @@ const LabelWithTooltip = ({ label, tooltip }: { label: string, tooltip: string }
     );
 };
 
-const ExtractionRuleModal = ({ isOpen, onClose }: { isOpen: boolean, onClose: () => void }) => {
-    const [content, setContent] = useState('');
-    const [originalContent, setOriginalContent] = useState('');
-    const [isLoading, setIsLoading] = useState(false);
-    const [isValidating, setIsValidating] = useState(false);
-    const [status, setStatus] = useState<{ type: 'idle' | 'success' | 'error', message: string }>({ type: 'idle', message: '' });
-
-    useEffect(() => {
-        if (isOpen) {
-            loadRules();
-        }
-    }, [isOpen]);
-
-    const loadRules = async () => {
-        setIsLoading(true);
-        setStatus({ type: 'idle', message: '' });
-        try {
-            const res = await kbApi.getExtractionRules();
-            setContent(res.data.content);
-            setOriginalContent(res.data.content);
-        } catch (err) {
-            console.error("Failed to load rules", err);
-        } finally {
-            setIsLoading(false);
-        }
-    };
-
-    const handleApply = async () => {
-        setIsValidating(true);
-        setStatus({ type: 'idle', message: 'Validating with LLM...' });
-        try {
-            // 1. Validate
-            const valRes = await kbApi.validateExtractionRules(content);
-            if (!valRes.data.valid) {
-                setStatus({ type: 'error', message: valRes.data.message });
-                setIsValidating(false);
-                return;
-            }
-
-            // 2. Save
-            await kbApi.saveExtractionRules(content);
-            setStatus({ type: 'success', message: 'Rule applied successfully!' });
-            setOriginalContent(content);
-            setTimeout(() => {
-                onClose();
-                setStatus({ type: 'idle', message: '' });
-            }, 1500);
-        } catch (err: any) {
-            console.error(err);
-            setStatus({ type: 'error', message: err.response?.data?.detail || 'Failed to apply rules' });
-        } finally {
-            setIsValidating(false);
-        }
-    };
-
-    if (!isOpen) return null;
-
-    return (
-        <div style={{
-            position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-            backgroundColor: 'rgba(0,0,0,0.6)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            zIndex: 60
-        }} onClick={onClose}>
-            <div className="card" style={{ width: '800px', height: '85vh', display: 'flex', flexDirection: 'column' }} onClick={e => e.stopPropagation()}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '1rem', alignItems: 'center' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        <Settings size={20} color="#3b82f6" />
-                        <h3 style={{ margin: 0 }}>Extraction Rule (YAML)</h3>
-                    </div>
-                    <button className="btn" onClick={onClose} style={{ padding: '0.4rem' }}><X size={18} /></button>
-                </div>
-
-                <p style={{ fontSize: '0.85rem', color: '#64748b', marginBottom: '1rem' }}>
-                    문서에서 지식 그래프 트리플을 추출할 때 사용할 Few-shot 예제를 YAML 형식으로 편집합니다.
-                </p>
-
-                <div style={{ flex: 1, marginBottom: '1rem', position: 'relative', overflow: 'hidden' }}>
-                    {isLoading ? (
-                        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>Loading...</div>
-                    ) : (
-                        <textarea
-                            value={content}
-                            onChange={(e) => setContent(e.target.value)}
-                            style={{
-                                width: '100%',
-                                height: '100%',
-                                background: '#1e293b',
-                                color: '#e2e8f0',
-                                padding: '1.25rem',
-                                borderRadius: '8px',
-                                fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
-                                fontSize: '0.9rem',
-                                border: '1px solid #334155',
-                                resize: 'none',
-                                outline: 'none',
-                                lineHeight: '1.6'
-                            }}
-                            spellCheck={false}
-                        />
-                    )}
-                </div>
-
-                {status.message && (
-                    <div style={{
-                        padding: '0.75rem',
-                        borderRadius: '6px',
-                        marginBottom: '1rem',
-                        fontSize: '0.85rem',
-                        background: status.type === 'error' ? '#fef2f2' : status.type === 'success' ? '#f0fdf4' : '#f1f5f9',
-                        color: status.type === 'error' ? '#991b1b' : status.type === 'success' ? '#166534' : '#475569',
-                        border: `1px solid ${status.type === 'error' ? '#fecaca' : status.type === 'success' ? '#bbf7d0' : '#e2e8f0'}`,
-                        whiteSpace: 'pre-wrap'
-                    }}>
-                        {status.message}
-                    </div>
-                )}
-
-                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '1rem' }}>
-                    <button className="btn" onClick={onClose} disabled={isValidating}>Cancel</button>
-                    <button
-                        className="btn btn-primary"
-                        onClick={handleApply}
-                        disabled={isLoading || isValidating || content === originalContent}
-                        style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
-                    >
-                        {isValidating ? 'Validating...' : 'Validate & Apply'}
-                    </button>
-                </div>
-            </div>
-        </div>
-    );
-};
-
-const EditPromptModal = ({ isOpen, onClose }: { isOpen: boolean, onClose: () => void }) => {
-    const [content, setContent] = useState('');
-    const [originalContent, setOriginalContent] = useState('');
-    const [isLoading, setIsLoading] = useState(false);
-    const [status, setStatus] = useState<{ type: 'idle' | 'success' | 'error', message: string }>({ type: 'idle', message: '' });
-
-    useEffect(() => {
-        if (isOpen) {
-            loadPrompt();
-        }
-    }, [isOpen]);
-
-    const loadPrompt = async () => {
-        setIsLoading(true);
-        setStatus({ type: 'idle', message: '' });
-        try {
-            const res = await kbApi.getExtractionPrompt();
-            setContent(res.data.content);
-            setOriginalContent(res.data.content);
-        } catch (err) {
-            console.error("Failed to load prompt", err);
-            setStatus({ type: 'error', message: 'Failed to load prompt.' });
-        } finally {
-            setIsLoading(false);
-        }
-    };
-
-    const handleSave = async () => {
-        setIsLoading(true);
-        setStatus({ type: 'idle', message: 'Saving...' });
-        try {
-            await kbApi.saveExtractionPrompt(content);
-            setStatus({ type: 'success', message: 'Prompt saved successfully!' });
-            setOriginalContent(content);
-            setTimeout(() => {
-                onClose();
-                setStatus({ type: 'idle', message: '' });
-            }, 1000);
-        } catch (err: any) {
-            console.error(err);
-            setStatus({ type: 'error', message: err.response?.data?.detail || 'Failed to save prompt' });
-        } finally {
-            setIsLoading(false);
-        }
-    };
-
-    if (!isOpen) return null;
-
-    return (
-        <div style={{
-            position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-            backgroundColor: 'rgba(0,0,0,0.6)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            zIndex: 65 // Higher than Upload Modal
-        }} onClick={onClose}>
-            <div className="card" style={{ width: '800px', height: '85vh', display: 'flex', flexDirection: 'column' }} onClick={e => e.stopPropagation()}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '1rem', alignItems: 'center' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        <FileCode size={20} color="#3b82f6" />
-                        <h3 style={{ margin: 0 }}>Edit LLM Extraction Prompt</h3>
-                    </div>
-                    <button className="btn" onClick={onClose} style={{ padding: '0.4rem' }}><X size={18} /></button>
-                </div>
-
-                <p style={{ fontSize: '0.85rem', color: '#64748b', marginBottom: '1rem' }}>
-                    LLM이 지식 그래프를 추출할 때 사용할 프롬프트를 수정합니다. {'{text}'} 부분에 문서 내용이 삽입됩니다.
-                </p>
-
-                <div style={{ flex: 1, marginBottom: '1rem', position: 'relative', overflow: 'hidden' }}>
-                    {isLoading ? (
-                        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>Loading...</div>
-                    ) : (
-                        <textarea
-                            value={content}
-                            onChange={(e) => setContent(e.target.value)}
-                            style={{
-                                width: '100%',
-                                height: '100%',
-                                background: '#1e293b',
-                                color: '#e2e8f0',
-                                padding: '1.25rem',
-                                borderRadius: '8px',
-                                fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
-                                fontSize: '0.9rem',
-                                border: '1px solid #334155',
-                                resize: 'none',
-                                outline: 'none',
-                                lineHeight: '1.6'
-                            }}
-                            spellCheck={false}
-                        />
-                    )}
-                </div>
-
-                {status.message && (
-                    <div style={{
-                        padding: '0.75rem',
-                        borderRadius: '6px',
-                        marginBottom: '1rem',
-                        fontSize: '0.85rem',
-                        background: status.type === 'error' ? '#fef2f2' : status.type === 'success' ? '#f0fdf4' : '#f1f5f9',
-                        color: status.type === 'error' ? '#991b1b' : status.type === 'success' ? '#166534' : '#475569',
-                        border: `1px solid ${status.type === 'error' ? '#fecaca' : status.type === 'success' ? '#bbf7d0' : '#e2e8f0'}`,
-                        whiteSpace: 'pre-wrap'
-                    }}>
-                        {status.message}
-                    </div>
-                )}
-
-                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '1rem' }}>
-                    <button className="btn" onClick={onClose}>Cancel</button>
-                    <button
-                        className="btn btn-primary"
-                        onClick={handleSave}
-                        disabled={isLoading || content === originalContent}
-                    >
-                        Save Prompt
-                    </button>
-                </div>
-            </div>
-        </div>
-    );
-};
+// NOTE: ExtractionRuleModal and EditPromptModal have been removed.
+// Graph extraction is now handled by LlamaIndex in the Ingest Service.
 
 export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadComplete }: UploadDocumentModalProps) {
     const [file, setFile] = useState<File | null>(null);
     const [isUploading, setIsUploading] = useState(false);
     const [kbConfig, setKbConfig] = useState<any>(null);
+
+    // Modals state
+    const [showExampleModal, setShowExampleModal] = useState(false);
+    const [showPromptModal, setShowPromptModal] = useState(false);
+    const [showPreviewModal, setShowPreviewModal] = useState(false);
+    const [isExtracting, setIsExtracting] = useState(false);
+    const [previewData, setPreviewData] = useState<{
+        preview_id: string;
+        doc_id: string;
+        triples: any[];
+        node_count: number;
+    } | null>(null);
+
     const [messageDialog, setMessageDialog] = useState<{ isOpen: boolean; title: string; message: string; type: 'info' | 'success' | 'error' }>({
         isOpen: false,
         title: '',
@@ -335,18 +95,23 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
         type: 'info'
     });
 
-    // Graph Params
+    // Graph Params - LlamaIndex based
     const [graphParams, setGraphParams] = useState({
-        oe_section_aware: true,
-        extract_inverse_relations: true,
-        confidence_threshold: 0.6,
-        max_candidates_per_chunk: 20,
-        graph_section_size: 2500,
-        graph_section_overlap: 1000
+        extractor_type: 'simple' as 'simple' | 'dynamic' | 'schema',
+        max_paths_per_chunk: 10,
+        max_triplets_per_chunk: 20,
+        num_workers: 4,
+        generate_inverse_relations: true,
+        allowed_entity_types: [] as string[],
+        allowed_relation_types: [] as string[],
+        enable_text_cleaning: false,  // Format char removal
+        enable_subject_restoration: true,  // Restore omitted subjects (Korean)
+        enable_inference: false,  // Rule-based inference
+        extraction_examples_yaml: '', // Few-Shot Examples (YAML)
+        custom_prompt: '', // Custom Extraction Prompt
     });
 
-    const [showRuleModal, setShowRuleModal] = useState(false);
-    const [showPromptModal, setShowPromptModal] = useState(false);
+
 
     const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -368,6 +133,17 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                 graph_section_size: data.chunking_config?.graph_section_size || 2500,
                 graph_section_overlap: data.chunking_config?.graph_section_overlap || 1000
             }));
+
+            // Load extraction prompt from server and set as default
+            try {
+                const promptRes = await kbApi.getExtractionPrompt();
+                const serverPrompt = promptRes.data?.content;
+                if (serverPrompt && serverPrompt !== 'Prompt not found in DB.') {
+                    setGraphParams(prev => ({ ...prev, custom_prompt: serverPrompt }));
+                }
+            } catch (promptErr) {
+                console.warn('Failed to load extraction prompt from server:', promptErr);
+            }
         } catch (err) {
             console.error("Failed to load KB config", err);
         }
@@ -406,6 +182,105 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
         }
     };
 
+    const handleExtract = async () => {
+        if (!file) return;
+        setIsExtracting(true);
+        try {
+            // First upload file to get file_path (via standard upload but we need the path)
+            // For now, we'll use the docApi to create a pending document and get its path
+            const formData = new FormData();
+            formData.append('file', file);
+
+            // Upload file to backend first to get file_path
+            const uploadRes = await docApi.upload(kbId, file, { ...graphParams, preview_only: true });
+            const docId = uploadRes.data.id;
+            const filePath = uploadRes.data.file_path || `/data/uploads/${kbId}/${file.name}`;
+
+            // Call preview API
+            const res = await extractionApi.preview({
+                kb_id: kbId,
+                doc_id: docId,
+                file_path: filePath,
+                chunking: {
+                    strategy: 'fixed_size',
+                    chunk_size: 1024,
+                    chunk_overlap: 20,
+                },
+                graph: {
+                    extractor_type: graphParams.extractor_type,
+                    max_paths_per_chunk: graphParams.max_paths_per_chunk,
+                    max_triplets_per_chunk: graphParams.max_triplets_per_chunk,
+                    num_workers: graphParams.num_workers,
+                    generate_inverse_relations: graphParams.generate_inverse_relations,
+                },
+                graph_store: kbConfig?.graph_backend === 'neo4j' ? 'neo4j' : 'fuseki',
+                enable_text_cleaning: graphParams.enable_text_cleaning,
+                enable_subject_restoration: graphParams.enable_subject_restoration,
+                extraction_examples_yaml: graphParams.extraction_examples_yaml || undefined,
+                custom_prompt: graphParams.custom_prompt || undefined,
+            });
+
+            setPreviewData({
+                preview_id: res.data.preview_id,
+                doc_id: docId,  // Store doc_id for cleanup on cancel
+                triples: res.data.triples,
+                node_count: res.data.node_count,
+            });
+            setShowPreviewModal(true);
+        } catch (err: any) {
+            console.error('Extract failed:', err);
+            setMessageDialog({
+                isOpen: true,
+                title: '추출 실패',
+                message: err.response?.data?.detail || '트리플 추출 중 오류가 발생했습니다.',
+                type: 'error'
+            });
+        } finally {
+            setIsExtracting(false);
+        }
+    };
+
+    const handlePreviewConfirm = async () => {
+        if (!previewData) return;
+        setIsExtracting(true);
+        try {
+            await extractionApi.confirm(previewData.preview_id, {
+                enable_inference: graphParams.enable_inference,
+            });
+            onUploadComplete();
+            onClose();
+            setFile(null);
+            setPreviewData(null);
+            setShowPreviewModal(false);
+        } catch (err: any) {
+            console.error('Confirm failed:', err);
+            setMessageDialog({
+                isOpen: true,
+                title: '저장 실패',
+                message: err.response?.data?.detail || '데이터 저장 중 오류가 발생했습니다.',
+                type: 'error'
+            });
+        } finally {
+            setIsExtracting(false);
+        }
+    };
+
+    const handlePreviewDiscard = async () => {
+        if (!previewData) return;
+        try {
+            // 1. Discard preview cache
+            await extractionApi.discard(previewData.preview_id);
+
+            // 2. Delete the created document record
+            await docApi.delete(kbId, previewData.doc_id);
+            console.log(`Document ${previewData.doc_id} deleted after preview cancel`);
+        } catch (err) {
+            console.error('Discard cleanup failed:', err);
+        }
+        setPreviewData(null);
+        setShowPreviewModal(false);
+    };
+
     const isGraphEnabled = kbConfig && kbConfig.graph_backend && kbConfig.graph_backend !== 'none';
     const chunkingStrategy = kbConfig?.chunking_strategy || 'size';
 
@@ -417,7 +292,7 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 zIndex: 50
             }} onClick={onClose}>
-                <div className="card" style={{ width: '100%', maxWidth: '710px', maxHeight: '90vh', overflow: 'auto' }} onClick={(e) => e.stopPropagation()}>
+                <div className="card" style={{ width: '100%', maxWidth: '600px', maxHeight: '90vh', overflow: 'auto' }} onClick={(e) => e.stopPropagation()}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
                         <h2 style={{ margin: 0 }}>Upload Document</h2>
                         <button className="btn" onClick={onClose} style={{ padding: '0.5rem' }}>
@@ -459,158 +334,211 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                         </div>
                     </div>
 
-                    {/* Graph Settings Section */}
+                    {/* Graph Settings Section - 3 Column Layout */}
                     {isGraphEnabled && (
                         <div style={{ marginBottom: '1.5rem', background: '#f8fafc', padding: '1.25rem', borderRadius: '12px', border: '1px solid #e2e8f0' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1.25rem', color: '#3b82f6', fontWeight: 600 }}>
                                 <Database size={18} />
-                                <span>Graph Extraction Settings</span>
+                                <span>Graph Extraction Settings (LlamaIndex)</span>
                             </div>
 
-                            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(140px, 1fr) minmax(140px, 1fr) minmax(180px, 1.2fr)', gap: '1.5rem' }}>
-                                <div style={{ fontWeight: 'bold', marginBottom: '6px', color: '#000' }}>문서 청크 설정</div>
-                                <div style={{ display: 'flex', gap: '1rem', paddingLeft: '0.5rem', marginBottom: '0.75rem' }}>
-                                    <div style={{ color: '#64748b' }}>
-                                        <div>크기 : </div>
-                                        <div>중첩 : </div>
-                                    </div>
-                                    <div style={{ fontWeight: 500 }}>
-                                        <div>{kbConfig?.chunking_config?.chunk_size || '500'}</div>
-                                        <div>{kbConfig?.chunking_config?.overlap || '100'}</div>
-                                    </div>
-                                </div>
-
-                                <div style={{ marginBottom: '0.75rem' }}>
-                                    <span style={{ fontWeight: 'bold', color: '#000' }}>LLM 모델 : </span>
-                                    <div style={{ color: '#64748b', paddingLeft: '0.5rem', marginTop: '0.2rem' }}>gpt-4o-mini</div>
-                                </div>
-
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem' }}>
+                                {/* Column 1: Config Parameters */}
                                 <div>
-                                    <span style={{ fontWeight: 'bold', color: '#000' }}>RAG 전략 : </span>
-                                    <div style={{ color: '#64748b', paddingLeft: '0.5rem', marginTop: '0.2rem' }}>{chunkingStrategy === 'size' ? '고정 크기 (Fixed Size)' : chunkingStrategy}</div>
-                                </div>
-                            </div>
+                                    <h4 style={{ margin: '0 0 1rem 0', fontSize: '0.9rem', color: '#475569' }}>Configuration</h4>
 
-                            {/* Column 2: Graph Section Controls */}
-                            <div style={{ fontSize: '0.85rem' }}>
-                                <div style={{ fontWeight: 'bold', marginBottom: '6px', color: '#000' }}>그래프 추출 범위</div>
-                                <div style={{ marginBottom: '0.75rem' }}>
-                                    <div style={{ color: '#334155', marginBottom: '0.25rem' }}>크기 (Size)</div>
-                                    <input
-                                        type="number"
+                                    <LabelWithTooltip label="Extractor Type" tooltip="Select LlamaIndex extractor type" />
+                                    <select
                                         className="input"
-                                        value={graphParams.graph_section_size}
-                                        onChange={(e) => setGraphParams({ ...graphParams, graph_section_size: parseInt(e.target.value) || 0 })}
-                                        style={{ padding: '0.4rem 0.6rem', fontSize: '0.85rem' }}
-                                    />
-                                </div>
-                                <div style={{ marginBottom: '0.75rem' }}>
-                                    <div style={{ color: '#334155', marginBottom: '0.25rem' }}>중첩 (Overlap)</div>
-                                    <input
-                                        type="number"
-                                        className="input"
-                                        value={graphParams.graph_section_overlap}
-                                        onChange={(e) => setGraphParams({ ...graphParams, graph_section_overlap: parseInt(e.target.value) || 0 })}
-                                        style={{ padding: '0.4rem 0.6rem', fontSize: '0.85rem' }}
-                                    />
-                                </div>
-                                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', marginTop: '0.5rem' }}>
-                                    <input
-                                        type="checkbox"
-                                        checked={graphParams.oe_section_aware}
-                                        onChange={(e) => setGraphParams({ ...graphParams, oe_section_aware: e.target.checked })}
-                                        style={{ width: '0.9rem', height: '0.9rem' }}
-                                    />
-                                    <span style={{ color: '#334155', fontWeight: 500 }}>문단 인식 (Section Aware)</span>
-                                </label>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.5rem' }}>
-                                    <input
-                                        type="checkbox"
-                                        checked={graphParams.extract_inverse_relations}
-                                        onChange={(e) => setGraphParams({ ...graphParams, extract_inverse_relations: e.target.checked })}
-                                        style={{ width: '0.9rem', height: '0.9rem', cursor: 'pointer' }}
-                                    />
-                                    <LabelWithTooltip
-                                        label="역관계 추출 (Inverse Rel.)"
-                                        tooltip="스승-제자, 학생-선생 등 역관계를 자동으로 생성합니다. 예: (A, 스승, B) → (B, 제자, A)"
-                                    />
-                                </div>
-                            </div>
-
-                            {/* Column 3: Sliders */}
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-                                <div>
-                                    <LabelWithTooltip
-                                        label={`신뢰도: ${graphParams.confidence_threshold}`}
-                                        tooltip="추출된 트리플의 최소 신뢰도 점수입니다."
-                                    />
-                                    <input
-                                        type="range"
-                                        min="0"
-                                        max="1"
-                                        step="0.1"
-                                        value={graphParams.confidence_threshold}
-                                        onChange={(e) => setGraphParams({ ...graphParams, confidence_threshold: parseFloat(e.target.value) })}
-                                        style={{ width: '100%', cursor: 'pointer', accentColor: '#3b82f6' }}
-                                    />
-                                </div>
-                                <div>
-                                    <LabelWithTooltip
-                                        label={`최대 추출 수: ${graphParams.max_candidates_per_chunk}`}
-                                        tooltip="청크당 추출할 최대 트리플 수입니다."
-                                    />
-                                    <input
-                                        type="range"
-                                        min="10"
-                                        max="100"
-                                        step="10"
-                                        value={graphParams.max_candidates_per_chunk}
-                                        onChange={(e) => setGraphParams({ ...graphParams, max_candidates_per_chunk: parseInt(e.target.value) })}
-                                        style={{ width: '100%', cursor: 'pointer', accentColor: '#3b82f6' }}
-                                    />
-                                    <button
-                                        className="btn"
-                                        style={{
-                                            display: 'flex', alignItems: 'center', gap: '0.4rem',
-                                            fontSize: '0.75rem', color: '#64748b', background: '#f1f5f9',
-                                            border: '1px solid #e2e8f0', borderRadius: '4px', padding: '0.4rem',
-                                            width: '100%', justifyContent: 'center', marginTop: '0.5rem'
-                                        }}
-                                        onClick={() => setShowRuleModal(true)}
+                                        value={graphParams.extractor_type}
+                                        onChange={(e) => setGraphParams({ ...graphParams, extractor_type: e.target.value as 'simple' | 'dynamic' | 'schema' })}
+                                        style={{ width: '100%', padding: '0.5rem', fontSize: '0.85rem', marginBottom: '1rem' }}
                                     >
-                                        <Settings size={12} />
-                                        추출 규칙 설정 (Rules)
-                                    </button>
+                                        <option value="simple">Simple LLM (Default)</option>
+                                        <option value="dynamic">Dynamic LLM</option>
+                                        <option value="schema">Schema-based</option>
+                                    </select>
+
+                                    {graphParams.extractor_type === 'simple' && (
+                                        <div style={{ marginBottom: '1rem' }}>
+                                            <LabelWithTooltip label={`Max Paths: ${graphParams.max_paths_per_chunk}`} tooltip="Max triples per chunk" />
+                                            <input
+                                                type="range" min="5" max="50" step="5"
+                                                value={graphParams.max_paths_per_chunk}
+                                                onChange={(e) => setGraphParams({ ...graphParams, max_paths_per_chunk: parseInt(e.target.value) })}
+                                                style={{ width: '100%', cursor: 'pointer', accentColor: '#3b82f6' }}
+                                            />
+                                        </div>
+                                    )}
+
+                                    {graphParams.extractor_type === 'dynamic' && (
+                                        <div style={{ marginBottom: '1rem' }}>
+                                            <LabelWithTooltip label={`Max Triplets: ${graphParams.max_triplets_per_chunk}`} tooltip="Max triples per chunk" />
+                                            <input
+                                                type="range" min="10" max="100" step="10"
+                                                value={graphParams.max_triplets_per_chunk}
+                                                onChange={(e) => setGraphParams({ ...graphParams, max_triplets_per_chunk: parseInt(e.target.value) })}
+                                                style={{ width: '100%', cursor: 'pointer', accentColor: '#3b82f6' }}
+                                            />
+                                        </div>
+                                    )}
+
+                                    <div>
+                                        <LabelWithTooltip label={`Workers: ${graphParams.num_workers}`} tooltip="Number of parallel workers" />
+                                        <input
+                                            type="range" min="1" max="8" step="1"
+                                            value={graphParams.num_workers}
+                                            onChange={(e) => setGraphParams({ ...graphParams, num_workers: parseInt(e.target.value) })}
+                                            style={{ width: '100%', cursor: 'pointer', accentColor: '#3b82f6' }}
+                                        />
+                                    </div>
+                                </div>
+
+                                {/* Column 2: Checkbox Options */}
+                                <div>
+                                    <h4 style={{ margin: '0 0 1rem 0', fontSize: '0.9rem', color: '#475569' }}>Options</h4>
+
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', marginBottom: '1rem' }}>
+                                        <input
+                                            type="checkbox"
+                                            checked={graphParams.generate_inverse_relations}
+                                            onChange={(e) => setGraphParams({ ...graphParams, generate_inverse_relations: e.target.checked })}
+                                            style={{ width: '1.1rem', height: '1.1rem', accentColor: '#3b82f6', flexShrink: 0 }}
+                                        />
+                                        <div>
+                                            <span style={{ color: '#334155', fontWeight: 500, fontSize: '0.9rem' }}>Generate Inverse</span>
+                                            <div style={{ fontSize: '0.75rem', color: '#64748b' }}>e.g. Teacher → Student</div>
+                                        </div>
+                                    </label>
+
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', marginBottom: '1rem' }}>
+                                        <input
+                                            type="checkbox"
+                                            checked={graphParams.enable_text_cleaning}
+                                            onChange={(e) => setGraphParams({ ...graphParams, enable_text_cleaning: e.target.checked })}
+                                            style={{ width: '1.1rem', height: '1.1rem', accentColor: '#3b82f6', flexShrink: 0 }}
+                                        />
+                                        <div>
+                                            <span style={{ color: '#334155', fontWeight: 500, fontSize: '0.9rem' }}>Clean Text</span>
+                                            <div style={{ fontSize: '0.75rem', color: '#64748b' }}>Remove bullets, numbers</div>
+                                        </div>
+                                    </label>
+
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', marginBottom: '1rem' }}>
+                                        <input
+                                            type="checkbox"
+                                            checked={graphParams.enable_subject_restoration}
+                                            onChange={(e) => setGraphParams({ ...graphParams, enable_subject_restoration: e.target.checked })}
+                                            style={{ width: '1.1rem', height: '1.1rem', accentColor: '#3b82f6', flexShrink: 0 }}
+                                        />
+                                        <div>
+                                            <span style={{ color: '#334155', fontWeight: 500, fontSize: '0.9rem' }}>Subject Restoration</span>
+                                            <div style={{ fontSize: '0.75rem', color: '#64748b' }}>Resolve omitted subjects (KR)</div>
+                                        </div>
+                                    </label>
+
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                                        <input
+                                            type="checkbox"
+                                            checked={graphParams.enable_inference}
+                                            onChange={(e) => setGraphParams({ ...graphParams, enable_inference: e.target.checked })}
+                                            style={{ width: '1.1rem', height: '1.1rem', accentColor: '#3b82f6', flexShrink: 0 }}
+                                        />
+                                        <div>
+                                            <span style={{ color: '#334155', fontWeight: 500, fontSize: '0.9rem' }}>Inference</span>
+                                            <div style={{ fontSize: '0.75rem', color: '#64748b' }}>Apply reasoning rules</div>
+                                        </div>
+                                    </label>
+                                </div>
+
+                                {/* Column 3: Customization Actions */}
+                                <div>
+                                    <h4 style={{ margin: '0 0 1rem 0', fontSize: '0.9rem', color: '#475569' }}>Customization</h4>
+
                                     <button
                                         className="btn"
-                                        style={{
-                                            display: 'flex', alignItems: 'center', gap: '0.4rem',
-                                            fontSize: '0.75rem', color: '#64748b', background: '#f1f5f9',
-                                            border: '1px solid #e2e8f0', borderRadius: '4px', padding: '0.4rem',
-                                            width: '100%', justifyContent: 'center', marginTop: '0.5rem'
-                                        }}
+                                        style={{ width: '100%', marginBottom: '0.75rem', justifyContent: 'center', background: '#fff', border: '1px solid #cbd5e1' }}
+                                        onClick={() => setShowExampleModal(true)}
+                                    >
+                                        Manage Examples
+                                    </button>
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'default', marginBottom: '1.25rem', justifyContent: 'center' }}>
+                                        <input
+                                            type="checkbox"
+                                            checked={!!graphParams.extraction_examples_yaml}
+                                            readOnly
+                                            style={{ width: '0.9rem', height: '0.9rem', accentColor: '#3b82f6' }}
+                                        />
+                                        <span style={{ fontSize: '0.75rem', color: '#64748b' }}>Examples Added</span>
+                                    </label>
+
+                                    <button
+                                        className="btn"
+                                        style={{ width: '100%', marginBottom: '0.75rem', justifyContent: 'center', background: '#fff', border: '1px solid #cbd5e1' }}
                                         onClick={() => setShowPromptModal(true)}
                                     >
-                                        <FileCode size={12} />
-                                        프롬프트 설정 (Prompt)
+                                        Edit Extraction Prompt
                                     </button>
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'default', justifyContent: 'center' }}>
+                                        <input
+                                            type="checkbox"
+                                            checked={!!graphParams.custom_prompt}
+                                            readOnly
+                                            style={{ width: '0.9rem', height: '0.9rem', accentColor: '#3b82f6' }}
+                                        />
+                                        <span style={{ fontSize: '0.75rem', color: '#64748b' }}>Custom Prompt Active</span>
+                                    </label>
                                 </div>
                             </div>
                         </div>
                     )}
 
+
                     <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '1rem' }}>
-                        <button className="btn" onClick={onClose} disabled={isUploading}>Cancel</button>
+                        <button className="btn" onClick={onClose} disabled={isUploading || isExtracting}>Cancel</button>
+                        {isGraphEnabled && (
+                            <button
+                                className="btn"
+                                onClick={handleExtract}
+                                disabled={!file || isUploading || isExtracting}
+                                style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '0.5rem',
+                                    border: '1px solid #3b82f6',
+                                    color: '#3b82f6'
+                                }}
+                            >
+                                <Eye size={16} />
+                                {isExtracting ? 'Extracting...' : 'Extract'}
+                            </button>
+                        )}
                         <button
                             className="btn btn-primary"
                             onClick={handleUpload}
-                            disabled={!file || isUploading}
+                            disabled={!file || isUploading || isExtracting}
                         >
                             {isUploading ? 'Uploading...' : 'Upload'}
                         </button>
                     </div>
                 </div>
-            </div >
+            </div>
+
+            <PromptDialog
+                isOpen={showExampleModal}
+                onClose={() => setShowExampleModal(false)}
+                initialPrompt={graphParams.extraction_examples_yaml}
+                onSave={(yaml) => setGraphParams(prev => ({ ...prev, extraction_examples_yaml: yaml }))}
+                mode="extraction_examples"
+            />
+
+            <PromptDialog
+                isOpen={showPromptModal}
+                onClose={() => setShowPromptModal(false)}
+                initialPrompt={graphParams.custom_prompt}
+                onSave={(prompt) => setGraphParams(prev => ({ ...prev, custom_prompt: prompt }))}
+                mode="extraction_prompt"
+            />
 
             <MessageDialog
                 isOpen={messageDialog.isOpen}
@@ -620,14 +548,19 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                 onClose={() => setMessageDialog({ ...messageDialog, isOpen: false })}
             />
 
-            <ExtractionRuleModal
-                isOpen={showRuleModal}
-                onClose={() => setShowRuleModal(false)}
-            />
-            <EditPromptModal
-                isOpen={showPromptModal}
-                onClose={() => setShowPromptModal(false)}
-            />
+            {previewData && (
+                <ExtractionPreviewModal
+                    isOpen={showPreviewModal}
+                    onClose={() => setShowPreviewModal(false)}
+                    previewId={previewData.preview_id}
+                    triples={previewData.triples}
+                    nodeCount={previewData.node_count}
+                    isLoading={isExtracting}
+                    onConfirm={handlePreviewConfirm}
+                    onDiscard={handlePreviewDiscard}
+                />
+            )}
         </>
+
     );
 }

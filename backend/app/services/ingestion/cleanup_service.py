@@ -1,10 +1,11 @@
 import logging
 import asyncio
+import os
+import shutil
+from pathlib import Path
 from app.core.milvus import create_collection
 from app.core.fuseki import fuseki_client
-from app.core.database import SessionLocal
 from app.models.document import Document
-from sqlalchemy import delete
 
 logger = logging.getLogger(__name__)
 
@@ -12,20 +13,33 @@ class CleanupService:
     async def perform_cascading_deletion(self, kb_id: str, doc_id: str):
         """
         Executes removal of all data associated with a document (Graph -> Vector -> Relational).
-        This function is designed to be idempotent; safety to run multiple times.
+        Enforces transactional integrity: if Graph/Vector deletion fails, MongoDB record remains.
         """
-        logger.info(f"Starting cascading deletion for doc {doc_id} in KB {kb_id}")
+        print(f"[Cleanup] Starting cascading deletion for doc {doc_id} in KB {kb_id}")
         
-        # 1. Fuseki Cleanup (Graph)
+        # 0. Cancel ongoing Ingest Job if any
         try:
-            # Delete all triples where source matches doc_id prefix
+            from app.services.ingestion.ingest_client import ingest_client
+            doc = await Document.get(doc_id)
+            if doc and doc.status == "processing":
+                print(f"[Cleanup] Document {doc_id} is processing. Sending cancel request...")
+                await ingest_client.cancel_job(doc_id)
+        except Exception as e:
+            print(f"[Cleanup] Job cancel warning: {e}")
+
+        # 1. Fuseki Cleanup (Graph) - CRITICAL
+        try:
+            dataset_name = f"kb_{kb_id.replace('-', '_')}"
+            graph_uri = f"urn:doc:{doc_id}"
+            
+            # 1.1 DROP GRAPH
+            fuseki_client.drop_graph(kb_id, graph_uri)
+            
+            # 1.2 Legacy Cleanup (Sparql Update)
             source_prefix = f"http://rag.local/source/{doc_id}"
             delete_query = f"""
             PREFIX rel: <http://rag.local/relation/>
-            DELETE {{
-                ?s ?p ?o .
-                ?inv_s ?inv_p ?s . 
-            }}
+            DELETE {{ ?s ?p ?o . ?inv_s ?inv_p ?s . }}
             WHERE {{
                 ?s rel:hasSource ?src .
                 FILTER(STRSTARTS(STR(?src), "{source_prefix}")) .
@@ -33,83 +47,155 @@ class CleanupService:
                 OPTIONAL {{ ?inv_s ?inv_p ?s }}
             }}
             """
-            success = fuseki_client.update_sparql(kb_id, delete_query)
-            if success:
-                logger.info(f"Fuseki cleanup complete for doc {doc_id}")
-            else:
-                logger.warning(f"Fuseki cleanup returned failure for doc {doc_id}")
+            fuseki_client.update_sparql(kb_id, delete_query)
+            
+            print(f"[Cleanup] ✅ Fuseki deletion executed for {doc_id}")
+            
         except Exception as e:
-            logger.error(f"Fuseki cleanup error for {doc_id}: {e}")
+            print(f"[Cleanup] ❌ Fuseki cleanup failed: {e}")
+            raise RuntimeError(f"Failed to delete graph data from Fuseki: {e}")
 
-        # 1.5. Neo4j Cleanup (Graph)
+        # 1.5. Neo4j Cleanup (Graph) - CRITICAL
         try:
             from app.core.neo4j_client import neo4j_client
-            # Neo4j는 doc_id 기반 삭제가 어려우므로 (트리플에 doc_id 없음)
-            # TripleChunkMapping에서 해당 doc_id의 트리플을 찾아서 삭제
-            from app.models.triple_chunk_mapping import TripleChunkMapping
-            async with SessionLocal() as db:
-                from sqlalchemy import select
-                result = await db.execute(
-                    select(TripleChunkMapping.subject, TripleChunkMapping.predicate, TripleChunkMapping.object)
-                    .filter(TripleChunkMapping.doc_id == doc_id)
-                    .distinct()
-                )
-                triples_to_delete = result.fetchall()
-                
-                if triples_to_delete:
-                    for subj, pred, obj in triples_to_delete:
-                        try:
-                            # 정확히 일치하는 관계만 삭제
-                            delete_query = """
-                            MATCH (s:Entity {name: $subj, kb_id: $kb_id})-[r]->(o:Entity {name: $obj, kb_id: $kb_id})
-                            WHERE type(r) = $pred
-                            DELETE r
-                            """
-                            neo4j_client.execute_query(delete_query, {
-                                "subj": subj,
-                                "obj": obj,
-                                "pred": pred,
-                                "kb_id": kb_id
-                            })
-                        except Exception as rel_e:
-                            logger.warning(f"Neo4j relation delete error: {rel_e}")
-                    
-                    # 고아 노드 정리 (관계가 없는 노드 삭제)
-                    orphan_query = """
-                    MATCH (n:Entity {kb_id: $kb_id})
-                    WHERE NOT (n)--()
-                    DELETE n
-                    """
-                    neo4j_client.execute_query(orphan_query, {"kb_id": kb_id})
-                    
-                    logger.info(f"Neo4j cleanup complete for doc {doc_id}: deleted {len(triples_to_delete)} relations")
+            
+            # Delete relationships
+            delete_query = """
+            MATCH ()-[r]->()
+            WHERE r.doc_id = $doc_id
+            DELETE r
+            RETURN count(r) as deleted_count
+            """
+            neo4j_client.execute_query(delete_query, {"doc_id": doc_id})
+            
+            # Delete isolated nodes
+            orphan_query = """
+            MATCH (n:Entity {kb_id: $kb_id})
+            WHERE NOT (n)--()
+            DELETE n
+            """
+            neo4j_client.execute_query(orphan_query, {"kb_id": kb_id})
+            
+            print(f"[Cleanup] ✅ Neo4j deletion executed for {doc_id}")
         except Exception as e:
-            logger.error(f"Neo4j cleanup error for {doc_id}: {e}")
+            print(f"[Cleanup] ❌ Neo4j cleanup failed: {e}")
+            raise RuntimeError(f"Failed to delete graph data from Neo4j: {e}")
 
-        # 2. Milvus Cleanup (Vector)
+        # 2. Milvus Cleanup (Vector) - CRITICAL
         try:
+            from pymilvus import utility
             collection = create_collection(kb_id)
             collection.load()
+            
             expr = f'doc_id == "{doc_id}"'
             collection.delete(expr)
             collection.flush()
-            logger.info(f"Milvus cleanup complete for doc {doc_id}")
+            
+            # Verify Milvus immediately
+            verify_res = collection.query(expr, output_fields=["chunk_id"], limit=1)
+            if verify_res:
+                raise RuntimeError("Milvus deletion failed (entities still exist)")
+            
+            print(f"[Cleanup] ✅ Milvus deletion verified for {doc_id}")
+            
+            try:
+                collection.release()
+            except: 
+                pass
+                
         except Exception as e:
-            logger.error(f"Milvus cleanup error for {doc_id}: {e}")
+            print(f"[Cleanup] ❌ Milvus cleanup failed: {e}")
+            raise RuntimeError(f"Failed to delete vector data from Milvus: {e}")
 
-        # 3. SQLite Cleanup (Final Step)
+        # 3. File System Cleanup (Artifacts) - Non-critical
         try:
-            from app.models.triple_chunk_mapping import TripleChunkMapping  # Lazy import
-            async with SessionLocal() as db:
-                # 관련 TripleChunkMapping 삭제
-                await db.execute(delete(TripleChunkMapping).where(TripleChunkMapping.doc_id == doc_id))
+            target_path = os.path.abspath(os.path.join(os.getcwd(), "doc2onto_out", kb_id, doc_id))
+            if os.path.exists(target_path):
+                shutil.rmtree(target_path)
+            
+            alt_path = f"/app/doc2onto_out/{kb_id}/{doc_id}"
+            if os.path.exists(alt_path):
+                shutil.rmtree(alt_path)
                 
-                # 문서 레코드 삭제
-                await db.execute(delete(Document).where(Document.id == doc_id))
-                
-                await db.commit()
-                logger.info(f"Document record and triple mappings deleted from SQLite for {doc_id}")
+            from app.core.config import settings
+            import glob
+            pattern = os.path.join(settings.SHARED_STORAGE_PATH, f"{doc_id}_*")
+            for f in glob.glob(pattern):
+                try:
+                    os.remove(f)
+                except:
+                    pass
         except Exception as e:
-            logger.error(f"SQLite cleanup error for {doc_id}: {e}")
+            print(f"[Cleanup] Filesystem cleanup warning: {e}")
+
+        # ⭐️ PRE-COMMIT VERIFICATION
+        # Verify that Graph DBs are truly clean before deleting the user record.
+        is_clean, garbage_info = await self._verify_cleanup(kb_id, doc_id)
+        if not is_clean:
+            error_msg = f"Cleanup verification failed. Residual data found: {garbage_info}"
+            print(f"[Cleanup] ❌ {error_msg}")
+            raise RuntimeError(error_msg)
+
+        # 4. MongoDB Cleanup (Final Step)
+        try:
+            doc = await Document.get(doc_id)
+            if doc:
+                await doc.delete()
+                print(f"[Cleanup] ✅ Deleted Document record for {doc_id}")
+            
+            # Broadcast update
+            try:
+                from app.core.websocket_manager import manager
+                await manager.broadcast(kb_id, {
+                    "type": "document_status_update", 
+                    "doc_id": doc_id, 
+                    "status": "deleted"
+                })
+            except:
+                pass
+                
+        except Exception as e:
+            print(f"[Cleanup] ❌ MongoDB cleanup error: {e}")
+            raise RuntimeError(f"Failed to delete document record: {e}")
+
+
+    async def _verify_cleanup(self, kb_id: str, doc_id: str):
+        """삭제 후 가비지 데이터 검증 (True if clean)"""
+        garbage_found = []
+        
+        # 1. Check Fuseki
+        try:
+            # Check Named Graph existence
+            check_sparql = f"ASK {{ GRAPH <urn:doc:{doc_id}> {{ ?s ?p ?o }} }}"
+            res = fuseki_client.query_sparql(kb_id, check_sparql)
+            if res and res.get("boolean", False):
+                 garbage_found.append("Fuseki Named Graph")
+        except:
+            pass
+            
+        # 2. Check Neo4j
+        try:
+            from app.core.neo4j_client import neo4j_client
+            check_query = "MATCH ()-[r]->() WHERE r.doc_id = $doc_id RETURN count(r) as cnt"
+            res = neo4j_client.execute_query(check_query, {"doc_id": doc_id})
+            if res and res[0]["cnt"] > 0:
+                garbage_found.append(f"Neo4j Relationships ({res[0]['cnt']})")
+        except:
+            pass
+
+        # 3. Check Milvus
+        try:
+            collection = create_collection(kb_id)
+            collection.load()
+            res = collection.query(f'doc_id == "{doc_id}"', output_fields=["chunk_id"], limit=1)
+            if res:
+                garbage_found.append("Milvus Vectors")
+        except:
+            pass
+        
+        if garbage_found:
+            return False, ", ".join(garbage_found)
+        return True, "Clean"
 
 cleanup_service = CleanupService()
+

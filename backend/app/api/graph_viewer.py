@@ -3,9 +3,8 @@ from typing import List, Dict, Any, Optional
 from pydantic import BaseModel
 from app.core.neo4j_client import neo4j_client
 from app.core.fuseki import fuseki_client
-from app.core.database import get_db
-from sqlalchemy.ext.asyncio import AsyncSession
 import urllib.parse
+import json
 
 router = APIRouter()
 
@@ -113,6 +112,7 @@ async def expand_graph(
         sparql = f"""
         PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
         SELECT DISTINCT ?s ?p ?o ?sLabel ?oLabel
+        FROM <urn:x-arq:UnionGraph>
         WHERE {{
             {{ 
                 ?s ?p ?o . 
@@ -430,3 +430,350 @@ async def get_class_instances(
         raise HTTPException(status_code=500, detail=str(e))
     
     return GraphData(nodes=list(nodes.values()), links=links)
+
+
+class TripleRecord(BaseModel):
+    subject: str
+    predicate: str
+    object: str
+    doc_id: Optional[str] = None
+    doc_filename: Optional[str] = None
+    chunk_id: Optional[str] = None
+    chunk_text: Optional[str] = None  # 청크 원문 (트리플 출처)
+    confidence: Optional[float] = None
+
+
+@router.get("/triples/{kb_id}")
+async def get_all_triples(
+    kb_id: str,
+    backend: str = Query("neo4j", description="Graph backend: neo4j or fuseki"),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=1000),
+    include_chunk_text: bool = Query(False, description="Include chunk text for each triple (slower)"),
+    sort: Optional[str] = Query(None, description="Kendo Grid Sort Descriptor (JSON)"),
+    filter: Optional[str] = Query(None, description="Kendo Grid Filter Descriptor (JSON)")
+) -> Dict[str, Any]:
+    """
+    Fetch all triples for a knowledge base with document and chunk metadata.
+    Used by the Graph Data View tab.
+    
+    직접 그래프(Neo4j/Fuseki)에서 트리플과 source_node_id를 조회합니다.
+    - source_node_id: 트리플이 추출된 청크 ID (Neo4j 관계 속성 / Fuseki Reification)
+    - chunk_text: 청크 원문 (include_chunk_text=True일 때만, Milvus에서 조회)
+    """
+    print(f"[GraphData] Fetching triples for KB: {kb_id}, backend: {backend}, include_text: {include_chunk_text}")
+    
+    from app.models.document import Document as DocModel
+    
+    triples = []
+    chunk_ids_to_fetch = set()
+    total_count = 0
+    
+    # Filter & Sort Parsing
+    try:
+        sort_list = json.loads(sort) if sort else []
+    except Exception as e:
+        print(f"[GraphData] Sort Parse Error: {e}")
+        sort_list = []
+        
+    try:
+        filter_obj = json.loads(filter) if filter else {}
+    except Exception as e:
+        print(f"[GraphData] Filter Parse Error: {e}")
+        filter_obj = {}
+        
+    filters = filter_obj.get("filters", []) if filter_obj else []
+    
+    try:
+        # Document 정보 가져오기
+        docs = await DocModel.find(DocModel.kb_id == kb_id).to_list()
+        doc_map = {doc.id: doc.filename for doc in docs}
+        
+        if backend == "neo4j":
+            # Neo4j Dynamic Query Building
+            where_clauses = ["s.kb_id = $kb_id", "type(r) <> 'INVERSE_OF'"]
+            params = {"kb_id": kb_id, "skip": skip, "limit": limit}
+
+            # Apply Filters
+            for idx, f in enumerate(filters):
+                field = f.get("field")
+                val = f.get("value")
+                if not val: continue
+                
+                target = ""
+                if field == "subject": target = "COALESCE(s.name, s.label_ko, s.label)"
+                elif field == "predicate": target = "type(r)"
+                elif field == "object": target = "COALESCE(o.name, o.label_ko, o.label)"
+                
+                if target:
+                   p_name = f"f_{idx}"
+                   params[p_name] = val
+                   where_clauses.append(f"toLower({target}) CONTAINS toLower(${p_name})")
+
+            where_stmt = " AND ".join(where_clauses)
+            
+            # Apply Sort
+            order_stmt = ""
+            if sort_list:
+                orders = []
+                for s in sort_list:
+                    field = s.get("field")
+                    direction = s.get("dir", "asc").upper()
+                    if field in ["subject", "predicate", "object"]:
+                        orders.append(f"{field} {direction}")
+                if orders:
+                    order_stmt = "ORDER BY " + ", ".join(orders)
+            
+            # 1. Total Count Query (With filters)
+            count_query = f"""
+            MATCH (s:Entity)-[r]->(o:Entity)
+            WHERE {where_stmt}
+            RETURN count(r) as total
+            """
+            count_res = neo4j_client.execute_query(count_query, params)
+            if count_res:
+                total_count = count_res[0]["total"]
+
+            # 2. Data Query
+            query = f"""
+            MATCH (s:Entity)-[r]->(o:Entity)
+            WHERE {where_stmt}
+            RETURN DISTINCT
+                COALESCE(s.name, s.label_ko, s.label) as subject,
+                type(r) as predicate,
+                COALESCE(o.name, o.label_ko, o.label) as object,
+                r.doc_id as doc_id,
+                r.source_node_id as source_node_id,
+                r.is_inverse as is_inverse,
+                r.confidence as confidence
+            {order_stmt}
+            SKIP $skip
+            LIMIT $limit
+            """
+            
+            records = neo4j_client.execute_query(query, params)
+            
+            for record in records:
+                source_node_id = record.get("source_node_id")
+                if source_node_id:
+                    chunk_ids_to_fetch.add(source_node_id)
+                
+                triples.append(TripleRecord(
+                    subject=str(record["subject"]) if record["subject"] else "Unknown",
+                    predicate=str(record["predicate"]),
+                    object=str(record["object"]) if record["object"] else "Unknown",
+                    doc_id=record.get("doc_id"),
+                    doc_filename=doc_map.get(record.get("doc_id")) if record.get("doc_id") else None,
+                    chunk_id=source_node_id,
+                    chunk_text=None,
+                    confidence=record.get("confidence")
+                ))
+        
+        elif backend == "fuseki" or backend == "ontology":
+            # Fuseki Dynamic Query Building
+            filter_clauses = [
+                "!isLiteral(?o)",
+                "!CONTAINS(STR(?p), 'inverse')",
+                "!CONTAINS(STR(?p), 'rdf-syntax-ns')",
+                "!CONTAINS(STR(?p), 'rag.local/meta')",
+                "!CONTAINS(STR(?s), 'rag.local/stmt')"
+            ]
+
+            # Apply Filters (Simple string injection - internal use only)
+            for f in filters:
+                field = f.get("field")
+                val = f.get("value")
+                if not val: continue
+                val = val.replace('"', '\\"') # Simple escape
+                
+                if field == "subject":
+                    filter_clauses.append(f"(CONTAINS(LCASE(?sLabel), LCASE('{val}')) || CONTAINS(LCASE(STR(?s)), LCASE('{val}')))")
+                elif field == "predicate":
+                    filter_clauses.append(f"(CONTAINS(LCASE(?pLabel), LCASE('{val}')) || CONTAINS(LCASE(STR(?p)), LCASE('{val}')))")
+                elif field == "object":
+                    filter_clauses.append(f"(CONTAINS(LCASE(?oLabel), LCASE('{val}')) || CONTAINS(LCASE(STR(?o)), LCASE('{val}')))")
+
+            filter_stmt = "FILTER (" + " && ".join(filter_clauses) + ")"
+            
+            # Apply Sort
+            order_stmt = ""
+            if sort_list:
+                orders = []
+                for s in sort_list:
+                    field = s.get("field")
+                    direction = s.get("dir", "asc").upper()
+                    if field == "subject": orders.append(f"{direction}(?sLabel)")
+                    elif field == "predicate": orders.append(f"{direction}(?pLabel)")
+                    elif field == "object": orders.append(f"{direction}(?oLabel)")
+                if orders:
+                    order_stmt = "ORDER BY " + " ".join(orders)
+
+            # 1. Total Count Query
+            count_sparql = f"""
+            PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+            SELECT (COUNT(*) as ?total)
+            FROM <urn:x-arq:UnionGraph>
+            WHERE {{
+                ?s ?p ?o .
+                OPTIONAL {{ ?s rdfs:label ?sLabel }}
+                OPTIONAL {{ ?p rdfs:label ?pLabel }}
+                OPTIONAL {{ ?o rdfs:label ?oLabel }}
+                {filter_stmt}
+            }}
+            """
+            count_res = fuseki_client.query_sparql(kb_id, count_sparql)
+            bindings = count_res.get("results", {}).get("bindings", [])
+            if bindings:
+                total_count = int(bindings[0]["total"]["value"])
+
+            # 2. Data Query
+            sparql = f"""
+            PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+            PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+            
+            SELECT ?s ?sLabel ?p ?pLabel ?o ?oLabel
+            FROM <urn:x-arq:UnionGraph>
+            WHERE {{
+                ?s ?p ?o .
+                OPTIONAL {{ ?s rdfs:label ?sLabel }}
+                OPTIONAL {{ ?p rdfs:label ?pLabel }}
+                OPTIONAL {{ ?o rdfs:label ?oLabel }}
+                {filter_stmt}
+            }}
+            {order_stmt}
+            LIMIT {limit}
+            OFFSET {skip}
+            """
+            
+            results = fuseki_client.query_sparql(kb_id, sparql)
+            bindings = results.get("results", {}).get("bindings", [])
+            
+            # Reification 및 매핑 로직 (기존과 동일하되 최적화 고려 - 일단 유지)
+            reification_query = """
+            PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+            PREFIX meta: <http://rag.local/meta/>
+            SELECT ?stmt ?subj ?pred ?obj ?sourceNodeId ?docId ?confidence
+            FROM <urn:x-arq:UnionGraph>
+            WHERE {
+              ?stmt rdf:type rdf:Statement ;
+                    rdf:subject ?subj ;
+                    rdf:predicate ?pred ;
+                    rdf:object ?obj ;
+                    meta:sourceNodeId ?sourceNodeId .
+              OPTIONAL { ?stmt meta:docId ?docId }
+              OPTIONAL { ?stmt meta:confidence ?confidence }
+            }
+            LIMIT 2000 
+            """
+            # Note: LIMIT increased to 2000 to cover more results
+            
+            reif_results = fuseki_client.query_sparql(kb_id, reification_query)
+            reif_bindings = reif_results.get("results", {}).get("bindings", [])
+            
+            triple_source_map = {}
+            doc_id_map = {}
+            triple_conf_map = {}
+            
+            for rb in reif_bindings:
+                s = rb["subj"]["value"]
+                p = rb["pred"]["value"]
+                o = rb["obj"]["value"]
+                
+                if "sourceNodeId" in rb:
+                    node_id = rb["sourceNodeId"]["value"]
+                    triple_source_map[(s, p, o)] = node_id
+                    chunk_ids_to_fetch.add(node_id)
+                
+                if "docId" in rb:
+                    doc_id = rb["docId"]["value"]
+                    doc_id_map[(s, p, o)] = doc_id
+                    
+                if "confidence" in rb:
+                    try:
+                        triple_conf_map[(s, p, o)] = float(rb["confidence"]["value"])
+                    except:
+                        pass
+            
+            for b in bindings:
+                s_uri = b["s"]["value"]
+                p_uri = b["p"]["value"]
+                o_uri = b["o"]["value"]
+                
+                s_label = b.get("sLabel", {}).get("value")
+                if not s_label:
+                    s_label = urllib.parse.unquote(s_uri.split("/")[-1]).replace("_", " ")
+                
+                p_label = b.get("pLabel", {}).get("value")
+                if not p_label:
+                    p_label = urllib.parse.unquote(p_uri.split("/")[-1]).replace("_", " ")
+                
+                o_label = b.get("oLabel", {}).get("value")
+                if not o_label:
+                    o_label = urllib.parse.unquote(o_uri.split("/")[-1]).replace("_", " ")
+                
+                # 매핑된 chunk_id, doc_id 찾기
+                chunk_id = triple_source_map.get((s_uri, p_uri, o_uri))
+                doc_id = doc_id_map.get((s_uri, p_uri, o_uri))
+                confidence = triple_conf_map.get((s_uri, p_uri, o_uri))
+                
+                triples.append(TripleRecord(
+                    subject=s_label,
+                    predicate=p_label,
+                    object=o_label,
+                    doc_id=doc_id,
+                    doc_filename=doc_map.get(doc_id) if doc_id else None,
+                    chunk_id=chunk_id,
+                    chunk_text=None,
+                    confidence=confidence
+                ))
+        
+        # 청크 원문 조회 (Milvus에서)
+        chunk_text_map = {}
+        if include_chunk_text and chunk_ids_to_fetch:
+            try:
+                from app.core.milvus import create_collection
+                collection = create_collection(kb_id)
+                collection.load()
+                
+                chunk_id_list = list(chunk_ids_to_fetch)[:100]  # 최대 100개
+                # chunk_id 필드로 조회
+                expr = f'chunk_id in {chunk_id_list}'
+                results = collection.query(
+                    expr=expr,
+                    output_fields=["chunk_id", "content"],
+                    limit=100
+                )
+                
+                for r in results:
+                    chunk_text_map[r.get("chunk_id")] = r.get("content", "")[:500]
+                    
+                print(f"[GraphData] Fetched {len(chunk_text_map)} chunk texts from Milvus")
+                
+            except Exception as e:
+                print(f"[GraphData] Failed to fetch chunk texts: {e}")
+        
+        # 청크 텍스트를 트리플에 매핑
+        if chunk_text_map:
+            for t in triples:
+                if t.chunk_id and t.chunk_id in chunk_text_map:
+                    t.chunk_text = chunk_text_map[t.chunk_id]
+        
+
+
+        print(f"[GraphData] Returning {len(triples)} triples (Total: {total_count})")
+        
+        return {
+            "triples": [t.dict() for t in triples],
+            "total": total_count,
+            "skip": skip,
+            "limit": limit,
+            "has_chunk_mappings": len(chunk_ids_to_fetch) > 0
+        }
+        
+    except Exception as e:
+        print(f"[GraphData] Error fetching triples: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+

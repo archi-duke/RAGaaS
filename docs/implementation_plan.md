@@ -1,49 +1,28 @@
-# Implementation Plan - RAG Management System
+# [기능 추가] 부분 텍스트 추출 테스트
 
-# Goal Description
-Build a Milvus-based RAG management system with React frontend and FastAPI backend. The system will support multiple Knowledge Bases, document management, and advanced retrieval strategies (Keyword, ANN, 2-Stage).
+## 목표
+청크 전체가 아닌, 사용자가 선택한 특정 텍스트 부분에 대해서만 "추출 테스트(Extract Test)"를 수행할 수 있도록 지원합니다.
 
-## User Review Required
-> [!IMPORTANT]
-> - **Database**: SQLite will be used for metadata for simplicity.
-> - **Vector DB**: Milvus is expected to be running or accessible. I will assume a local Docker setup or similar is available or I will provide instructions.
-> - **Embeddings**: Will use a default model (e.g., OpenAI or a local HuggingFace model) but this needs to be configurable.
+## 변경 제안
 
-## Proposed Changes
+### 프론트엔드
+#### [수정] [ChunkDetailModal.tsx](file:///Users/dukekimm/Works/RAGaaS/frontend/src/components/ChunkDetailModal.tsx)
+1. **선택 영역 감지 (Selection Tracking)**:
+   - `useRef`를 사용하여 청크 콘텐츠 영역(`div`)을 참조합니다.
+   - `selectionText` 상태(State)를 추가합니다.
+   - `document.addEventListener('selectionchange')`를 통해 사용자가 텍스트를 선택할 때, 해당 선택이 콘텐츠 영역 내부인지 확인하고 텍스트를 저장합니다.
 
-### Project Structure
-#### [NEW] /Users/dukekimm/Works/RAGaaS
-- `backend/`: FastAPI application
-- `frontend/`: React application
-- `docker-compose.yml`: For Milvus and other services (optional but recommended)
+2. **추출 로직 (Extraction Logic)**:
+   - `handleExtract` 함수에서 `selectionText`가 존재하면 이를 추출 대상(`chunk_text`)으로 사용합니다.
+   - 선택된 텍스트가 없으면 기존처럼 `chunk.content`(전체)를 사용합니다.
 
-### Backend (FastAPI)
-#### [NEW] backend/
-- `main.py`: Entry point
-- `app/api/`: API routers (knowledge_base.py, document.py, retrieval.py)
-- `app/core/`: Config, database connection, Milvus client
-- `app/models/`: SQLModel/Pydantic models
-- `app/services/`: Business logic (Ingestion, Chunking, Retrieval)
-    - `chunking.py`: Size, Parent-Child, Context-Aware logic
-    - `retrieval.py`: Keyword, ANN, 2-Stage logic
+3. **UI 피드백 (Button Feedback)**:
+   - "Extract" 버튼의 라벨을 상황에 따라 변경하여 명확성을 높입니다:
+     - 텍스트 선택 시: "Extract (Selection)"
+     - 선택 없음: "Extract Test"
 
-### Frontend (React)
-#### [NEW] frontend/
-- `src/components/`: Reusable components
-- `src/pages/`: Dashboard, KnowledgeBaseDetail
-- `src/services/`: API client
-- `src/types/`: TypeScript interfaces
-
-## Verification Plan
-
-### Automated Tests
-- Backend: `pytest` for API endpoints and logic.
-- Frontend: Basic rendering tests.
-
-### Manual Verification
-- **Setup**: Run backend and frontend.
-- **Flow**:
-    1.  Create a Knowledge Base.
-    2.  Upload a PDF/TXT file.
-    3.  Check if chunks are created (Size, Parent-Child, etc.).
-    4.  Perform a search (Keyword, ANN, 2-Stage) and verify results.
+## 검증 계획
+### 수동 검증
+1. 청크 상세(Chunk Detail) 모달을 엽니다.
+2. **시나리오 A (기본)**: 텍스트 선택 없이 "Extract Test" 하위의 "Extract" 버튼 클릭 -> 전체 내용이 추출되는지 확인.
+3. **시나리오 B (부분 선택)**: 특정 문장을 드래그하여 선택한 후 "Extract" 클릭 -> 선택한 문장만 추출되는지 확인 (버튼 라벨 변경 확인).

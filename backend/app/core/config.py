@@ -5,7 +5,8 @@ class Settings(BaseSettings):
     API_V1_STR: str = "/api"
     
     # Database
-    DATABASE_URL: str = "sqlite+aiosqlite:////app/data/rag_system.db"
+    MONGO_URI: str = "mongodb://root:example@mongo:27017"
+    MONGO_DB: str = "ragaas"
     
     # Milvus
     MILVUS_HOST: str = "localhost"
@@ -23,8 +24,12 @@ class Settings(BaseSettings):
     # OpenAI
     OPENAI_API_KEY: str = ""
 
-    # Doc2Onto
-    DOC2ONTO_CONFIG_PATH: str = "doc2onto_config.yaml"
+    # Ingest Service (LlamaIndex based)
+    INGEST_SERVICE_URL: str = "http://ingest-service:8001"
+    SHARED_STORAGE_PATH: str = "/data/uploads"  # Shared volume for file exchange
+    
+
+
     
     class Config:
         env_file = ".env"

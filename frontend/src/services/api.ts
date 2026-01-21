@@ -28,6 +28,8 @@ export const kbApi = {
     getExtractionPrompt: () => api.get('/knowledge-bases/extraction-prompt/content'),
     saveExtractionPrompt: (content: string) => api.post('/knowledge-bases/extraction-prompt/save', { content }),
     getQueryPrompt: (type: 'ontology_plus' | 'ontology_minus' | 'neo4j' = 'ontology_minus') => api.get('/knowledge-bases/query-prompt/content', { params: { type } }),
+    getTriples: (kbId: string, backend: string, skip: number = 0, limit: number = 50, sort?: any, filter?: any) => api.get(`/retrieval/graph/triples/${kbId}`, { params: { backend, skip, limit, include_chunk_text: false, sort: sort ? JSON.stringify(sort) : undefined, filter: filter ? JSON.stringify(filter) : undefined } }),
+    getChunk: (kbId: string, chunkId: string) => api.get(`/knowledge-bases/${kbId}/chunks/${chunkId}`),
 };
 
 export const docApi = {
@@ -37,6 +39,22 @@ export const docApi = {
         formData.append('file', file);
         if (config) {
             formData.append('chunking_config', JSON.stringify(config));
+            // Send enable_text_cleaning as separate form field
+            if (config.enable_text_cleaning !== undefined) {
+                formData.append('enable_text_cleaning', String(config.enable_text_cleaning));
+            }
+            // Send enable_subject_restoration as separate form field
+            if (config.enable_subject_restoration !== undefined) {
+                formData.append('enable_subject_restoration', String(config.enable_subject_restoration));
+            }
+            // Send enable_inference as separate form field
+            if (config.enable_inference !== undefined) {
+                formData.append('enable_inference', String(config.enable_inference));
+            }
+            // Send extraction_examples_yaml as separate form field
+            if (config.extraction_examples_yaml) {
+                formData.append('extraction_examples_yaml', config.extraction_examples_yaml);
+            }
         }
         return api.post(`/knowledge-bases/${kbId}/documents`, formData, {
             headers: {
@@ -44,6 +62,7 @@ export const docApi = {
             },
         });
     },
+
     delete: (kbId: string, docId: string) => api.delete(`/knowledge-bases/${kbId}/documents/${docId}`),
     getChunks: (kbId: string, docId: string) => api.get(`/knowledge-bases/${kbId}/documents/${docId}/chunks`),
     updateChunk: (kbId: string, docId: string, chunkId: string, content: string) => {
@@ -55,6 +74,8 @@ export const docApi = {
             },
         });
     },
+    update: (kbId: string, docId: string, data: { extraction_examples?: string; custom_prompt?: string }) =>
+        api.patch(`/knowledge-bases/${kbId}/documents/${docId}`, data),
 };
 
 export const retrievalApi = {
@@ -120,4 +141,51 @@ export const retrievalApi = {
     }) => api.post(`/knowledge-bases/${kbId}/chat`, data),
 };
 
+// Ingest Service API (runs on port 8001)
+const ingestApi = axios.create({
+    baseURL: 'http://localhost:8001/api',
+    headers: {
+        'Content-Type': 'application/json',
+    },
+});
+
+export const extractionApi = {
+    preview: (data: {
+        kb_id: string;
+        doc_id: string;
+        file_path: string;
+        chunking?: any;
+        graph?: any;
+        graph_store?: string;
+        enable_text_cleaning?: boolean;
+        enable_subject_restoration?: boolean;
+        extraction_examples_yaml?: string;
+        custom_prompt?: string;
+    }) => ingestApi.post('/preview', data),
+
+    confirm: (previewId: string, data?: {
+        enable_inference?: boolean;
+        callback_url?: string;
+    }) => ingestApi.post(`/confirm/${previewId}`, data || {}),
+
+    discard: (previewId: string) => ingestApi.delete(`/preview/${previewId}`),
+
+    getJobStatus: (jobId: string) => ingestApi.get(`/jobs/${jobId}`),
+
+    // Extract triples from a single chunk (for testing extraction settings)
+    extractChunk: (data: {
+        chunk_text: string;
+        extractor_type?: string;
+        max_paths_per_chunk?: number;
+        max_triplets_per_chunk?: number;
+        num_workers?: number;
+        generate_inverse_relations?: boolean;
+        enable_text_cleaning?: boolean;
+        enable_subject_restoration?: boolean;
+        extraction_examples_yaml?: string;
+        custom_prompt?: string;
+    }) => ingestApi.post('/extract-chunk', data),
+};
+
 export default api;
+
