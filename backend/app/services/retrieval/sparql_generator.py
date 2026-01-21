@@ -140,17 +140,57 @@ You MUST respond in JSON format:
         context: Optional[str] = None,
         schema_info: Optional[Dict] = None,
         entities: Optional[List[str]] = None,
+        live_schema: Optional[Dict] = None, # [NEW]
+        context_predicates: Optional[List[str]] = None, # [NEW] Entity-Centric
     ) -> str:
         """Build the user message following the Vibe Coding Input Contract."""
         
+        # Combine static schema and live schema for property_index
+        all_predicates = set()
+        all_classes = set()
+        
+        if schema_info:
+            # Extract names from promoted schema
+            rels = schema_info.get("relations", [])
+            for r in rels:
+                if isinstance(r, dict):
+                    all_predicates.add(r.get("label", r.get("uri")))
+                else: all_predicates.add(str(r))
+            
+            clses = schema_info.get("classes", {})
+            for c_key, c_val in clses.items():
+                if isinstance(c_val, dict):
+                    all_classes.add(c_val.get("label", c_key))
+                else: all_classes.add(str(c_key))
+        
+        if live_schema:
+            for p in live_schema.get("predicates", []): all_predicates.add(p)
+            for c in live_schema.get("classes", []): all_classes.add(c)
+
+        # [NEW] Entity-Centric Predicates 우선 사용
+        # context_predicates가 제공되면 property_index를 이것으로 대체
+        if context_predicates:
+            all_predicates = set(context_predicates)
+
         # Format input according to the contract
         user_content = f"""Input:
 - question: {question}
-- schema: {self._format_schema_info(schema_info) if schema_info else "(None provided - use general knowledge)"}
+- schema: (Classes: {", ".join(list(all_classes)) if all_classes else "(None detected in DB - Avoid rdf:type)"})
 - entity_index: {self._format_entity_index(entities or [])}
-- property_index: (Infer from schema or use general knowledge)
+- property_index: {json.dumps(list(all_predicates), ensure_ascii=False) if all_predicates else "(Infer from general knowledge)"}
 - prefixes:
 {self._format_prefixes()}
+"""
+        
+        # [NEW] Entity-Centric 힌트 추가
+        if context_predicates:
+            user_content += f"""
+[IMPORTANT - Entity-Centric Context]
+The following predicates are CONFIRMED to exist in the database for the entities mentioned in the question:
+{json.dumps(context_predicates, ensure_ascii=False, indent=2)}
+
+These predicates were directly extracted from the graph for the entities in the question.
+STRONGLY PREFER using these predicates over inventing new ones or relying on general knowledge.
 """
         
         if context:
@@ -158,89 +198,148 @@ You MUST respond in JSON format:
         
         return user_content
 
+    def _fetch_fuseki_schema(self, kb_id: str) -> Optional[Dict]:
+        """Fetch live schema (predicates and classes) from Fuseki for the given KB."""
+        if not kb_id:
+            return None
+            
+        try:
+            # Import inside method to avoid circular import (fuseki_client might depend on sparql_generator)
+            from app.core.fuseki import fuseki_client
+            
+            schema_info = {
+                "predicates": [],
+                "classes": []
+            }
+            
+            # 1. Fetch frequent Predicates (Top 50)
+            # Filter out system predicates
+            # Use UnionGraph to include data in Named Graphs
+            pred_query = """
+            SELECT DISTINCT ?p (COUNT(?s) as ?count)
+            FROM <urn:x-arq:UnionGraph>
+            WHERE {
+              ?s ?p ?o .
+              FILTER (!regex(str(?p), "rdf-syntax-ns#", "i"))
+              FILTER (!regex(str(?p), "rag.local/meta", "i"))
+              FILTER (!regex(str(?p), "rag.local/stmt", "i"))
+            }
+            GROUP BY ?p
+            ORDER BY DESC(?count)
+            LIMIT 200
+            """
+            
+            pred_results = fuseki_client.query_sparql(kb_id, pred_query)
+            bindings = pred_results.get("results", {}).get("bindings", [])
+            for b in bindings:
+                p_val = b["p"]["value"]
+                # Convert URI to short form if possible (e.g., rel:uses)
+                if "/rel/" in p_val:
+                    short_p = "rel:" + p_val.split("/rel/")[-1]
+                elif "#" in p_val:
+                    short_p = p_val.split("#")[-1]
+                else:
+                    short_p = p_val
+                schema_info["predicates"].append(short_p)
+                
+            # 2. Fetch Classes (Limit 20)
+            class_query = """
+            SELECT DISTINCT ?c
+            FROM <urn:x-arq:UnionGraph>
+            WHERE {
+              [] a ?c .
+              FILTER (!regex(str(?c), "rdf-syntax-ns#", "i"))
+            }
+            LIMIT 20
+            """
+            class_results = fuseki_client.query_sparql(kb_id, class_query)
+            c_bindings = class_results.get("results", {}).get("bindings", [])
+            for b in c_bindings:
+                c_val = b["c"]["value"]
+                if "/class/" in c_val:
+                    short_c = "class:" + c_val.split("/class/")[-1]
+                else:
+                    short_c = c_val.split("/")[-1]
+                schema_info["classes"].append(short_c)
+            
+            pred_count = len(schema_info['predicates'])
+            class_count = len(schema_info['classes'])
+            
+            if pred_count == 0 and class_count == 0:
+                print(f"[SPARQLGenerator] WARNING: Dynamic Schema fetched but EMPTY for {kb_id}. Predicates: {pred_count}, Classes: {class_count}")
+            else:
+                print(f"[SPARQLGenerator] Dynamic Schema for {kb_id}: {pred_count} predicates, {class_count} classes")
+                
+            return schema_info
+            
+        except Exception as e:
+            print(f"[SPARQLGenerator] ERROR fetching dynamic schema: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+
     def generate(
         self,
         question: str,
         context: Optional[str] = None,
         mode: str = "ontology",
         inverse_relation: str = "auto",
-        custom_prompt: Optional[str] = None,
+        custom_prompt: Optional[str] = None, # Kept for backward compatibility but used as Context
         schema_info: Optional[Dict] = None,
-        system_prompt_override: Optional[str] = None,
-        entities: Optional[List[str]] = None,  # NEW: Pass known entities
+        # system_prompt_override: Removed
+        entities: Optional[List[str]] = None,
+        kb_id: Optional[str] = None,     # [NEW]
+        use_dynamic_schema: bool = True,  # Default to True
+        context_predicates: Optional[List[str]] = None  # [NEW] Entity-Centric Schema
     ) -> Dict:
-        """Convert natural language question to SPARQL using Vibe Coding pipeline.
+        """Convert natural language question to SPARQL using Vibe Coding pipeline."""
+        print(f"[SPARQLGenerator] Generate called. KB: {kb_id}, DynamicSchema: {use_dynamic_schema}", flush=True)
         
-        Args:
-            question: The natural language question to convert.
-            context: Optional additional context (e.g., entity names found).
-            mode: Query mode ("ontology" or other).
-            inverse_relation: Inverse relation handling ("auto", "always", "none").
-            custom_prompt: User-provided prompt override.
-            schema_info: Promoted ontology schema (classes, relations).
-            system_prompt_override: Complete system prompt override.
-            entities: List of known entity names/labels for entity_index.
-        
-        Returns:
-            Dict containing at minimum:
-                - sparql: The generated SPARQL query (or None on error).
-            And optionally (Vibe Coding output):
-                - intent: Detected intent (e.g., RELATION_CHAIN).
-                - slots: Extracted slots.
-                - template_id: Selected template.
-                - mappings: Entity/property mappings.
-                - validation: Syntax/schema validation notes.
-        """
         from pathlib import Path
         
         system_prompt = ""
         
         # Define prompt file paths
         vibe_prompt_path = Path("data/prompts/sparql_vibe_prompt.txt")
-        ontology_prompt_path = Path("data/prompts/sparql_ontology_prompt.txt")
-        legacy_prompt_path = Path("data/prompts/sparql_generation_prompt.txt")
-
-        # Prompt selection order:
-        # 1. System Prompt Override (from DB - highest priority for production)
-        if system_prompt_override:
-            system_prompt = system_prompt_override
-            print("[SPARQLGenerator] Using system prompt override (from DB)")
-        # 2. Custom Prompt (playground individual input)
-        elif custom_prompt:
-            system_prompt = custom_prompt
-            print("[SPARQLGenerator] Using custom prompt")
-        # 3. Vibe Prompt FROM FILE (development/fallback)
-        elif vibe_prompt_path.exists():
+        
+        # [REFAC] Strict Internal Prompt Policy
+        # Use ONLY the Vibe Coding prompt file.
+        if vibe_prompt_path.exists():
             system_prompt = vibe_prompt_path.read_text(encoding="utf-8")
-            print("[SPARQLGenerator] Using Vibe Coding prompt (from file)")
-        # 4. Ontology-specific prompt file (if schema_info is provided)
-        elif schema_info and ontology_prompt_path.exists():
-            system_prompt = ontology_prompt_path.read_text(encoding="utf-8")
-            print("[SPARQLGenerator] Using ontology-specific prompt (from file)")
-        # 5. Legacy Prompt File
-        elif legacy_prompt_path.exists():
-            system_prompt = legacy_prompt_path.read_text(encoding="utf-8")
-            print("[SPARQLGenerator] Using legacy prompt (from file)")
-        # 6. Fallback Default
+            print("[SPARQLGenerator] Using Vibe Coding prompt (internal file)", flush=True)
         else:
-            system_prompt = self.DEFAULT_SYSTEM_PROMPT
-            print("[SPARQLGenerator] Using default fallback prompt")
-        
-        # Inject Schema Info if available and NOT using Vibe prompt
-        # (Vibe prompt expects schema in user message, not system prompt)
-        if schema_info and not system_prompt_override and not Path("data/prompts/sparql_vibe_prompt.txt").exists():
-            system_prompt += self._format_schema_info(schema_info)
-        
+            # Minimal Fallback if file is missing (Safety Net)
+            print("[SPARQLGenerator] WARNING: Vibe prompt file missing! Using minimal fallback.", flush=True)
+            system_prompt = """You are a SPARQL Query Generator.
+            generate SPARQL 1.1 query for the user question.
+            Output JSON only: {"sparql": "..."}
+            """
+
+        # [NEW] Dynamic Schema Injection
+        live_schema = None
+        if use_dynamic_schema and kb_id:
+            print(f"[SPARQLGenerator] Attempting to fetch live schema for KB {kb_id}...", flush=True)
+            live_schema = self._fetch_fuseki_schema(kb_id)
+            if live_schema:
+                print(f"[SPARQLGenerator] Fetched live schema for KB {kb_id}", flush=True)
+
         # Handle inverse relation instructions
         if inverse_relation == "auto" or inverse_relation == "always":
             system_prompt += "\n\n[Additional Instructions]\n- When searching for relationships, actively use Property Path `|` and inverse `^` operators to solve directionality issues (e.g., `rel:teacher_of|^rel:student_of`)."
         elif inverse_relation == "none":
             system_prompt += "\n\n[Additional Instructions]\n- Use ONLY direct relations. Do NOT use inverse `^` operator."
+        
+        # [CRITICAL] If Simple Mode (no classes), add a note to system prompt too for redundancy
+        if live_schema and not live_schema.get("classes"):
+            system_prompt += "\n\n[CRITICAL]: No ontology classes found - avoid using rdf:type."
 
-        # Add Custom Prompt (User Override)
+        # Add Custom Prompt (User Context) - Demoted from Override to Append
         if custom_prompt:
-            system_prompt += f"\n\n[USER CUSTOM INSTRUCTIONS (PRIORITY OVERRIDE)]\n{custom_prompt}\n"
-
+             # Just append it as a "Note" to the system prompt purely for context, 
+             # OR pass it in user message. Let's append to system prompt as 'User Context' section 
+             # but ensuring it doesn't override the Vibe persona.
+            system_prompt += f"\n\n[User Context / Specific Request]\n{custom_prompt}\n"
+            
         # Build user message
         # Parse entities from context if not explicitly provided
         if entities is None and context:
@@ -255,6 +354,8 @@ You MUST respond in JSON format:
             context=context,
             schema_info=schema_info,
             entities=entities,
+            live_schema=live_schema, # [NEW]
+            context_predicates=context_predicates # [NEW]
         )
 
         headers = {

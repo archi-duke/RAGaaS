@@ -65,7 +65,7 @@ class CleanupService:
             # 2.1 DROP GRAPH (Named Graph)
             fuseki_client.drop_graph(kb_id, graph_uri)
             
-            # 2.2 Delete by Chunk IDs (Reification & Direct)
+            # 2.2 Delete by Chunk IDs (Reification & Direct) in ALL Named Graphs
             if chunk_ids:
                 # Batch delete if too many
                 batch_size = 50
@@ -75,40 +75,67 @@ class CleanupService:
                     # Quote IDs for SPARQL
                     quoted_ids = " ".join([f'"{cid}"' for cid in batch])
                     
+                    # [FIX] Use GRAPH ?g to target ALL named graphs. 
+                    # Without it, DELETE only affects the default graph.
                     delete_query = f"""
                     PREFIX rel: <http://rag.local/relation/>
                     PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
                     PREFIX meta: <http://rag.local/meta/>
                     
                     DELETE {{ 
-                        ?stmt ?stmt_p ?stmt_o .
-                        ?s ?p ?o .
-                        ?inv_s ?inv_p ?s .
+                        GRAPH ?g {{
+                            ?stmt ?stmt_p ?stmt_o .
+                            ?s ?p ?o .
+                            ?inv_s ?inv_p ?s .
+                        }}
                     }}
                     WHERE {{
-                        VALUES ?cid {{ {quoted_ids} }}
-                        {{
-                            # Pattern 1: Reification (meta:sourceNodeId)
-                            ?stmt meta:sourceNodeId ?cid .
-                            ?stmt ?stmt_p ?stmt_o .
-                            OPTIONAL {{
-                                ?stmt rdf:subject ?s .
-                                ?s ?p ?o .
-                                OPTIONAL {{ ?inv_s ?inv_p ?s }}
+                        GRAPH ?g {{
+                            VALUES ?cid {{ {quoted_ids} }}
+                            {{
+                                # Pattern 1: Reification (meta:sourceNodeId)
+                                ?stmt meta:sourceNodeId ?cid .
+                                ?stmt ?stmt_p ?stmt_o .
+                                OPTIONAL {{
+                                    ?stmt rdf:subject ?s .
+                                    ?s ?p ?o .
+                                    OPTIONAL {{ ?inv_s ?inv_p ?s }}
+                                }}
                             }}
-                        }}
-                        UNION
-                        {{
-                             # Pattern 2: Direct Link (source URI)
-                             # Construct URI from ID if needed, or if stored as literal
-                             BIND(URI(CONCAT("http://rag.local/source/", ?cid)) as ?srcUri)
-                             ?s rel:hasSource ?srcUri .
-                             ?s ?p ?o .
-                             OPTIONAL {{ ?inv_s ?inv_p ?s }}
+                            UNION
+                            {{
+                                 # Pattern 2: Direct Link (source URI)
+                                 BIND(URI(CONCAT("http://rag.local/source/", ?cid)) as ?srcUri)
+                                 ?s rel:hasSource ?srcUri .
+                                 ?s ?p ?o .
+                                 OPTIONAL {{ ?inv_s ?inv_p ?s }}
+                            }}
                         }}
                     }}
                     """
                     fuseki_client.update_sparql(kb_id, delete_query)
+                    
+                    # [ADD] Also drop manual graphs explicitly just in case they are completely separate
+                    for cid in batch:
+                        manual_graph_uri = f"urn:doc:manual_{cid}"
+                        fuseki_client.drop_graph(kb_id, manual_graph_uri)
+                
+            # 2.3 Cleanup by meta:docId (Final safety net)
+            final_cleanup_query = f"""
+            PREFIX meta: <http://rag.local/meta/>
+            DELETE {{ 
+                GRAPH ?g {{ ?s ?p ?o }} 
+            }}
+            WHERE {{
+                GRAPH ?g {{
+                    ?stmt meta:docId ?did .
+                    FILTER(?did = "{doc_id}")
+                    ?s ?p ?o .
+                }}
+            }}
+            """
+            fuseki_client.update_sparql(kb_id, final_cleanup_query)
+
                 
             print(f"[Cleanup] ✅ Fuseki deletion executed for {doc_id}")
             

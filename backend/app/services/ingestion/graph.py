@@ -184,16 +184,38 @@ class GraphProcessor:
 I have run a basic NLP extraction and found these potential candidates: {candidates_str}
 
 **Your Task:**
-1. **Verity & Filter**: Keep valid candidates from the list above.
+1. **Verify & Filter**: Keep valid candidates from the list above.
 2. **Discover Missing**: Read the text carefully to find **missed entities** that the NLP tool failed to catch (e.g., specific names, nicknames, novel terms).
    - *Example*: If text mentions "탈북자 강새벽", but NLP missed "강새벽", you MUST add it.
-3. **Clean & Normalize**: Remove common nouns/particles. formatting.
+3. **Clean & Normalize**: Remove common nouns/particles.
+4. **[NEW] Entity Deduplication & Normalization**: 
+   - If the same person/entity is mentioned with different names (e.g., full name vs. nickname, Korean vs. English), **choose ONE canonical name** and use it consistently.
+   - **Preference Order**: Full Korean Name > Nickname > English Name
+   - **Examples**:
+     * "성기훈", "기훈", "Seong Gi-hun" → Normalize to "성기훈" (full Korean name)
+     * "조상우", "상우", "Cho Sang-woo" → Normalize to "조상우"
+     * "오일남", "일남", "Oh Il-nam" → Normalize to "오일남"
+   - **CRITICAL**: Return ONLY the canonical name in the final entity list. Do NOT include variants.
 
 Text:
 {text}
 
-Return JSON with a single list of unique entities:
-{{"entities": ["Entity1", "Entity2", ...]}}
+Return JSON with:
+1. "entities": List of unique, normalized canonical entity names
+2. "entity_mappings": Dictionary mapping all variants to their canonical form (for reference)
+
+Example Output:
+{{
+  "entities": ["성기훈", "조상우", "오일남"],
+  "entity_mappings": {{
+    "기훈": "성기훈",
+    "Seong Gi-hun": "성기훈",
+    "상우": "조상우",
+    "Cho Sang-woo": "조상우",
+    "일남": "오일남",
+    "Oh Il-nam": "오일남"
+  }}
+}}
 """
         
         try:
@@ -203,11 +225,19 @@ Return JSON with a single list of unique entities:
                 temperature=0.1,
                 response_format={"type": "json_object"}
             )
-            entities = json.loads(r1.choices[0].message.content).get("entities", [])
+            response_data = json.loads(r1.choices[0].message.content)
+            entities = response_data.get("entities", [])
+            entity_mappings = response_data.get("entity_mappings", {})
+            
             logger.info(f"[Graph] Pass 1 Final entities ({len(entities)}): {entities[:10]}...")
+            if entity_mappings:
+                logger.info(f"[Graph] Entity mappings found: {len(entity_mappings)} variants normalized")
+                print(f"[Graph] Entity Normalization Map: {entity_mappings}")
         except Exception as e:
             logger.error(f"Pass 1 LLM failed: {e}")
             entities = list(spacy_candidates) if spacy_candidates else []
+            entity_mappings = {}
+
 
 
         # Pass 2: Relation Extraction with Hints
@@ -247,9 +277,23 @@ Return JSON with a single list of unique entities:
         chunk_uri = f"<{self.namespace_source}{chunk_id}>"
         
         for item in triples_data:
-            subj = self._sanitize_uri(item['subject'])
+            # [NEW] Entity Normalization: 변형된 이름을 정규 이름으로 변환
+            subject_raw = item['subject']
+            object_raw = item['object']
+            
+            # entity_mappings에서 정규 이름 찾기 (없으면 원본 사용)
+            subject_normalized = entity_mappings.get(subject_raw, subject_raw)
+            object_normalized = entity_mappings.get(object_raw, object_raw)
+            
+            # 정규화 로그 (변경된 경우만)
+            if subject_raw != subject_normalized:
+                logger.info(f"[Graph] Normalized subject: '{subject_raw}' -> '{subject_normalized}'")
+            if object_raw != object_normalized:
+                logger.info(f"[Graph] Normalized object: '{object_raw}' -> '{object_normalized}'")
+            
+            subj = self._sanitize_uri(subject_normalized)
             pred = self._sanitize_uri(item['predicate'])
-            obj = self._sanitize_uri(item['object'])
+            obj = self._sanitize_uri(object_normalized)
             
             # URIs
             s_uri = f"<{self.namespace_entity}{subj}>"
@@ -278,14 +322,14 @@ Return JSON with a single list of unique entities:
             # Link Object to Chunk (optional, but good for discovery)
             rdf_triples.append(f"{o_uri} <{self.namespace_relation}hasSource> {chunk_uri} .")
             
-            # Annotate Subject with Label
-            rdf_triples.append(f'{s_uri} <http://www.w3.org/2000/01/rdf-schema#label> "{item["subject"]}" .')
+            # Annotate Subject with Label (정규화된 이름 사용)
+            rdf_triples.append(f'{s_uri} <http://www.w3.org/2000/01/rdf-schema#label> "{subject_normalized}" .')
 
             # Annotate Predicate with Label (Critical for search)
             rdf_triples.append(f'{p_uri} <http://www.w3.org/2000/01/rdf-schema#label> "{item["predicate"]}" .')
 
-            # Annotate Object with Label
-            rdf_triples.append(f'{o_uri} <http://www.w3.org/2000/01/rdf-schema#label> "{item["object"]}" .')
+            # Annotate Object with Label (정규화된 이름 사용)
+            rdf_triples.append(f'{o_uri} <http://www.w3.org/2000/01/rdf-schema#label> "{object_normalized}" .')
 
         return {
             "rdf_triples": rdf_triples,

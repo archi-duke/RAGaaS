@@ -382,23 +382,29 @@ async def save_extraction_rules(data: dict = Body(...)):
 
 @router.get("/query-prompt/content")
 async def get_query_prompt_content(type: str = "ontology_minus"):
-    # Map type to DB type
-    p_type_map = {
-        "neo4j": "cypher",
-        "ontology_plus": "sparql", # assuming single sparql prompt or update logic
-        "ontology_minus": "sparql"
+    # Map input type to specific DB prompt name
+    # This prevents ambiguity when multiple prompts have the same 'type' (e.g., sparql)
+    p_name_map = {
+        "neo4j": "cypher_generation_prompt",
+        "ontology_plus": "sparql_ontology_prompt",
+        "ontology_minus": "sparql_generation_prompt"
     }
-    # Special handling for plus/minus distinction if stored differently
-    # For now, let's look for exact match or general type
+
+    target_name = p_name_map.get(type, "sparql_generation_prompt")
     
-    target_type = p_type_map.get(type, "sparql")
-    
-    # Find prompt in DB
-    prompt = await PromptTemplate.find_one(PromptTemplate.type == target_type)
+    # Find prompt in DB by NAME
+    prompt = await PromptTemplate.find_one(PromptTemplate.name == target_name)
+
     if not prompt:
-        # Fallback to try finding by approximate name if type doesn't match
-        # This handles the case where import_prompts.py used specific logic
-        pass
+        # Fallback logic if specific name not found
+        # Try finding by type as a backup (though less reliable)
+        p_type_map = {
+            "neo4j": "cypher",
+            "ontology_plus": "sparql",
+            "ontology_minus": "sparql"
+        }
+        target_type = p_type_map.get(type, "sparql")
+        prompt = await PromptTemplate.find_one(PromptTemplate.type == target_type)
 
     if prompt:
         return {"content": prompt.content}

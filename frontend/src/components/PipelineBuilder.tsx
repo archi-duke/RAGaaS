@@ -641,29 +641,9 @@ export default function PipelineBuilder({
                                 />
                                 Entity Expand
                             </label>
-                            <button
-                                onClick={() => {
-                                    setEditingPromptStage(index);
-                                    if (!params.custom_query_prompt) {
-                                        loadGraphDefaultPrompt();
-                                    } else {
-                                        setTempPrompt(params.custom_query_prompt);
-                                    }
-                                }}
-                                style={{
-                                    padding: '6px 12px',
-                                    fontSize: '0.75rem',
-                                    backgroundColor: '#f1f5f9',
-                                    border: '1px solid #e2e8f0',
-                                    borderRadius: '6px',
-                                    cursor: 'pointer',
-                                    color: '#475569',
-                                    fontWeight: 500,
-                                    whiteSpace: 'nowrap'
-                                }}
-                            >
-                                Query Prompt
-                            </button>
+
+                            {/* Query Prompt Button REMOVED */}
+
                             {/* Dynamic Schema - only show when NOT promoted */}
                             {!isOntologyPromoted && (
                                 <ParamCheckbox
