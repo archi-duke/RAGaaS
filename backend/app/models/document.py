@@ -26,7 +26,6 @@ class Document(Document):
     max_paths: Optional[int] = None
     enable_text_cleaning: Optional[bool] = False
     enable_subject_restoration: Optional[bool] = True
-    enable_inference: Optional[bool] = False
     generate_inverse: Optional[bool] = False
     extraction_examples: Optional[str] = None
     custom_prompt: Optional[str] = None

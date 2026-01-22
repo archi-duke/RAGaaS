@@ -234,10 +234,10 @@ export default function SearchResults({ chunks, kbId, graphBackend, logs, pipeli
                                         width: '100%',
                                         boxSizing: 'border-box',
                                         padding: '1.25rem',
-                                        background: isGraph ? '#f0fdf4' : '#f8fafc',
+                                        background: isGraph ? '#eff6ff' : '#f8fafc',
                                         borderRadius: '8px',
-                                        border: isGraph ? '1px solid #86efac' : '1px solid var(--border)',
-                                        borderLeft: isGraph ? '4px solid #166534' : '4px solid var(--primary)',
+                                        border: isGraph ? '1px solid #93c5fd' : '1px solid var(--border)',
+                                        borderLeft: isGraph ? '4px solid #1e40af' : '4px solid var(--primary)',
                                         position: 'relative'
                                     }}
                                 >
@@ -251,11 +251,11 @@ export default function SearchResults({ chunks, kbId, graphBackend, logs, pipeli
                                         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
                                             <span style={{
                                                 fontWeight: 600,
-                                                background: isGraph ? '#dcfce7' : 'transparent',
-                                                color: isGraph ? '#14532d' : 'inherit',
+                                                background: isGraph ? '#dbeafe' : 'transparent',
+                                                color: isGraph ? '#1e3a8a' : 'inherit',
                                                 padding: isGraph ? '0.2rem 0.6rem' : '0',
                                                 borderRadius: isGraph ? '20px' : '0',
-                                                border: isGraph ? '1px solid #bbf7d0' : 'none',
+                                                border: isGraph ? '1px solid #bfdbfe' : 'none',
                                                 display: 'flex',
                                                 alignItems: 'center',
                                                 gap: '4px'
@@ -271,7 +271,7 @@ export default function SearchResults({ chunks, kbId, graphBackend, logs, pipeli
                                         </div>
                                         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
                                             {isGraph && (
-                                                <span className="badge" style={{ fontSize: '0.65rem', backgroundColor: '#dcfce7', color: '#166534' }}>
+                                                <span className="badge" style={{ fontSize: '0.65rem', backgroundColor: '#dbeafe', color: '#1e40af' }}>
                                                     Graph
                                                 </span>
                                             )}

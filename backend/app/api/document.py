@@ -18,7 +18,6 @@ async def upload_document(
     chunking_config: str = Form(None),
     enable_text_cleaning: bool = Form(False),
     enable_subject_restoration: bool = Form(True),
-    enable_inference: bool = Form(False),
     extraction_examples_yaml: str = Form(None)
 ):
     # Fetch Knowledge Base
@@ -126,8 +125,6 @@ async def upload_document(
         enable_text_cleaning = final_config["enable_text_cleaning"]
     if "enable_subject_restoration" in final_config:
         enable_subject_restoration = final_config["enable_subject_restoration"]
-    if "enable_inference" in final_config:
-        enable_inference = final_config["enable_inference"]
     
     
     # Load custom prompt for graph extraction
@@ -166,9 +163,7 @@ async def upload_document(
     # Update Document with Extraction Settings
     doc.extractor_type = graph_config.get("extractor_type")
     doc.max_paths = graph_config.get("max_paths_per_chunk")
-    doc.enable_text_cleaning = enable_text_cleaning
     doc.enable_subject_restoration = enable_subject_restoration
-    doc.enable_inference = enable_inference
     doc.generate_inverse = graph_config.get("generate_inverse_relations")
     doc.extraction_examples = final_examples_yaml
     doc.custom_prompt = graph_extraction_prompt
@@ -187,9 +182,7 @@ async def upload_document(
                 chunking_config=chunking_cfg,
                 graph_config=graph_config,
                 graph_store="fuseki" if kb.graph_backend == "ontology" else "neo4j",
-                enable_text_cleaning=enable_text_cleaning,
                 enable_subject_restoration=enable_subject_restoration,
-                enable_inference=enable_inference,
                 extraction_examples_yaml=final_examples_yaml,
                 custom_prompt=graph_extraction_prompt,
                 callback_url="http://backend:8000/api/knowledge-bases/ingest/callback"

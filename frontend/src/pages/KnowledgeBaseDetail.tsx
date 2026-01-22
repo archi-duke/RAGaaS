@@ -133,7 +133,13 @@ export default function KnowledgeBaseDetail() {
         loadSettings();
 
         // WebSocket connection for real-time document status updates
-        const ws = new WebSocket(`ws://localhost:8000/api/ws/${id}`);
+        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsHost = window.location.hostname;
+        const wsPort = window.location.port === '3000' ? '8000' : (window.location.port || '8000');
+        const wsUrl = `${wsProtocol}//${wsHost}:${wsPort}/api/ws/${id}`;
+
+        console.log(`[WebSocket] Connecting to: ${wsUrl}`);
+        const ws = new WebSocket(wsUrl);
 
         ws.onopen = () => {
             console.log('Connected to WebSocket');

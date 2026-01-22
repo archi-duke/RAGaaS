@@ -127,135 +127,40 @@ class GraphProcessor:
 
         # MULTI-PASS STRATEGY IMPLEMENTATION (HYBRID)
         
-        # Pass 1: HYBRID Entity Extraction (spaCy + LLM filtering)
-        print("[Graph] Pass 1: Hybrid Entity Extraction (spaCy + LLM)")
+        # [UPGRADED] Single-Pass Graph Extraction (Optimized for Recall)
+        # We merge Entity Discovery, Normalization, and Relation Extraction into one call
+        # to prevent missing valid entities like '장풍' that might be filtered in multi-pass.
+
+        # Add Critical Normalization Rules to the prompt
+        system_rules = """
+        ### CRITICAL RULE: Entity Normalization
+        1. **Consistency**: If the same person/entity has multiple names (e.g., "성기훈", "기훈", "Seong Gi-hun"), choose **ONE canonical Korean name** (e.g., "성기훈") and use it for all triples.
+        2. **Mappings**: Return a dictionary of variant-to-canonical mappings you performed.
+        3. **Capture All Valid Entities**: Do not ignore skills, abilities, or artifacts (e.g., "장풍", "달고나") if they have relationships.
+        """
         
-        # Step 1a: spaCy NER + Noun extraction
-        try:
-            import spacy
-            try:
-                nlp = spacy.load("ko_core_news_sm")
-            except OSError:
-                nlp = spacy.load("en_core_web_sm")  # Fallback
-            
-            doc = nlp(text)
-            spacy_candidates = set()
-            
-            # Extract named entities
-            for ent in doc.ents:
-                # Clean up: remove particles (의, 은, 는, 이, 가, 을, 를)
-                clean = ent.text.rstrip("의은는이가을를에서로")
-                if len(clean) >= 2:
-                    spacy_candidates.add(clean)
-            
-            # Extract nouns (PROPN, NOUN)
-            for token in doc:
-                if token.pos_ in ["PROPN", "NOUN"] and len(token.text) >= 2:
-                    # Skip particles
-                    if token.text not in ["것", "수", "등", "때", "중"]:
-                        spacy_candidates.add(token.text)
-            
-            print(f"[Graph] spaCy candidates ({len(spacy_candidates)}): {list(spacy_candidates)[:10]}...")
-        except Exception as e:
-            logger.error(f"spaCy extraction failed: {e}")
-            spacy_candidates = set()
-        
-        # Step 1b: LLM filters and completes the entity list
-        # Step 1b: LLM filters and completes the entity list
-        # We allow LLM to expand upon spaCy candidates to catch missed entities (e.g., "강새벽")
-        candidates_str = str(list(spacy_candidates)) if spacy_candidates else "None"
-        
-        filter_prompt = f"""Analyze the provided text and identify ALL key entities (Persons, Organizations, Concepts, Locations, Artifacts).
-
-I have run a basic NLP extraction and found these potential candidates: {candidates_str}
-
-**Your Task:**
-1. **Verify & Filter**: Keep valid candidates from the list above.
-2. **Discover Missing**: Read the text carefully to find **missed entities** that the NLP tool failed to catch (e.g., specific names, nicknames, novel terms).
-   - *Example*: If text mentions "탈북자 강새벽", but NLP missed "강새벽", you MUST add it.
-3. **Clean & Normalize**: Remove common nouns/particles.
-4. **[NEW] Entity Deduplication & Normalization**: 
-   - If the same person/entity is mentioned with different names (e.g., full name vs. nickname, Korean vs. English), **choose ONE canonical name** and use it consistently.
-   - **Preference Order**: Full Korean Name > Nickname > English Name
-   - **Examples**:
-     * "성기훈", "기훈", "Seong Gi-hun" → Normalize to "성기훈" (full Korean name)
-     * "조상우", "상우", "Cho Sang-woo" → Normalize to "조상우"
-     * "오일남", "일남", "Oh Il-nam" → Normalize to "오일남"
-   - **CRITICAL**: Return ONLY the canonical name in the final entity list. Do NOT include variants.
-
-Text:
-{text}
-
-Return JSON with:
-1. "entities": List of unique, normalized canonical entity names
-2. "entity_mappings": Dictionary mapping all variants to their canonical form (for reference)
-
-Example Output:
-{{
-  "entities": ["성기훈", "조상우", "오일남"],
-  "entity_mappings": {{
-    "기훈": "성기훈",
-    "Seong Gi-hun": "성기훈",
-    "상우": "조상우",
-    "Cho Sang-woo": "조상우",
-    "일남": "오일남",
-    "Oh Il-nam": "오일남"
-  }}
-}}
-"""
+        relation_prompt = prompt_template.replace("{text}", text) + "\n\n" + system_rules
         
         try:
+            print(f"[Graph] Single-Pass Extraction for chunk {chunk_id[:8]}...")
             r1 = await self.client.chat.completions.create(
-                model="gpt-4o", # Use strong model for entity discovery
-                messages=[{"role": "user", "content": filter_prompt}],
+                model="gpt-4o", # Use strong model for high-fidelity extraction
+                messages=[{"role": "user", "content": relation_prompt}],
                 temperature=0.1,
                 response_format={"type": "json_object"}
             )
-            response_data = json.loads(r1.choices[0].message.content)
-            entities = response_data.get("entities", [])
-            entity_mappings = response_data.get("entity_mappings", {})
-            
-            logger.info(f"[Graph] Pass 1 Final entities ({len(entities)}): {entities[:10]}...")
-            if entity_mappings:
-                logger.info(f"[Graph] Entity mappings found: {len(entity_mappings)} variants normalized")
-                print(f"[Graph] Entity Normalization Map: {entity_mappings}")
-        except Exception as e:
-            logger.error(f"Pass 1 LLM failed: {e}")
-            entities = list(spacy_candidates) if spacy_candidates else []
-            entity_mappings = {}
-
-
-
-        # Pass 2: Relation Extraction with Hints
-        # Use the main template from prompt_template (which was loaded earlier from file or default)
-        relation_prompt = prompt_template.replace("{text}", text)
-        
-        # Determine how to inject entities into Pass 2
-        # If the template has {entities} placeholder, use it.
-        # Otherwise, prepend it as a hint.
-        entities_str = ', '.join(entities) if entities else "None identified yet"
-        if "{entities}" in relation_prompt:
-            relation_prompt = relation_prompt.replace("{entities}", entities_str)
-        else:
-            # Prepend entities hint if not in template to maintain Multi-pass benefit
-            relation_prompt = f"Entities to focus on (Hints from Pass 1): {entities_str}\n\n" + relation_prompt
-
-        
-        try:
-            r2 = await self.client.chat.completions.create(
-                model="gpt-4o",
-                messages=[{"role": "user", "content": relation_prompt}],
-                temperature=0,
-                response_format={"type": "json_object"}
-            )
-            content = r2.choices[0].message.content
-            print(f"[Graph] Pass 2 LLM Response: {content[:200]}...")
+            content = r1.choices[0].message.content
             data = json.loads(content)
+            
+            # The LLM should now return both triples and entity_mappings in one go
             triples_data = data.get("triples", [])
-            print(f"[Graph] Pass 2 Extracted {len(triples_data)} triples.")
+            entity_mappings = data.get("entity_mappings", {})
+            
+            logger.info(f"[Graph] Extracted {len(triples_data)} triples with {len(entity_mappings)} mapping hints.")
         except Exception as e:
-            logger.error(f"Pass 2 failed: {e}")
+            logger.error(f"Single-Pass Extraction failed: {e}")
             triples_data = []
+            entity_mappings = {}
 
         rdf_triples = []
         

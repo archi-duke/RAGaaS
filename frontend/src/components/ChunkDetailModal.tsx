@@ -448,18 +448,8 @@ export default function ChunkDetailModal({ isOpen, onClose, chunk, title = 'Chun
                                     </div>
                                 </label>
 
-                                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
-                                    <input
-                                        type="checkbox"
-                                        checked={graphParams.enable_inference}
-                                        onChange={(e) => setGraphParams({ ...graphParams, enable_inference: e.target.checked })}
-                                        style={{ width: '1.1rem', height: '1.1rem' }}
-                                    />
-                                    <div>
-                                        <span style={{ color: '#334155', fontWeight: 500, fontSize: '0.9rem' }}>Inference</span>
-                                        <div style={{ fontSize: '0.75rem', color: '#64748b' }}>Apply reasoning rules</div>
-                                    </div>
-                                </label>
+
+
                             </div>
 
                             {/* Column 3: Customization Actions */}

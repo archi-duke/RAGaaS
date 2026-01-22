@@ -27,7 +27,6 @@ class IngestServiceClient:
         graph_store: str = "neo4j",
         enable_text_cleaning: bool = False,
         enable_subject_restoration: bool = True,
-        enable_inference: bool = False,
         extraction_examples_yaml: Optional[str] = None,
         custom_prompt: Optional[str] = None,
         callback_url: Optional[str] = None
@@ -42,7 +41,6 @@ class IngestServiceClient:
             "graph_store": graph_store,
             "enable_text_cleaning": enable_text_cleaning,
             "enable_subject_restoration": enable_subject_restoration,
-            "enable_inference": enable_inference,
             "extraction_examples_yaml": extraction_examples_yaml,
             "custom_prompt": custom_prompt,
             "callback_url": callback_url

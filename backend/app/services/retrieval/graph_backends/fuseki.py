@@ -429,26 +429,43 @@ class FusekiBackend(GraphBackend):
                                 # 예: "장풍을 사용하는 참가자는?"
                                 log_trace(f"[Fuseki] Pattern 1 detected: ? -> P -> {entity_name}")
                                 
-                                # [NEW] Fast Path for Pattern 1 (Incoming Triples)
-                                incoming_query = f"""
+                                # [UPGRADED] Fast Path for Pattern 1 (Bidirectional + Partial Match)
+                                # 양방향 조회 + 부분 일치: "장풍"을 검색하면 "장풍의 고수", "장풍의 창시자" 등도 포함
+                                bidirectional_query = f"""
                                 PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
                                 SELECT DISTINCT ?s ?p ?o ?sLabel ?oLabel
                                 FROM <urn:x-arq:UnionGraph>
                                 WHERE {{
-                                    BIND(<{entity_uri}> AS ?o) .
-                                    ?s ?p ?o .
-                                    ?s rdfs:label ?sLabel .
-                                    ?o rdfs:label ?oLabel .
+                                    {{
+                                        # Incoming: ?s -> ?p -> 엔티티 (엔티티가 목적어, 부분 일치 포함)
+                                        ?s ?p ?o .
+                                        ?o rdfs:label ?oLabel .
+                                        FILTER(CONTAINS(LCASE(?oLabel), LCASE("{entity_name}")))
+                                    }}
+                                    UNION
+                                    {{
+                                        # Outgoing: 엔티티 -> ?p -> ?o (엔티티가 주어, 부분 일치 포함)
+                                        ?s ?p ?o .
+                                        ?s rdfs:label ?sLabel .
+                                        FILTER(CONTAINS(LCASE(?sLabel), LCASE("{entity_name}")))
+                                    }}
+                                    OPTIONAL {{ ?s rdfs:label ?sLabel }}
+                                    OPTIONAL {{ ?o rdfs:label ?oLabel }}
+                                    # Reification 메타데이터 제외 (rdf:subject, rdf:predicate, rdf:object)
                                     FILTER(?p != <http://www.w3.org/1999/02/22-rdf-syntax-ns#type>)
+                                    FILTER(?p != <http://www.w3.org/1999/02/22-rdf-syntax-ns#subject>)
+                                    FILTER(?p != <http://www.w3.org/1999/02/22-rdf-syntax-ns#predicate>)
+                                    FILTER(?p != <http://www.w3.org/1999/02/22-rdf-syntax-ns#object>)
+                                    FILTER(?p != <http://www.w3.org/2000/01/rdf-schema#label>)
                                 }}
-                                LIMIT 50
+                                LIMIT 100
                                 """
                                 try:
-                                    log_trace(f"[Fuseki] Pattern 1 Fast Path SPARQL:\n{incoming_query}")
-                                    fast_results = fuseki_client.query_sparql(kb_id, incoming_query)
+                                    log_trace(f"[Fuseki] Pattern 1 Bidirectional Fast Path SPARQL:\n{bidirectional_query}")
+                                    fast_results = fuseki_client.query_sparql(kb_id, bidirectional_query)
                                     fast_bindings = fast_results.get("results", {}).get("bindings", [])
                                     if fast_bindings:
-                                        log_trace(f"[Fuseki] Pattern 1: Fast Path successful. Found {len(fast_bindings)} incoming triples.")
+                                        log_trace(f"[Fuseki] Pattern 1: Bidirectional Fast Path successful. Found {len(fast_bindings)} triples (incoming + outgoing).")
                                         for b in fast_bindings:
                                             p_uri = b["p"]["value"]
                                             # [FIX] UI 표시를 위해 'rel:' 접두어 제거
@@ -456,10 +473,14 @@ class FusekiBackend(GraphBackend):
                                             # 만약 'rel:' 같은게 붙어있으면 뗌 (예: rel:고수 -> 고수)
                                             short_p = short_p.replace("rel:", "").replace("prop:", "")
                                             
+                                            # [FIX] Label이 없을 경우 URI에서 추출 (KeyError 방지)
+                                            s_label = b.get("sLabel", {}).get("value") or (b["s"]["value"].split("/")[-1].split("#")[-1])
+                                            o_label = b.get("oLabel", {}).get("value") or (b["o"]["value"].split("/")[-1].split("#")[-1])
+
                                             found_triples.append({
-                                                "subject": b["sLabel"]["value"],
+                                                "subject": s_label,
                                                 "predicate": short_p,
-                                                "object": b["oLabel"]["value"]
+                                                "object": o_label
                                             })
                                             found_uris.add(b["s"]["value"])
                                             found_uris.add(b["o"]["value"])
@@ -477,36 +498,57 @@ class FusekiBackend(GraphBackend):
                                 # 예: "성기훈의 후배는 누구야?"
                                 log_trace(f"[Fuseki] Pattern 3 detected: {entity_name} -> P -> ?")
                                 
-                                # [NEW] Fast Path for Pattern 3 (Outgoing Triples)
-                                outgoing_query = f"""
+                                # [UPGRADED] Fast Path for Pattern 3 (Bidirectional + Partial Match)
+                                # 양방향 조회 + 부분 일치: "장풍"을 검색하면 "장풍의 고수" 등도 포함
+                                bidirectional_query = f"""
                                 PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
                                 SELECT DISTINCT ?s ?p ?o ?sLabel ?oLabel
                                 FROM <urn:x-arq:UnionGraph>
                                 WHERE {{
-                                    BIND(<{entity_uri}> AS ?s) .
-                                    ?s ?p ?o .
-                                    ?s rdfs:label ?sLabel .
-                                    ?o rdfs:label ?oLabel .
+                                    {{
+                                        # Outgoing: 엔티티 -> ?p -> ?o (엔티티가 주어, 부분 일치 포함)
+                                        ?s ?p ?o .
+                                        ?s rdfs:label ?sLabel .
+                                        FILTER(CONTAINS(LCASE(?sLabel), LCASE("{entity_name}")))
+                                    }}
+                                    UNION
+                                    {{
+                                        # Incoming: ?s -> ?p -> 엔티티 (엔티티가 목적어, 부분 일치 포함)
+                                        ?s ?p ?o .
+                                        ?o rdfs:label ?oLabel .
+                                        FILTER(CONTAINS(LCASE(?oLabel), LCASE("{entity_name}")))
+                                    }}
+                                    OPTIONAL {{ ?s rdfs:label ?sLabel }}
+                                    OPTIONAL {{ ?o rdfs:label ?oLabel }}
+                                    # Reification 메타데이터 제외
                                     FILTER(?p != <http://www.w3.org/1999/02/22-rdf-syntax-ns#type>)
+                                    FILTER(?p != <http://www.w3.org/1999/02/22-rdf-syntax-ns#subject>)
+                                    FILTER(?p != <http://www.w3.org/1999/02/22-rdf-syntax-ns#predicate>)
+                                    FILTER(?p != <http://www.w3.org/1999/02/22-rdf-syntax-ns#object>)
+                                    FILTER(?p != <http://www.w3.org/2000/01/rdf-schema#label>)
                                 }}
-                                LIMIT 50
+                                LIMIT 100
                                 """
                                 try:
-                                    log_trace(f"[Fuseki] Pattern 3 Fast Path SPARQL:\n{outgoing_query}")
-                                    fast_results = fuseki_client.query_sparql(kb_id, outgoing_query)
+                                    log_trace(f"[Fuseki] Pattern 3 Bidirectional Fast Path SPARQL:\n{bidirectional_query}")
+                                    fast_results = fuseki_client.query_sparql(kb_id, bidirectional_query)
                                     fast_bindings = fast_results.get("results", {}).get("bindings", [])
                                     if fast_bindings:
-                                        log_trace(f"[Fuseki] Pattern 3: Fast Path successful. Found {len(fast_bindings)} outgoing triples.")
+                                        log_trace(f"[Fuseki] Pattern 3: Bidirectional Fast Path successful. Found {len(fast_bindings)} triples (outgoing + incoming).")
                                         for b in fast_bindings:
                                             p_uri = b["p"]["value"]
                                             # [FIX] UI 표시를 위해 'rel:' 접두어 제거
                                             short_p = p_uri.split("/")[-1] if "/" in p_uri else p_uri
                                             short_p = short_p.replace("rel:", "").replace("prop:", "")
 
+                                            # [FIX] Label이 없을 경우 URI에서 추출 (KeyError 방지)
+                                            s_label = b.get("sLabel", {}).get("value") or (b["s"]["value"].split("/")[-1].split("#")[-1])
+                                            o_label = b.get("oLabel", {}).get("value") or (b["o"]["value"].split("/")[-1].split("#")[-1])
+
                                             found_triples.append({
-                                                "subject": b["sLabel"]["value"],
+                                                "subject": s_label,
                                                 "predicate": short_p,
-                                                "object": b["oLabel"]["value"]
+                                                "object": o_label
                                             })
                                             found_uris.add(b["s"]["value"])
                                             found_uris.add(b["o"]["value"])
@@ -544,9 +586,14 @@ class FusekiBackend(GraphBackend):
                                     BIND(<{uri2}> AS ?s) . BIND(<{uri1}> AS ?o) .
                                     ?s ?p ?o .
                                 }}
-                                ?s rdfs:label ?sLabel .
-                                ?o rdfs:label ?oLabel .
+                                OPTIONAL {{ ?s rdfs:label ?sLabel }}
+                                OPTIONAL {{ ?o rdfs:label ?oLabel }}
+                                # Reification 메타데이터 제외
                                 FILTER(?p != <http://www.w3.org/1999/02/22-rdf-syntax-ns#type>)
+                                FILTER(?p != <http://www.w3.org/1999/02/22-rdf-syntax-ns#subject>)
+                                FILTER(?p != <http://www.w3.org/1999/02/22-rdf-syntax-ns#predicate>)
+                                FILTER(?p != <http://www.w3.org/1999/02/22-rdf-syntax-ns#object>)
+                                FILTER(?p != <http://www.w3.org/2000/01/rdf-schema#label>)
                             }}
                             """
                             try:
@@ -563,10 +610,14 @@ class FusekiBackend(GraphBackend):
                                         short_p = p_uri.split("/")[-1] if "/" in p_uri else p_uri
                                         short_p = short_p.replace("rel:", "").replace("prop:", "")
 
+                                        # [FIX] Label이 없을 경우 URI에서 추출 (KeyError 방지)
+                                        s_label = b.get("sLabel", {}).get("value") or (b["s"]["value"].split("/")[-1].split("#")[-1])
+                                        o_label = b.get("oLabel", {}).get("value") or (b["o"]["value"].split("/")[-1].split("#")[-1])
+
                                         found_triples.append({
-                                            "subject": b["sLabel"]["value"],
+                                            "subject": s_label,
                                             "predicate": short_p,
-                                            "object": b["oLabel"]["value"]
+                                            "object": o_label
                                         })
                                         # URI도 secondary lookup을 위해 추가
                                         found_uris.add(b["s"]["value"])
