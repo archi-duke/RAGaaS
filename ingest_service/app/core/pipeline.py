@@ -325,6 +325,9 @@ Triplets (one per line, format: Subject|Relation|Object):"""
         enable_text_cleaning: bool = False,
         extraction_examples_yaml: Optional[str] = None,
         custom_prompt: Optional[str] = None,
+        enable_entity_normalization: bool = False,
+        normalization_algorithm: str = "embedding",
+        normalization_threshold: float = 0.85,
     ) -> Dict[str, Any]:
         """Execute the entire ingestion process"""
         
@@ -354,18 +357,40 @@ Triplets (one per line, format: Subject|Relation|Object):"""
         
         # 3. Extract graph (if enabled)
         triples = []
+        normalization_suggestions = None
         if graph_extractor_type != GraphExtractorType.NONE:
             print(f"[Pipeline] Extracting graph using {graph_extractor_type}...")
             triples = self.extract_graph(nodes, graph_extractor_type, graph_config, extraction_examples_yaml, custom_prompt)
             print(f"[Pipeline] Extracted {len(triples)} triples.")
             
             # 4. Entity Normalization (Pre-loading)
-            if graph_config.get("enable_entity_normalization", True):
+            if enable_entity_normalization and len(triples) > 0:
                 from app.core.entity_normalizer import entity_normalizer
                 original_count = len(triples)
+                
+                print(f"[Pipeline] Running entity normalization with {normalization_algorithm} algorithm (threshold={normalization_threshold})...")
+                
+                # 유사 엔티티 찾기 및 제안 생성
+                normalization_suggestions = await entity_normalizer.generate_normalization_suggestions(
+                    triples, 
+                    algorithm=normalization_algorithm,
+                    threshold=normalization_threshold,
+                    embed_model=self.embed_model,  # 임베딩 모델 전달
+                    llm=self.llm  # LLM 모델 전달
+                )
+                
+                print(f"[Pipeline] Found {len(normalization_suggestions)} entity groups to normalize")
+                
+                # [FIX] 제안된 통합을 실제로 트리플에 적용 (자동 적용)
+                if normalization_suggestions:
+                    original_triples_count = len(triples)
+                    triples = entity_normalizer.apply_all_normalizations(triples, normalization_suggestions)
+                    print(f"[Pipeline] Applied similarity-based normalization to {len(triples)} triples")
+                
+                # 기본 정규화는 항상 적용 (중복 제거 등)
                 triples = entity_normalizer.normalize_triples(triples)
                 triples = entity_normalizer.resolve_duplicates(triples)
-                print(f"[Pipeline] Entity normalized: {original_count} -> {len(triples)} triples")
+                print(f"[Pipeline] After basic normalization: {original_count} -> {len(triples)} triples")
         
         return {
             "nodes": nodes,
@@ -373,6 +398,7 @@ Triplets (one per line, format: Subject|Relation|Object):"""
             "triples": triples,
             "node_count": len(nodes),
             "triple_count": len(triples),
+            "normalization_suggestions": normalization_suggestions,
         }
 
 

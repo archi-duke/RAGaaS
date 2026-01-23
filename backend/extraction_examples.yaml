@@ -34,7 +34,19 @@
       predicate: "우승 상금"
       object: "456억 원"
 
-- text: "기훈은 어린 시절 친구인 조상우, 탈북자 강새벽 등 다른 플레이어들과 동맹을 맺고 게임에서 살아남기 위해 노력했다."
+- text: "조상우는 기훈의 후배이며, 같은 동네에서 자랐다."
+  triples:
+    - subject: "기훈"
+      predicate: "후배"
+      object: "조상우"
+    - subject: "조상우"
+      predicate: "선배"
+      object: "기훈"
+    - subject: "조상우"
+      predicate: "출신지"
+      object: "같은 동네"
+
+- text: "기훈은 어린 시절 친구인 조상우와 동맹을 맺고 게임에서 살아남기 위해 노력했다."
   triples:
     - subject: "기훈"
       predicate: "친구"
@@ -42,12 +54,6 @@
     - subject: "기훈"
       predicate: "동맹"
       object: "조상우"
-    - subject: "강새벽"
-      predicate: "출신"
-      object: "탈북자"
-    - subject: "기훈"
-      predicate: "동맹"
-      object: "강새벽"
     - subject: "기훈"
       predicate: "목적"
       object: "생존"

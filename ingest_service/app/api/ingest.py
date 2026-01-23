@@ -73,6 +73,10 @@ class IngestRequest(BaseModel):
     enable_inference: bool = False  # Rule-based relationship inference
     extraction_examples_yaml: Optional[str] = None
     custom_prompt: Optional[str] = None
+    enable_entity_normalization: bool = False  # Merge similar entities
+    normalization_algorithm: str = "embedding"  # embedding | string | llm
+    normalization_threshold: float = 0.85
+    enable_normalization_confirmation: bool = False  # User review before applying
     callback_url: Optional[str] = None
 
 
@@ -158,7 +162,10 @@ async def process_ingest_job(job_id: str, request: IngestRequest):
             graph_config=graph_config,
             enable_text_cleaning=request.enable_text_cleaning,
             extraction_examples_yaml=request.extraction_examples_yaml,
-            custom_prompt=request.custom_prompt
+            custom_prompt=request.custom_prompt,
+            enable_entity_normalization=request.enable_entity_normalization,
+            normalization_algorithm=request.normalization_algorithm,
+            normalization_threshold=request.normalization_threshold,
         )
         
         jobs[job_id]["progress"] = 80
@@ -372,6 +379,10 @@ class PreviewRequest(BaseModel):
     enable_subject_restoration: bool = True  # Restore omitted subjects in Korean text
     extraction_examples_yaml: Optional[str] = None
     custom_prompt: Optional[str] = None
+    enable_entity_normalization: bool = False
+    normalization_algorithm: str = "embedding"
+    normalization_threshold: float = 0.85
+    enable_normalization_confirmation: bool = False
 
 
 class PreviewResponse(BaseModel):
@@ -449,7 +460,10 @@ async def create_preview(request: PreviewRequest):
             graph_config=graph_config,
             enable_text_cleaning=request.enable_text_cleaning,
             extraction_examples_yaml=request.extraction_examples_yaml,
-            custom_prompt=request.custom_prompt
+            custom_prompt=request.custom_prompt,
+            enable_entity_normalization=request.enable_entity_normalization,
+            normalization_algorithm=request.normalization_algorithm,
+            normalization_threshold=request.normalization_threshold,
         )
         
         print(f"[Preview] Extracted {len(result['triples'])} triples, {result['node_count']} nodes")
@@ -467,6 +481,9 @@ async def create_preview(request: PreviewRequest):
             "node_count": result["node_count"],
             "triple_count": result["triple_count"],
             "created_at": datetime.utcnow().isoformat(),
+            "normalization_suggestions": result.get("normalization_suggestions"),
+            "enable_entity_normalization": request.enable_entity_normalization,
+            "enable_normalization_confirmation": request.enable_normalization_confirmation,
         }
         
         return PreviewResponse(

@@ -55,6 +55,19 @@ export const docApi = {
             if (config.extraction_examples_yaml) {
                 formData.append('extraction_examples_yaml', config.extraction_examples_yaml);
             }
+            // Send Entity Normalization parameters
+            if (config.enable_entity_normalization !== undefined) {
+                formData.append('enable_entity_normalization', String(config.enable_entity_normalization));
+            }
+            if (config.normalization_algorithm) {
+                formData.append('normalization_algorithm', config.normalization_algorithm);
+            }
+            if (config.normalization_threshold !== undefined) {
+                formData.append('normalization_threshold', String(config.normalization_threshold));
+            }
+            if (config.enable_normalization_confirmation !== undefined) {
+                formData.append('enable_normalization_confirmation', String(config.enable_normalization_confirmation));
+            }
         }
         return api.post(`/knowledge-bases/${kbId}/documents`, formData, {
             headers: {
@@ -159,6 +172,10 @@ export const extractionApi = {
         graph_store?: string;
         enable_text_cleaning?: boolean;
         enable_subject_restoration?: boolean;
+        enable_entity_normalization?: boolean;
+        normalization_algorithm?: string;
+        normalization_threshold?: number;
+        enable_normalization_confirmation?: boolean;
         extraction_examples_yaml?: string;
         custom_prompt?: string;
     }) => ingestApi.post('/preview', data),

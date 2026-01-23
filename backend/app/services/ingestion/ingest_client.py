@@ -29,6 +29,10 @@ class IngestServiceClient:
         enable_subject_restoration: bool = True,
         extraction_examples_yaml: Optional[str] = None,
         custom_prompt: Optional[str] = None,
+        enable_entity_normalization: bool = False,
+        normalization_algorithm: str = "embedding",
+        normalization_threshold: float = 0.85,
+        enable_normalization_confirmation: bool = False,
         callback_url: Optional[str] = None
     ) -> Dict[str, Any]:
         """인제스션 작업 생성"""
@@ -43,6 +47,10 @@ class IngestServiceClient:
             "enable_subject_restoration": enable_subject_restoration,
             "extraction_examples_yaml": extraction_examples_yaml,
             "custom_prompt": custom_prompt,
+            "enable_entity_normalization": enable_entity_normalization,
+            "normalization_algorithm": normalization_algorithm,
+            "normalization_threshold": normalization_threshold,
+            "enable_normalization_confirmation": enable_normalization_confirmation,
             "callback_url": callback_url
         }
 

@@ -245,8 +245,11 @@ class CleanupService:
                     "doc_id": doc_id, 
                     "status": "deleted"
                 })
-            except:
-                pass
+                print(f"[Cleanup] ✅ WebSocket broadcast sent: doc {doc_id} deleted")
+            except Exception as ws_error:
+                print(f"[Cleanup] ⚠️  WebSocket broadcast failed: {ws_error}")
+                import traceback
+                traceback.print_exc()
                 
         except Exception as e:
             print(f"[Cleanup] ❌ MongoDB cleanup error: {e}")

@@ -18,7 +18,11 @@ async def upload_document(
     chunking_config: str = Form(None),
     enable_text_cleaning: bool = Form(False),
     enable_subject_restoration: bool = Form(True),
-    extraction_examples_yaml: str = Form(None)
+    extraction_examples_yaml: str = Form(None),
+    enable_entity_normalization: bool = Form(False),
+    normalization_algorithm: str = Form("embedding"),
+    normalization_threshold: float = Form(0.85),
+    enable_normalization_confirmation: bool = Form(False),
 ):
     # Fetch Knowledge Base
     kb = await KBModel.get(kb_id)
@@ -167,6 +171,10 @@ async def upload_document(
     doc.generate_inverse = graph_config.get("generate_inverse_relations")
     doc.extraction_examples = final_examples_yaml
     doc.custom_prompt = graph_extraction_prompt
+    doc.enable_entity_normalization = enable_entity_normalization
+    doc.normalization_algorithm = normalization_algorithm
+    doc.normalization_threshold = normalization_threshold
+    doc.enable_normalization_confirmation = enable_normalization_confirmation
     
     await doc.save()
 
@@ -185,6 +193,10 @@ async def upload_document(
                 enable_subject_restoration=enable_subject_restoration,
                 extraction_examples_yaml=final_examples_yaml,
                 custom_prompt=graph_extraction_prompt,
+                enable_entity_normalization=enable_entity_normalization,
+                normalization_algorithm=normalization_algorithm,
+                normalization_threshold=normalization_threshold,
+                enable_normalization_confirmation=enable_normalization_confirmation,
                 callback_url="http://backend:8000/api/knowledge-bases/ingest/callback"
             )
 

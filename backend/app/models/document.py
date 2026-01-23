@@ -29,6 +29,11 @@ class Document(Document):
     generate_inverse: Optional[bool] = False
     extraction_examples: Optional[str] = None
     custom_prompt: Optional[str] = None
+    # Entity Normalization Settings
+    enable_entity_normalization: Optional[bool] = False
+    normalization_algorithm: Optional[str] = "embedding"  # embedding | string | llm
+    normalization_threshold: Optional[float] = 0.85
+    enable_normalization_confirmation: Optional[bool] = False
 
     class Settings:
         name = "documents"

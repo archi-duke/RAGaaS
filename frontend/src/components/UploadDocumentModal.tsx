@@ -109,6 +109,10 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
         enable_inference: false,  // Rule-based inference
         extraction_examples_yaml: '', // Few-Shot Examples (YAML)
         custom_prompt: '', // Custom Extraction Prompt
+        enable_entity_normalization: false,  // Merge similar entities
+        normalization_algorithm: 'embedding' as 'embedding' | 'string' | 'llm',
+        normalization_threshold: 0.85,
+        enable_normalization_confirmation: false,  // User review before applying
     });
 
 
@@ -216,6 +220,10 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                 graph_store: kbConfig?.graph_backend === 'neo4j' ? 'neo4j' : 'fuseki',
                 enable_text_cleaning: graphParams.enable_text_cleaning,
                 enable_subject_restoration: graphParams.enable_subject_restoration,
+                enable_entity_normalization: graphParams.enable_entity_normalization,
+                normalization_algorithm: graphParams.normalization_algorithm,
+                normalization_threshold: graphParams.normalization_threshold,
+                enable_normalization_confirmation: graphParams.enable_normalization_confirmation,
                 extraction_examples_yaml: graphParams.extraction_examples_yaml || undefined,
                 custom_prompt: graphParams.custom_prompt || undefined,
             });
@@ -428,6 +436,62 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                                         </div>
                                     </label>
 
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', marginBottom: '1rem' }}>
+                                        <input
+                                            type="checkbox"
+                                            checked={graphParams.enable_entity_normalization}
+                                            onChange={(e) => setGraphParams({ ...graphParams, enable_entity_normalization: e.target.checked })}
+                                            style={{ width: '1.1rem', height: '1.1rem', accentColor: '#3b82f6', flexShrink: 0 }}
+                                        />
+                                        <div>
+                                            <span style={{ color: '#334155', fontWeight: 500, fontSize: '0.9rem' }}>Entity Normalization</span>
+                                            <div style={{ fontSize: '0.75rem', color: '#64748b' }}>Merge similar entities (e.g., 성기훈, 기훈 → 성기훈)</div>
+                                        </div>
+                                    </label>
+
+                                    {/* Algorithm Selection - Only shown when Entity Normalization is enabled */}
+                                    {graphParams.enable_entity_normalization && (
+                                        <div style={{ marginLeft: '1.6rem', marginBottom: '1rem', padding: '0.75rem', background: '#f8fafc', borderRadius: '6px', border: '1px solid #e2e8f0' }}>
+                                            <LabelWithTooltip label="Normalization Algorithm" tooltip="Choose similarity algorithm for entity matching" />
+                                            <select
+                                                className="input"
+                                                value={graphParams.normalization_algorithm}
+                                                onChange={(e) => setGraphParams({ ...graphParams, normalization_algorithm: e.target.value as 'embedding' | 'string' | 'llm' })}
+                                                style={{ width: '100%', padding: '0.5rem', fontSize: '0.85rem', marginBottom: '0.75rem' }}
+                                            >
+                                                <option value="embedding">Embedding Similarity (Recommended)</option>
+                                                <option value="string">String Similarity (Fast)</option>
+                                                <option value="llm">LLM-based (Accurate)</option>
+                                            </select>
+
+                                            <LabelWithTooltip
+                                                label={`Similarity Threshold: ${graphParams.normalization_threshold.toFixed(2)}`}
+                                                tooltip="Higher = stricter matching (0.70-0.95)"
+                                            />
+                                            <input
+                                                type="range"
+                                                min="0.70"
+                                                max="0.95"
+                                                step="0.05"
+                                                value={graphParams.normalization_threshold}
+                                                onChange={(e) => setGraphParams({ ...graphParams, normalization_threshold: parseFloat(e.target.value) })}
+                                                style={{ width: '100%', cursor: 'pointer', accentColor: '#3b82f6' }}
+                                            />
+
+                                            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', marginTop: '0.75rem' }}>
+                                                <input
+                                                    type="checkbox"
+                                                    checked={graphParams.enable_normalization_confirmation}
+                                                    onChange={(e) => setGraphParams({ ...graphParams, enable_normalization_confirmation: e.target.checked })}
+                                                    style={{ width: '1rem', height: '1rem', accentColor: '#3b82f6', flexShrink: 0 }}
+                                                />
+                                                <div>
+                                                    <span style={{ color: '#334155', fontWeight: 500, fontSize: '0.85rem' }}>User Confirmation</span>
+                                                    <div style={{ fontSize: '0.7rem', color: '#64748b' }}>Review merge suggestions before applying</div>
+                                                </div>
+                                            </label>
+                                        </div>
+                                    )}
 
                                 </div>
 

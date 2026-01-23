@@ -133,10 +133,23 @@ export default function KnowledgeBaseDetail() {
         loadSettings();
 
         // WebSocket connection for real-time document status updates
-        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsHost = window.location.hostname;
-        const wsPort = window.location.port === '3000' ? '8000' : (window.location.port || '8000');
-        const wsUrl = `${wsProtocol}//${wsHost}:${wsPort}/api/ws/${id}`;
+        // WebSocket connection for real-time document status updates
+        // Use current page's host/port (simplest and most robust for proxy setups)
+        // Note: For local dev (port 3000), we proxy /api calls via Vite config, 
+        // but for WS we might need direct connection to 8000 if proxy isn't set up for WS.
+        // Assuming production/docker uses Nginx/proxy on same port.
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+
+        let wsUrl;
+        if (window.location.port === '3000') {
+            // Local Dev: Connect directly to backend port 8000
+            wsUrl = `${protocol}//${window.location.hostname}:8000/api/ws/${id}`;
+        } else {
+            // Production/Docker: Use same host:port as page
+            wsUrl = `${protocol}//${window.location.host}/api/ws/${id}`;
+        }
+
+        console.log(`[WebSocket] Connecting to: ${wsUrl}`);
 
         console.log(`[WebSocket] Connecting to: ${wsUrl}`);
         const ws = new WebSocket(wsUrl);
@@ -355,16 +368,43 @@ export default function KnowledgeBaseDetail() {
         }
     };
 
-    // Auto-refresh documents if any are processing
+    // Auto-refresh documents if any are processing or deleting
+    // This acts as a fallback in case WebSocket messages are missed
     useEffect(() => {
         const hasProcessing = documents.some(doc => doc.status === 'processing');
-        if (hasProcessing) {
-            const timer = setTimeout(() => {
-                loadDocs();
-            }, 3000);
+        const hasDeleting = documents.some(doc => doc.status === 'deleting');
+
+        if (hasProcessing || hasDeleting) {
+            const timer = setTimeout(async () => {
+                try {
+                    const response = await docApi.list(id!);
+                    const serverDocs = response.data;
+                    const serverDocIds = new Set(serverDocs.map((d: any) => d.id));
+
+                    // Remove documents that no longer exist on server (deleted)
+                    setDocuments(prev => {
+                        const filtered = prev.filter(doc => {
+                            // Keep doc if it exists on server, or if it's not in deleting state
+                            if (serverDocIds.has(doc.id)) {
+                                // Update status from server
+                                const serverDoc = serverDocs.find((sd: any) => sd.id === doc.id);
+                                return { ...doc, ...serverDoc };
+                            }
+                            // Document not on server - remove it (was deleted)
+                            console.log(`[Auto-refresh] Document ${doc.id} removed (no longer on server)`);
+                            return false;
+                        });
+
+                        // Merge with server docs to get any new ones
+                        return serverDocs;
+                    });
+                } catch (error) {
+                    console.error('Auto-refresh failed:', error);
+                }
+            }, hasDeleting ? 1500 : 3000); // Faster refresh for deleting status
             return () => clearTimeout(timer);
         }
-    }, [documents]);
+    }, [documents, id]);
 
     const handleViewChunks = async (doc: any) => {
         setSelectedDoc(doc);
@@ -387,13 +427,20 @@ export default function KnowledgeBaseDetail() {
         setDeleteDocId(null); // Close modal immediately
 
         try {
-            // Call delete API - backend will set status to 'deleting' and broadcast via WebSocket
+            // [IMMEDIATE UI FEEDBACK] Update local state first
+            setDocuments(prev => prev.map(doc =>
+                doc.id === docIdToDelete
+                    ? { ...doc, status: 'deleting' as const }
+                    : doc
+            ));
+
+            // Call delete API - backend will broadcast via WebSocket
             await docApi.delete(id!, docIdToDelete);
 
-            // WebSocket will handle status updates:
+            // WebSocket will handle final status updates:
             // 1. Backend sends 'deleting' status immediately (from document.py)
             // 2. Backend sends 'deleted' status when cleanup completes (from cleanup_service.py)
-            // 3. Frontend removes document when status === 'deleted' (see line 147)
+            // 3. Frontend removes document when status === 'deleted' (see WebSocket handler)
         } catch (error) {
             console.error('Failed to delete document:', error);
             alert('Failed to delete document');

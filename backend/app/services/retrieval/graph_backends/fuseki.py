@@ -437,17 +437,19 @@ class FusekiBackend(GraphBackend):
                                 FROM <urn:x-arq:UnionGraph>
                                 WHERE {{
                                     {{
-                                        # Incoming: ?s -> ?p -> 엔티티 (엔티티가 목적어, 부분 일치 포함)
+                                        # Incoming: ?s -> ?p -> 엔티티 (엔티티가 목적어, 양방향 부분 일치)
                                         ?s ?p ?o .
                                         ?o rdfs:label ?oLabel .
-                                        FILTER(CONTAINS(LCASE(?oLabel), LCASE("{entity_name}")))
+                                        FILTER(CONTAINS(LCASE(?oLabel), LCASE("{entity_name}")) || CONTAINS(LCASE("{entity_name}"), LCASE(?oLabel)))
+                                        FILTER(STRLEN(?oLabel) > 1)
                                     }}
                                     UNION
                                     {{
-                                        # Outgoing: 엔티티 -> ?p -> ?o (엔티티가 주어, 부분 일치 포함)
+                                        # Outgoing: 엔티티 -> ?p -> ?o (엔티티가 주어, 양방향 부분 일치)
                                         ?s ?p ?o .
                                         ?s rdfs:label ?sLabel .
-                                        FILTER(CONTAINS(LCASE(?sLabel), LCASE("{entity_name}")))
+                                        FILTER(CONTAINS(LCASE(?sLabel), LCASE("{entity_name}")) || CONTAINS(LCASE("{entity_name}"), LCASE(?sLabel)))
+                                        FILTER(STRLEN(?sLabel) > 1)
                                     }}
                                     OPTIONAL {{ ?s rdfs:label ?sLabel }}
                                     OPTIONAL {{ ?o rdfs:label ?oLabel }}
@@ -506,17 +508,19 @@ class FusekiBackend(GraphBackend):
                                 FROM <urn:x-arq:UnionGraph>
                                 WHERE {{
                                     {{
-                                        # Outgoing: 엔티티 -> ?p -> ?o (엔티티가 주어, 부분 일치 포함)
+                                        # Outgoing: 엔티티 -> ?p -> ?o (엔티티가 주어, 양방향 부분 일치)
                                         ?s ?p ?o .
                                         ?s rdfs:label ?sLabel .
-                                        FILTER(CONTAINS(LCASE(?sLabel), LCASE("{entity_name}")))
+                                        FILTER(CONTAINS(LCASE(?sLabel), LCASE("{entity_name}")) || CONTAINS(LCASE("{entity_name}"), LCASE(?sLabel)))
+                                        FILTER(STRLEN(?sLabel) > 1)
                                     }}
                                     UNION
                                     {{
-                                        # Incoming: ?s -> ?p -> 엔티티 (엔티티가 목적어, 부분 일치 포함)
+                                        # Incoming: ?s -> ?p -> 엔티티 (엔티티가 목적어, 양방향 부분 일치)
                                         ?s ?p ?o .
                                         ?o rdfs:label ?oLabel .
-                                        FILTER(CONTAINS(LCASE(?oLabel), LCASE("{entity_name}")))
+                                        FILTER(CONTAINS(LCASE(?oLabel), LCASE("{entity_name}")) || CONTAINS(LCASE("{entity_name}"), LCASE(?oLabel)))
+                                        FILTER(STRLEN(?oLabel) > 1)
                                     }}
                                     OPTIONAL {{ ?s rdfs:label ?sLabel }}
                                     OPTIONAL {{ ?o rdfs:label ?oLabel }}
@@ -571,23 +575,33 @@ class FusekiBackend(GraphBackend):
                             
                             log_trace(f"[Fuseki] Pattern 2 detected: {entity1_name} -> ? -> {entity2_name}")
                             
-                            # 직접 연결 확인 및 트리플 데이터 즉시 확보 (Fast Path)
+                            # 직접 연결 확인 및 트리플 데이터 즉시 확보 (Fast Path with Partial Match)
                             direct_triple_query = f"""
                             PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
                             SELECT DISTINCT ?s ?p ?o ?sLabel ?oLabel
                             FROM <urn:x-arq:UnionGraph>
                             WHERE {{
                                 {{
-                                    BIND(<{uri1}> AS ?s) . BIND(<{uri2}> AS ?o) .
+                                    # Entity1 -> Entity2 (양방향 부분 일치)
                                     ?s ?p ?o .
+                                    ?s rdfs:label ?sLabel .
+                                    ?o rdfs:label ?oLabel .
+                                    FILTER(CONTAINS(LCASE(?sLabel), LCASE("{entity1_name}")) || CONTAINS(LCASE("{entity1_name}"), LCASE(?sLabel)))
+                                    FILTER(CONTAINS(LCASE(?oLabel), LCASE("{entity2_name}")) || CONTAINS(LCASE("{entity2_name}"), LCASE(?oLabel)))
+                                    FILTER(STRLEN(?sLabel) > 1)
+                                    FILTER(STRLEN(?oLabel) > 1)
                                 }}
                                 UNION
                                 {{
-                                    BIND(<{uri2}> AS ?s) . BIND(<{uri1}> AS ?o) .
+                                    # Entity2 -> Entity1 (양방향 부분 일치)
                                     ?s ?p ?o .
+                                    ?s rdfs:label ?sLabel .
+                                    ?o rdfs:label ?oLabel .
+                                    FILTER(CONTAINS(LCASE(?sLabel), LCASE("{entity2_name}")) || CONTAINS(LCASE("{entity2_name}"), LCASE(?sLabel)))
+                                    FILTER(CONTAINS(LCASE(?oLabel), LCASE("{entity1_name}")) || CONTAINS(LCASE("{entity1_name}"), LCASE(?oLabel)))
+                                    FILTER(STRLEN(?sLabel) > 1)
+                                    FILTER(STRLEN(?oLabel) > 1)
                                 }}
-                                OPTIONAL {{ ?s rdfs:label ?sLabel }}
-                                OPTIONAL {{ ?o rdfs:label ?oLabel }}
                                 # Reification 메타데이터 제외
                                 FILTER(?p != <http://www.w3.org/1999/02/22-rdf-syntax-ns#type>)
                                 FILTER(?p != <http://www.w3.org/1999/02/22-rdf-syntax-ns#subject>)
@@ -638,7 +652,46 @@ class FusekiBackend(GraphBackend):
                             except Exception as e:
                                 log_trace(f"[Fuseki] Pattern 2: Error in Fast Path query: {e}")
                     else:
-                        log_trace("[Fuseki] Entity-Centric Schema: No entities resolved, skipping")
+                        pass # No entities detected
+
+                # [RELEVANCE CHECK]
+                # Fast Path가 무차별적으로 데이터를 가져오는 것을 방지
+                if skip_llm_generation and found_triples:
+                    # 1. 질문에서 핵심 키워드 추출 (엔티티 제외)
+                    # 간단한 방식: 공백 분리 후 엔티티 이름이 아닌 것들 중 명사형 추정
+                    query_tokens = query_text.replace("?", "").split()
+                    relation_keywords = []
+                    # resolved_uris: List[Tuple[str, str]] -> (name, uri)
+                    known_entity_names = [name for name, _ in resolved_uris] if resolved_uris else []
+                
+                    for t in query_tokens:
+                        # 조사 제거
+                        t_clean = t.rstrip("은는이가을를의와과로으로에게")
+                        if len(t_clean) > 1 and t_clean not in known_entity_names:
+                             # 질문 어미/조사 등 불용어 필터링 (간단히)
+                             if t_clean not in ["누구", "무엇", "언제", "어디", "어떻게", "관계", "사람", "것"]:
+                                 relation_keywords.append(t_clean)
+                
+                    log_trace(f"[Fuseki] Relevance Check Keywords: {relation_keywords}")
+                
+                    if relation_keywords:
+                        is_relevant = False
+                        for triple in found_triples:
+                            p = triple["predicate"]
+                            o = triple["object"]
+                            # 키워드가 Predicate나 Object에 포함되는지 확인
+                            for kw in relation_keywords:
+                                if kw in p or kw in o:
+                                    is_relevant = True
+                                    break
+                            if is_relevant:
+                                break
+                    
+                        if not is_relevant:
+                            log_trace(f"[Fuseki] ⚠️ Fast Path result seems irrelevant to keywords {relation_keywords}. Formatting Fallback to LLM.")
+                            skip_llm_generation = False
+                            found_triples = [] # Reset to avoid noise
+                            found_uris = set()
 
                 # LLM 호출 (Fast Path로 이미 답을 찾은 경우 건너뜀)
                 if not skip_llm_generation:
@@ -646,35 +699,31 @@ class FusekiBackend(GraphBackend):
                         question=query_text,
                         context=f"Entities: {', '.join(entities)}",
                         mode="ontology",
-                        inverse_relation=inv_mode,
-                        # custom_prompt removed
-                        schema_info=schema_info,
-                        # system_prompt_override removed
-                        entities=entities,
+                        inverse_search_mode=inv_mode,
+                        schema_info=kb_schema,
                         kb_id=kb_id,
                         use_dynamic_schema=kwargs.get("use_dynamic_schema", False),
-                        context_predicates=context_predicates if context_predicates else None  # [NEW]
+                        context_predicates=context_predicates if context_predicates else None
                     )
                 else:
                     log_trace("[Fuseki] Skipping LLM SPARQL generation (Fast Path already provided results)")
                     gen_result = {"sparql": None}  # LLM 결과 없음을 명시
-                
-                
+            
+            
                 generated_sparql = gen_result.get("sparql")
-                
+            
                 # [NEW] Fast Path 데이터 우선 처리 (LLM 결과와 독립적)
                 if skip_llm_generation and found_triples:
                     # Fast Path로 이미 트리플을 찾았으므로 바로 결과에 반영
                     log_trace(f"[Fuseki] Using Fast Path results: {len(found_triples)} triples, {len(found_uris)} URIs")
                     triples = found_triples  # 최종 결과에 직접 할당
-                    
+                
                     # Chunk ID 조회를 위해 found_uris 사용
                     if found_uris:
                         uri_list = " ".join([f"<{u}>" for u in found_uris])
                         reification_query = f"""
                         PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
                         PREFIX meta: <http://rag.local/meta/>
-                        SELECT DISTINCT ?sourceNodeId
                         FROM <urn:x-arq:UnionGraph>
                         WHERE {{
                           VALUES ?target {{ {uri_list} }} .
@@ -701,255 +750,255 @@ class FusekiBackend(GraphBackend):
                             log_trace(f"[Fuseki] Fast Path: Found {len(chunk_ids)} chunk IDs via reification")
                         except Exception as e:
                             log_trace(f"[Fuseki] Fast Path: Reification query failed: {e}")
-                    
-                    # Fast Path 성공 시 즉시 결과 반환
-                    log_trace(f"[Fuseki] Fast Path complete. Returning {len(triples)} triples and {len(chunk_ids)} chunks.")
-                    return {
-                        "chunk_ids": chunk_ids,
-                        "sparql_query": "-- FAST PATH BYPASS (Direct Relationship Found) --", 
-                        "triples": triples,
-                        "found_entities": [t["subject"] for t in triples] + [t["object"] for t in triples],
-                        "used_fallback": False,
-                        "trace_logs": trace_logs
-                    }
                 
-                if generated_sparql:
-                    # Prepend schema usage comment for Debug Log
-                    if schema_info:
-                         generated_sparql = f"# [Used Promoted Ontology Schema]\n{generated_sparql}"
-
-                    log_trace(f"[Fuseki] Generated SPARQL:\n{generated_sparql}")
-                    
-                    # Remove any existing PREFIX declarations from LLM-generated query
-                    # to avoid conflicts with our correct prefixes
-                    sparql_body = re.sub(r'PREFIX\s+\w+:\s*<[^>]+>\s*', '', generated_sparql, flags=re.IGNORECASE)
-                    sparql_body = sparql_body.strip()
-                    
-                    # Ensure standard prefixes with correct namespaces
-                    # FIX: Must match Doc2Onto's default namespaces (example.org)
-                    prefixes = """
-                    PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
-                    PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-                    PREFIX owl: <http://www.w3.org/2002/07/owl#>
-                    PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
-                    PREFIX inst: <http://rag.local/inst/> 
-                    PREFIX rel: <http://rag.local/rel/> 
-                    PREFIX prop: <http://rag.local/prop/>
-                    PREFIX class: <http://rag.local/class/>
-                    """
-                    
-                    
-                    # Inject FROM <urn:x-arq:UnionGraph> to search across all named graphs
-                    # This is crucial because Doc2Onto loads data (base.trig) into named graphs
-                    if re.search(r'WHERE', sparql_body, re.IGNORECASE):
-                        # Simple injection: replace the first 'WHERE' with 'FROM <urn:x-arq:UnionGraph> WHERE'
-                        print("[DEBUG FUSEKI] Injecting UnionGraph...", flush=True)
-                        sparql_query_content = re.sub(r'WHERE', "FROM <urn:x-arq:UnionGraph>\nWHERE", sparql_body, count=1, flags=re.IGNORECASE)
-                    else:
-                        print("[DEBUG FUSEKI] WHERE clause NOT found in query!", flush=True)
-                        sparql_query_content = sparql_body
-
-                    full_query = prefixes + sparql_query_content
-                    
-                    print(f"[DEBUG FUSEKI] Final Query:\n{full_query}", flush=True)
-                    log_trace(f"[Fuseki] Executing SPARQL:\n{full_query}")
-                    
-                    # Execute
-                    results = fuseki_client.query_sparql(kb_id, full_query)
-                    bindings = results.get("results", {}).get("bindings", [])
-                    
-                    print(f"[DEBUG FUSEKI] Results count: {len(bindings)}", flush=True)
-                    if bindings:
-                         sparql_query = full_query
-                         
-                    if bindings:
-                        # Process results from generator query
-                        found_entities = set()
-                        # found_uris는 이미 Fast Path에서 초기화되었으므로 재선언하지 않음
-                        # found_uris = set()  # <- 제거: Fast Path 데이터 보존
-                        
-                        for binding in bindings:
-                             for var_name, value_dict in binding.items():
-                                 val = value_dict.get("value")
-                                 
-                                 # Collect meaningful entities
-                                 if val and (val.startswith("http") or len(val) > 1):
-                                     clean_val = val.split("/")[-1] if "/" in val else val
-                                     if " " not in clean_val:
-                                         found_entities.add(clean_val)
-                                     
-                                     if val.startswith("http"):
-                                         found_uris.add(val)  # 기존 found_uris에 추가
-
-                        log_trace(f"[Fuseki] Found {len(found_entities)} entities from graph: {list(found_entities)[:5]}...")
-                        
-                        # [NEW] Try to extract triples directly from LLM query result
-                        # If the LLM followed the updated templates, it should return ?subject, ?predicate, ?object
-                        real_triples = []
-                        discovered_chunk_ids = set()
-                        
-                        for binding in bindings:
-                            # Check if binding contains subject/predicate/object pattern
-                            has_spo = ("subject" in binding or "s1" in binding) and ("predicate" in binding or "p1" in binding) and ("object" in binding or "o1" in binding)
-                            has_spo_alt = "subjectLabel" in binding and "objectLabel" in binding
-                            has_multi_hop = "s2" in binding or "midLabel" in binding
-                            
-                            if has_spo or has_spo_alt:
-                                # Helper function to clean URI to label
-                                def get_label(binding, *keys):
-                                    for key in keys:
-                                        val = binding.get(key, {})
-                                        if isinstance(val, dict) and val.get("value"):
-                                            result = val.get("value")
-                                            return result.split("/")[-1] if "/" in result else result
-                                    return None
-                                
-                                # Extract 1st hop triple
-                                subj1 = get_label(binding, "subjectLabel", "startLabel", "subject", "s1")
-                                pred1 = get_label(binding, "predicate", "p1")
-                                obj1 = get_label(binding, "midLabel", "objectLabel", "object", "o1")
-                                
-                                if subj1 and pred1 and obj1:
-                                    real_triples.append({
-                                        "subject": subj1,
-                                        "predicate": pred1,
-                                        "object": obj1
-                                    })
-                                
-                                # Extract 2nd hop triple if exists (multi-hop query)
-                                if has_multi_hop:
-                                    subj2 = get_label(binding, "midLabel", "o1")  # mid becomes subject of 2nd hop
-                                    pred2 = get_label(binding, "p2")
-                                    obj2 = get_label(binding, "resultLabel", "o2")
-                                    
-                                    if subj2 and pred2 and obj2:
-                                        real_triples.append({
-                                            "subject": subj2,
-                                            "predicate": pred2,
-                                            "object": obj2
-                                        })
-                        
-                        if real_triples:
-                            log_trace(f"[Fuseki] Extracted {len(real_triples)} triples directly from LLM query result!")
-                            print(f"[DEBUG FUSEKI] Direct triples: {real_triples[:3]}", flush=True)
-                        
-                        # [NEW] Fast Path에서 찾은 트리플 병합
-                        if found_triples:
-                            real_triples.extend(found_triples)
-                            log_trace(f"[Fuseki] Merged {len(found_triples)} triples from Fast Path. Total: {len(real_triples)}")
-                        
-                        # If no direct triples found, fall back to secondary lookup
-                        if not real_triples and found_uris:
-                            # Construct a query to fetch triples involving these URIs
-                            print(f"[DEBUG FUSEKI] found_uris for secondary lookup: {found_uris}", flush=True)
-                            
-                            union_clauses = []
-                            for uri in found_uris:
-                                clause = f"""{{ BIND(<{uri}> AS ?target) . ?s ?p ?o . FILTER(?o = ?target) }}
-                                UNION
-                                {{ BIND(<{uri}> AS ?target) . ?s ?p ?o . FILTER(?s = ?target) }}"""
-                                union_clauses.append(clause)
-                            
-                            union_body = " UNION ".join(union_clauses)
-                            
-                            secondary_query = f"""
-                            PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-                            PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
-                            SELECT DISTINCT ?s ?p ?o
-                            FROM <urn:x-arq:UnionGraph>
-                            WHERE {{
-                              {union_body}
-                              FILTER(?p != rdf:type)
-                              FILTER(?p != rdfs:label)
-                              FILTER(?p != rdfs:comment)
-                              FILTER(?p != rdf:subject)
-                              FILTER(?p != rdf:object)
-                              FILTER(?p != rdf:predicate)
-                            }}
-                            LIMIT 100
-                            """
-
-                            print(f"[DEBUG FUSEKI] Secondary Query:\n{secondary_query}", flush=True)
-                            log_trace(f"[Fuseki] Executing Secondary Lookup for Real Triples...")
-                            sec_results = fuseki_client.query_sparql(kb_id, secondary_query)
-                            sec_bindings = sec_results.get("results", {}).get("bindings", [])
-                            
-                            for b in sec_bindings:
-                                s = b["s"]["value"].split("/")[-1]
-                                p = b["p"]["value"].split("/")[-1]
-                                o = b["o"]["value"].split("/")[-1]
-                                real_triples.append({
-                                    "subject": s,
-                                    "predicate": p,
-                                    "object": o
-                                })
-                            
-                            log_trace(f"[Fuseki] Secondary lookup retrieved {len(real_triples)} real triples.")
-
-                        # [MOVED & IMPROVED] Query Reification for sourceNodeId if ANY URIs found
-                        # This should run even if real_triples were extracted directly from LLM
-                        if found_uris:
-                            # Optimize: Use VALUES for faster filtering
-                            uri_list = " ".join([f"<{u}>" for u in found_uris])
-                            
-                            reification_query = f"""
-                            PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
-                            PREFIX meta: <http://rag.local/meta/>
-                            SELECT DISTINCT ?sourceNodeId
-                            FROM <urn:x-arq:UnionGraph>
-                            WHERE {{
-                              VALUES ?target {{ {uri_list} }} .
-                              {{
-                                ?stmt rdf:type rdf:Statement ;
-                                      rdf:subject ?target ;
-                                      meta:sourceNodeId ?sourceNodeId .
-                              }} UNION {{
-                                ?stmt rdf:type rdf:Statement ;
-                                      rdf:object ?target ;
-                                      meta:sourceNodeId ?sourceNodeId .
-                              }}
-                            }}
-                            LIMIT 100
-                            """
-                            
-                            print(f"[DEBUG FUSEKI] Reification Query for sourceNodeId...", flush=True)
-                            try:
-                                reif_results = fuseki_client.query_sparql(kb_id, reification_query)
-                                reif_bindings = reif_results.get("results", {}).get("bindings", [])
-                                
-                                for rb in reif_bindings:
-                                    if "sourceNodeId" in rb:
-                                        node_id = rb["sourceNodeId"]["value"]
-                                        if node_id:
-                                            discovered_chunk_ids.add(node_id)
-                                
-                                log_trace(f"[Fuseki] Found {len(discovered_chunk_ids)} unique sourceNodeIds from Reification")
-                            except Exception as e:
-                                log_trace(f"[Fuseki] Warning: Reification query failed: {e}")
-
-                        # Use real_triples if found, otherwise fall back to dummy triples (which will fail mapping but show entity)
-                        final_triples = real_triples if real_triples else triples
-
+                        # Fast Path 성공 시 즉시 결과 반환
+                        log_trace(f"[Fuseki] Fast Path complete. Returning {len(triples)} triples and {len(chunk_ids)} chunks.")
                         return {
-                            "chunk_ids": list(discovered_chunk_ids),  # Fuseki Reification에서 직접 추출
-                            "sparql_query": generated_sparql.strip(),
-                            "triples": final_triples,
-                            "found_entities": list(found_entities),
+                            "chunk_ids": chunk_ids,
+                            "sparql_query": "-- FAST PATH BYPASS (Direct Relationship Found) --", 
+                            "triples": triples,
+                            "found_entities": [t["subject"] for t in triples] + [t["object"] for t in triples],
+                            "used_fallback": False,
                             "trace_logs": trace_logs
                         }
-                    else:
-                        # If inverse search is disabled and LLM query returned no results,
-                        # don't fall back to generic search - return empty results
-                        # UNLESS it is a promoted KB (schema_info exists), then we want fallback to capture anything.
                 
-                        if inv_mode == "none" and not schema_info:
+                    if generated_sparql:
+                        # Prepend schema usage comment for Debug Log
+                        if schema_info:
+                             generated_sparql = f"# [Used Promoted Ontology Schema]\n{generated_sparql}"
+
+                        log_trace(f"[Fuseki] Generated SPARQL:\n{generated_sparql}")
+                    
+                        # Remove any existing PREFIX declarations from LLM-generated query
+                        # to avoid conflicts with our correct prefixes
+                        sparql_body = re.sub(r'PREFIX\s+\w+:\s*<[^>]+>\s*', '', generated_sparql, flags=re.IGNORECASE)
+                        sparql_body = sparql_body.strip()
+                    
+                        # Ensure standard prefixes with correct namespaces
+                        # FIX: Must match Doc2Onto's default namespaces (example.org)
+                        prefixes = """
+                        PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+                        PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+                        PREFIX owl: <http://www.w3.org/2002/07/owl#>
+                        PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+                        PREFIX inst: <http://rag.local/inst/> 
+                        PREFIX rel: <http://rag.local/rel/> 
+                        PREFIX prop: <http://rag.local/prop/>
+                        PREFIX class: <http://rag.local/class/>
+                        """
+                    
+                    
+                        # Inject FROM <urn:x-arq:UnionGraph> to search across all named graphs
+                        # This is crucial because Doc2Onto loads data (base.trig) into named graphs
+                        if re.search(r'WHERE', sparql_body, re.IGNORECASE):
+                            # Simple injection: replace the first 'WHERE' with 'FROM <urn:x-arq:UnionGraph> WHERE'
+                            print("[DEBUG FUSEKI] Injecting UnionGraph...", flush=True)
+                            sparql_query_content = re.sub(r'WHERE', "FROM <urn:x-arq:UnionGraph>\nWHERE", sparql_body, count=1, flags=re.IGNORECASE)
+                        else:
+                            print("[DEBUG FUSEKI] WHERE clause NOT found in query!", flush=True)
+                            sparql_query_content = sparql_body
+
+                        full_query = prefixes + sparql_query_content
+                    
+                        print(f"[DEBUG FUSEKI] Final Query:\n{full_query}", flush=True)
+                        log_trace(f"[Fuseki] Executing SPARQL:\n{full_query}")
+                    
+                        # Execute
+                        results = fuseki_client.query_sparql(kb_id, full_query)
+                        bindings = results.get("results", {}).get("bindings", [])
+                    
+                        print(f"[DEBUG FUSEKI] Results count: {len(bindings)}", flush=True)
+                        if bindings:
+                             sparql_query = full_query
+                         
+                        if bindings:
+                            # Process results from generator query
+                            found_entities = set()
+                            # found_uris는 이미 Fast Path에서 초기화되었으므로 재선언하지 않음
+                            # found_uris = set()  # <- 제거: Fast Path 데이터 보존
+                        
+                            for binding in bindings:
+                                 for var_name, value_dict in binding.items():
+                                     val = value_dict.get("value")
+                                 
+                                     # Collect meaningful entities
+                                     if val and (val.startswith("http") or len(val) > 1):
+                                         clean_val = val.split("/")[-1] if "/" in val else val
+                                         if " " not in clean_val:
+                                             found_entities.add(clean_val)
+                                     
+                                         if val.startswith("http"):
+                                             found_uris.add(val)  # 기존 found_uris에 추가
+
+                            log_trace(f"[Fuseki] Found {len(found_entities)} entities from graph: {list(found_entities)[:5]}...")
+                        
+                            # [NEW] Try to extract triples directly from LLM query result
+                            # If the LLM followed the updated templates, it should return ?subject, ?predicate, ?object
+                            real_triples = []
+                            discovered_chunk_ids = set()
+                        
+                            for binding in bindings:
+                                # Check if binding contains subject/predicate/object pattern
+                                has_spo = ("subject" in binding or "s1" in binding) and ("predicate" in binding or "p1" in binding) and ("object" in binding or "o1" in binding)
+                                has_spo_alt = "subjectLabel" in binding and "objectLabel" in binding
+                                has_multi_hop = "s2" in binding or "midLabel" in binding
+                            
+                                if has_spo or has_spo_alt:
+                                    # Helper function to clean URI to label
+                                    def get_label(binding, *keys):
+                                        for key in keys:
+                                            val = binding.get(key, {})
+                                            if isinstance(val, dict) and val.get("value"):
+                                                result = val.get("value")
+                                                return result.split("/")[-1] if "/" in result else result
+                                        return None
+                                
+                                    # Extract 1st hop triple
+                                    subj1 = get_label(binding, "subjectLabel", "startLabel", "subject", "s1")
+                                    pred1 = get_label(binding, "predicate", "p1")
+                                    obj1 = get_label(binding, "midLabel", "objectLabel", "object", "o1")
+                                
+                                    if subj1 and pred1 and obj1:
+                                        real_triples.append({
+                                            "subject": subj1,
+                                            "predicate": pred1,
+                                            "object": obj1
+                                        })
+                                
+                                    # Extract 2nd hop triple if exists (multi-hop query)
+                                    if has_multi_hop:
+                                        subj2 = get_label(binding, "midLabel", "o1")  # mid becomes subject of 2nd hop
+                                        pred2 = get_label(binding, "p2")
+                                        obj2 = get_label(binding, "resultLabel", "o2")
+                                    
+                                        if subj2 and pred2 and obj2:
+                                            real_triples.append({
+                                                "subject": subj2,
+                                                "predicate": pred2,
+                                                "object": obj2
+                                            })
+                        
+                            if real_triples:
+                                log_trace(f"[Fuseki] Extracted {len(real_triples)} triples directly from LLM query result!")
+                                print(f"[DEBUG FUSEKI] Direct triples: {real_triples[:3]}", flush=True)
+                        
+                            # [NEW] Fast Path에서 찾은 트리플 병합
+                            if found_triples:
+                                real_triples.extend(found_triples)
+                                log_trace(f"[Fuseki] Merged {len(found_triples)} triples from Fast Path. Total: {len(real_triples)}")
+                        
+                            # If no direct triples found, fall back to secondary lookup
+                            if not real_triples and found_uris:
+                                # Construct a query to fetch triples involving these URIs
+                                print(f"[DEBUG FUSEKI] found_uris for secondary lookup: {found_uris}", flush=True)
+                            
+                                union_clauses = []
+                                for uri in found_uris:
+                                    clause = f"""{{ BIND(<{uri}> AS ?target) . ?s ?p ?o . FILTER(?o = ?target) }}
+                                    UNION
+                                    {{ BIND(<{uri}> AS ?target) . ?s ?p ?o . FILTER(?s = ?target) }}"""
+                                    union_clauses.append(clause)
+                            
+                                union_body = " UNION ".join(union_clauses)
+                            
+                                secondary_query = f"""
+                                PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+                                PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+                                SELECT DISTINCT ?s ?p ?o
+                                FROM <urn:x-arq:UnionGraph>
+                                WHERE {{
+                                  {union_body}
+                                  FILTER(?p != rdf:type)
+                                  FILTER(?p != rdfs:label)
+                                  FILTER(?p != rdfs:comment)
+                                  FILTER(?p != rdf:subject)
+                                  FILTER(?p != rdf:object)
+                                  FILTER(?p != rdf:predicate)
+                                }}
+                                LIMIT 100
+                                """
+
+                                print(f"[DEBUG FUSEKI] Secondary Query:\n{secondary_query}", flush=True)
+                                log_trace(f"[Fuseki] Executing Secondary Lookup for Real Triples...")
+                                sec_results = fuseki_client.query_sparql(kb_id, secondary_query)
+                                sec_bindings = sec_results.get("results", {}).get("bindings", [])
+                            
+                                for b in sec_bindings:
+                                    s = b["s"]["value"].split("/")[-1]
+                                    p = b["p"]["value"].split("/")[-1]
+                                    o = b["o"]["value"].split("/")[-1]
+                                    real_triples.append({
+                                        "subject": s,
+                                        "predicate": p,
+                                        "object": o
+                                    })
+                            
+                                log_trace(f"[Fuseki] Secondary lookup retrieved {len(real_triples)} real triples.")
+
+                            # [MOVED & IMPROVED] Query Reification for sourceNodeId if ANY URIs found
+                            # This should run even if real_triples were extracted directly from LLM
+                            if found_uris:
+                                # Optimize: Use VALUES for faster filtering
+                                uri_list = " ".join([f"<{u}>" for u in found_uris])
+                            
+                                reification_query = f"""
+                                PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+                                PREFIX meta: <http://rag.local/meta/>
+                                SELECT DISTINCT ?sourceNodeId
+                                FROM <urn:x-arq:UnionGraph>
+                                WHERE {{
+                                  VALUES ?target {{ {uri_list} }} .
+                                  {{
+                                    ?stmt rdf:type rdf:Statement ;
+                                          rdf:subject ?target ;
+                                          meta:sourceNodeId ?sourceNodeId .
+                                  }} UNION {{
+                                    ?stmt rdf:type rdf:Statement ;
+                                          rdf:object ?target ;
+                                          meta:sourceNodeId ?sourceNodeId .
+                                  }}
+                                }}
+                                LIMIT 100
+                                """
+                            
+                                print(f"[DEBUG FUSEKI] Reification Query for sourceNodeId...", flush=True)
+                                try:
+                                    reif_results = fuseki_client.query_sparql(kb_id, reification_query)
+                                    reif_bindings = reif_results.get("results", {}).get("bindings", [])
+                                
+                                    for rb in reif_bindings:
+                                        if "sourceNodeId" in rb:
+                                            node_id = rb["sourceNodeId"]["value"]
+                                            if node_id:
+                                                discovered_chunk_ids.add(node_id)
+                                
+                                    log_trace(f"[Fuseki] Found {len(discovered_chunk_ids)} unique sourceNodeIds from Reification")
+                                except Exception as e:
+                                    log_trace(f"[Fuseki] Warning: Reification query failed: {e}")
+
+                            # Use real_triples if found, otherwise fall back to dummy triples (which will fail mapping but show entity)
+                            final_triples = real_triples if real_triples else triples
+
                             return {
-                                "chunk_ids": [],
+                                "chunk_ids": list(discovered_chunk_ids),  # Fuseki Reification에서 직접 추출
                                 "sparql_query": generated_sparql.strip(),
-                                "triples": [],
-                                "found_entities": [],
+                                "triples": final_triples,
+                                "found_entities": list(found_entities),
                                 "trace_logs": trace_logs
                             }
+                        else:
+                            # If inverse search is disabled and LLM query returned no results,
+                            # don't fall back to generic search - return empty results
+                            # UNLESS it is a promoted KB (schema_info exists), then we want fallback to capture anything.
+                
+                            if inv_mode == "none" and not schema_info:
+                                return {
+                                    "chunk_ids": [],
+                                    "sparql_query": generated_sparql.strip(),
+                                    "triples": [],
+                                    "found_entities": [],
+                                    "trace_logs": trace_logs
+                                }
                         
             except Exception as e:
                 log_trace(f"[Fuseki] Error during SPARQL generation/execution: {e}")
