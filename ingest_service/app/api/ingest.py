@@ -78,6 +78,7 @@ class IngestRequest(BaseModel):
     normalization_threshold: float = 0.85
     enable_normalization_confirmation: bool = False  # User review before applying
     callback_url: Optional[str] = None
+    preview_only: bool = False  # Skip processing, just save file path (for preview flows)
 
 
 class IngestResponse(BaseModel):
@@ -153,6 +154,35 @@ async def process_ingest_job(job_id: str, request: IngestRequest):
         
         jobs[job_id]["progress"] = 20
         
+        # 3.5 [Doc2Graph] Global Entity Dictionary Construction (Pre-pass)
+        entity_dictionary = None
+        if request.enable_entity_normalization:
+            try:
+                from app.core.dictionary_builder import DictionaryBuilder
+                print(f"[IngestJob] Building Global Entity Dictionary for Doc2Graph normalization...")
+                
+                # We need to chunk first to build dictionary (without saving)
+                # Note: This chunks the text twice (once here, once inside pipeline.process)
+                # Optimization: Ideally pipeline.process should accept ready-made nodes or return intermediate steps.
+                # For now, let's instantiate DictionaryBuilder and use pipeline's chunker helper if possible
+                # But pipeline.chunk_document is a method.
+                
+                # Let's verify text length. If huge, this might be slow (Double Chunking)
+                # But correct for now.
+                print(f"[IngestJob] Pre-chunking for Dictionary Builder...")
+                temp_nodes = ingest_pipeline.chunk_document(text, request.chunking.strategy, chunking_config)
+                
+                dict_builder = DictionaryBuilder(ingest_pipeline.llm)
+                entity_dictionary = await dict_builder.build(temp_nodes)
+                print(f"[IngestJob] Global Entity Dictionary ready: {len(entity_dictionary)} entities found.")
+                
+            except Exception as e:
+                print(f"[IngestJob] ⚠️ Dictionary Building Failed: {e}")
+                import traceback
+                traceback.print_exc()
+
+        jobs[job_id]["progress"] = 30 # Progress Update
+
         # 4. Run pipeline
         result = await ingest_pipeline.process(
             text=text,
@@ -166,6 +196,7 @@ async def process_ingest_job(job_id: str, request: IngestRequest):
             enable_entity_normalization=request.enable_entity_normalization,
             normalization_algorithm=request.normalization_algorithm,
             normalization_threshold=request.normalization_threshold,
+            entity_dictionary=entity_dictionary  # Pass the built dictionary
         )
         
         jobs[job_id]["progress"] = 80
@@ -301,13 +332,20 @@ async def create_ingest_job(
         "error": None,
     }
     
-    # Add background task
-    background_tasks.add_task(process_ingest_job, job_id, request)
+    if request.preview_only:
+        # Skip pipeline execution
+        print(f"[Ingest] Preview Only: Skipping pipeline for {request.file_path}")
+        jobs[job_id]["status"] = JobStatus.COMPLETED
+        jobs[job_id]["progress"] = 100
+        jobs[job_id]["result"] = {"file_path": request.file_path}
+    else:
+        # Add background task
+        background_tasks.add_task(process_ingest_job, job_id, request)
     
     return IngestResponse(
         job_id=job_id,
-        status=JobStatus.PENDING,
-        message="Ingest job created successfully",
+        status=jobs[job_id]["status"],
+        message="Ingest job created successfully" + (" (Preview Mode)" if request.preview_only else ""),
     )
 
 
@@ -383,6 +421,7 @@ class PreviewRequest(BaseModel):
     normalization_algorithm: str = "embedding"
     normalization_threshold: float = 0.85
     enable_normalization_confirmation: bool = False
+    sampling_size: Optional[int] = None  # For Doc2Graph Dictionary (Phase 1)
 
 
 class PreviewResponse(BaseModel):
@@ -450,6 +489,24 @@ async def create_preview(request: PreviewRequest):
             "allowed_entity_types": request.graph.allowed_entity_types,
             "allowed_relation_types": request.graph.allowed_relation_types,
         }
+
+        # 2.5 [Doc2Graph] Global Entity Dictionary Construction (Pre-pass)
+        entity_dictionary = None
+        if request.enable_entity_normalization:
+            try:
+                from app.core.dictionary_builder import DictionaryBuilder
+                print(f"[Preview] Building Global Entity Dictionary for Doc2Graph normalization...")
+                print(f"[Preview] Pre-chunking for Dictionary Builder...")
+                temp_nodes = ingest_pipeline.chunk_document(text, request.chunking.strategy, chunking_config)
+                
+                dict_builder = DictionaryBuilder(ingest_pipeline.llm)
+                entity_dictionary = await dict_builder.build(temp_nodes)
+                print(f"[Preview] Global Entity Dictionary ready: {len(entity_dictionary)} entities found.")
+                
+            except Exception as e:
+                print(f"[Preview] ⚠️ Dictionary Building Failed: {e}")
+                import traceback
+                traceback.print_exc()
         
         # 3. Run pipeline (same as regular ingest)
         result = await ingest_pipeline.process(
@@ -464,6 +521,7 @@ async def create_preview(request: PreviewRequest):
             enable_entity_normalization=request.enable_entity_normalization,
             normalization_algorithm=request.normalization_algorithm,
             normalization_threshold=request.normalization_threshold,
+            entity_dictionary=entity_dictionary 
         )
         
         print(f"[Preview] Extracted {len(result['triples'])} triples, {result['node_count']} nodes")
@@ -657,6 +715,78 @@ async def discard_preview(preview_id: str):
         "doc_id": cached["doc_id"],
         "message": "Preview discarded successfully.",
     }
+
+
+
+# ============================================================
+# Dictionary Preview Endpoint (Doc2Graph Phase 1 Only)
+# ============================================================
+
+class DictionaryPreviewResponse(BaseModel):
+    """Dictionary Preview Response"""
+    preview_id: str
+    kb_id: str
+    doc_id: str
+    entity_count: int
+    dictionary: Dict[str, Dict[str, Any]]
+    message: str
+
+
+@router.post("/preview-dictionary", response_model=DictionaryPreviewResponse)
+async def create_dictionary_preview(request: PreviewRequest):
+    """Build and return Global Entity Dictionary only (Doc2Graph Phase 1).
+    This skips the triple extraction phase.
+    """
+    import time
+    start_total = time.time()
+    preview_id = str(uuid.uuid4())
+    
+    try:
+        print(f"[PreviewDict] Starting dictionary build {preview_id} for doc {request.doc_id}")
+        
+        t0 = time.time()
+        from app.utils.file_utils import read_text_file
+        text = await read_text_file(request.file_path)
+        
+        if not text:
+            raise ValueError(f"Could not read content from {request.file_path}")
+            
+        t1 = time.time()
+        print(f"[Timer] File Read: {t1 - t0:.4f}s ({len(text)} chars)")
+        
+        # 3. Build Dictionary
+        from app.core.dictionary_builder import DictionaryBuilder
+        
+        print(f"[PreviewDict] Using optimized Doc2Graph builder on {len(text)} chars...")
+        
+        dict_builder = DictionaryBuilder(ingest_pipeline.llm)
+        
+        # Use window_size=30000 (default) or from request if provided
+        sampling_size = request.sampling_size if request.sampling_size and request.sampling_size > 0 else 30000
+        
+        t2 = time.time()
+        entity_dictionary = await dict_builder.build_from_text(text, sampling_size=sampling_size)
+        t3 = time.time()
+        print(f"[Timer] Dictionary Build (Total): {t3 - t2:.4f}s")
+        
+        print(f"[PreviewDict] Dictionary built with {len(entity_dictionary)} entities.")
+        
+        print(f"[Timer] Total Request Time: {t3 - start_total:.4f}s")
+        
+        return DictionaryPreviewResponse(
+            preview_id=preview_id,
+            kb_id=request.kb_id,
+            doc_id=request.doc_id,
+            entity_count=len(entity_dictionary),
+            dictionary=entity_dictionary,
+            message=f"Entity Dictionary built successfully with {len(entity_dictionary)} canonical entities."
+        )
+        
+    except Exception as e:
+        import traceback
+        print(f"[PreviewDict] ❌ Dictionary build failed: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ============================================================

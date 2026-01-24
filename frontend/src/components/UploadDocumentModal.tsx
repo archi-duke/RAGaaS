@@ -4,6 +4,7 @@ import { docApi, kbApi, extractionApi } from '../services/api';
 import MessageDialog from './MessageDialog';
 import PromptDialog from './PromptDialog';
 import ExtractionPreviewModal from './ExtractionPreviewModal';
+import EntityDictionaryModal from './EntityDictionaryModal';
 
 interface UploadDocumentModalProps {
     isOpen: boolean;
@@ -112,12 +113,23 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
         enable_entity_normalization: false,  // Merge similar entities
         normalization_algorithm: 'embedding' as 'embedding' | 'string' | 'llm',
         normalization_threshold: 0.85,
+        max_sample_size: 50000, // Max chars for dictionary building
         enable_normalization_confirmation: false,  // User review before applying
     });
 
 
 
+    // Dictionary Modal State
+    const [showDictionaryModal, setShowDictionaryModal] = useState(false);
+    const [dictionaryData, setDictionaryData] = useState<{
+        preview_id: string;
+        doc_id: string;
+        entity_count: number;
+        dictionary: any;
+    } | null>(null);
+
     const fileInputRef = useRef<HTMLInputElement>(null);
+
 
     useEffect(() => {
         if (isOpen && kbId) {
@@ -200,41 +212,69 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
             const docId = uploadRes.data.id;
             const filePath = uploadRes.data.file_path || `/data/uploads/${kbId}/${file.name}`;
 
-            // Call preview API
-            const res = await extractionApi.preview({
-                kb_id: kbId,
-                doc_id: docId,
-                file_path: filePath,
-                chunking: {
-                    strategy: 'fixed_size',
-                    chunk_size: 1024,
-                    chunk_overlap: 20,
-                },
-                graph: {
-                    extractor_type: graphParams.extractor_type,
-                    max_paths_per_chunk: graphParams.max_paths_per_chunk,
-                    max_triplets_per_chunk: graphParams.max_triplets_per_chunk,
-                    num_workers: graphParams.num_workers,
-                    generate_inverse_relations: graphParams.generate_inverse_relations,
-                },
-                graph_store: kbConfig?.graph_backend === 'neo4j' ? 'neo4j' : 'fuseki',
-                enable_text_cleaning: graphParams.enable_text_cleaning,
-                enable_subject_restoration: graphParams.enable_subject_restoration,
-                enable_entity_normalization: graphParams.enable_entity_normalization,
-                normalization_algorithm: graphParams.normalization_algorithm,
-                normalization_threshold: graphParams.normalization_threshold,
-                enable_normalization_confirmation: graphParams.enable_normalization_confirmation,
-                extraction_examples_yaml: graphParams.extraction_examples_yaml || undefined,
-                custom_prompt: graphParams.custom_prompt || undefined,
-            });
+            if (graphParams.enable_entity_normalization) {
+                // [NEW] Call Dictionary Preview API (Doc2Graph Phase 1 Only)
+                console.log("Requesting Entity Dictionary Preview...");
+                const res = await extractionApi.previewDictionary({
+                    kb_id: kbId,
+                    doc_id: docId,
+                    file_path: filePath,
+                    chunking: {
+                        strategy: 'fixed_size',
+                        chunk_size: 1024,
+                        chunk_overlap: 20,
+                    }
+                });
 
-            setPreviewData({
-                preview_id: res.data.preview_id,
-                doc_id: docId,  // Store doc_id for cleanup on cancel
-                triples: res.data.triples,
-                node_count: res.data.node_count,
-            });
-            setShowPreviewModal(true);
+                setDictionaryData({
+                    preview_id: res.data.preview_id,
+                    doc_id: docId,
+                    entity_count: res.data.entity_count,
+                    dictionary: res.data.dictionary
+                });
+
+                setShowDictionaryModal(true);
+
+            } else {
+                // Existing Triple Extraction Preview
+                const res = await extractionApi.preview({
+                    kb_id: kbId,
+                    doc_id: docId,
+                    file_path: filePath,
+                    chunking: {
+                        strategy: 'fixed_size',
+                        chunk_size: 1024,
+                        chunk_overlap: 20,
+                    },
+                    graph: {
+                        extractor_type: graphParams.extractor_type,
+                        max_paths_per_chunk: graphParams.max_paths_per_chunk,
+                        max_triplets_per_chunk: graphParams.max_triplets_per_chunk,
+                        num_workers: graphParams.num_workers,
+                        generate_inverse_relations: graphParams.generate_inverse_relations,
+                    },
+                    graph_store: kbConfig?.graph_backend === 'neo4j' ? 'neo4j' : 'fuseki',
+                    enable_text_cleaning: graphParams.enable_text_cleaning,
+                    enable_subject_restoration: graphParams.enable_subject_restoration,
+                    // Normalization disabled here since we handled it in separate branch if needed
+                    // But actually, standard preview might verify normalization *result* (triples).
+                    // User request: "Extract button shows list of entities ONLY".
+                    // So if normalization is ON, we show Dictionary Modal.
+                    // If normalization is OFF, we show Triple Preview Modal.
+                    enable_entity_normalization: false,
+                    extraction_examples_yaml: graphParams.extraction_examples_yaml || undefined,
+                    custom_prompt: graphParams.custom_prompt || undefined,
+                });
+
+                setPreviewData({
+                    preview_id: res.data.preview_id,
+                    doc_id: docId,
+                    triples: res.data.triples,
+                    node_count: res.data.node_count,
+                });
+                setShowPreviewModal(true);
+            }
+
         } catch (err: any) {
             console.error('Extract failed:', err);
             setMessageDialog({
@@ -602,6 +642,16 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                     isLoading={isExtracting}
                     onConfirm={handlePreviewConfirm}
                     onDiscard={handlePreviewDiscard}
+                />
+            )}
+
+            {dictionaryData && (
+                <EntityDictionaryModal
+                    isOpen={showDictionaryModal}
+                    onClose={() => setShowDictionaryModal(false)}
+                    dictionary={dictionaryData.dictionary}
+                    entityCount={dictionaryData.entity_count}
+                    isLoading={isExtracting}
                 />
             )}
         </>

@@ -68,6 +68,10 @@ export const docApi = {
             if (config.enable_normalization_confirmation !== undefined) {
                 formData.append('enable_normalization_confirmation', String(config.enable_normalization_confirmation));
             }
+            // Send preview_only flag
+            if (config.preview_only !== undefined) {
+                formData.append('preview_only', String(config.preview_only));
+            }
         }
         return api.post(`/knowledge-bases/${kbId}/documents`, formData, {
             headers: {
@@ -209,6 +213,16 @@ export const extractionApi = {
         chunk_id: string;
         triples: any[];
     }) => ingestApi.post('/save-chunk-triples', data),
+
+    // [New] Doc2Graph Dictionary Preview
+    previewDictionary: (data: {
+        kb_id: string;
+        doc_id: string;
+        file_path: string;
+        chunking?: any;
+        sampling_size?: number;
+    }) => ingestApi.post('/preview-dictionary', data),
 };
+
 
 export default api;

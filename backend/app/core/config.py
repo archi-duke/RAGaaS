@@ -1,4 +1,5 @@
 from pydantic_settings import BaseSettings
+import os
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "RAG Management System"
@@ -26,7 +27,8 @@ class Settings(BaseSettings):
 
     # Ingest Service (LlamaIndex based)
     INGEST_SERVICE_URL: str = "http://ingest-service:8001"
-    SHARED_STORAGE_PATH: str = "/data/uploads"  # Shared volume for file exchange
+    # Shared storage for file exchange
+    SHARED_STORAGE_PATH: str = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), "data", "uploads")
     
 
 

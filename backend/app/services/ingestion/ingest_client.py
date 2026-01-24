@@ -33,7 +33,8 @@ class IngestServiceClient:
         normalization_algorithm: str = "embedding",
         normalization_threshold: float = 0.85,
         enable_normalization_confirmation: bool = False,
-        callback_url: Optional[str] = None
+        callback_url: Optional[str] = None,
+        preview_only: bool = False
     ) -> Dict[str, Any]:
         """인제스션 작업 생성"""
         payload = {
@@ -51,7 +52,8 @@ class IngestServiceClient:
             "normalization_algorithm": normalization_algorithm,
             "normalization_threshold": normalization_threshold,
             "enable_normalization_confirmation": enable_normalization_confirmation,
-            "callback_url": callback_url
+            "callback_url": callback_url,
+            "preview_only": preview_only,
         }
 
         
