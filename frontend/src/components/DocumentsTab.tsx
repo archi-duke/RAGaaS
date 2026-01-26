@@ -19,6 +19,13 @@ interface Document {
     generate_inverse?: boolean;
     extraction_examples?: string;
     custom_prompt?: string;
+    // Entity Normalization Settings
+    enable_entity_normalization?: boolean;
+    max_sample_size?: number;
+    // Pipeline Persistence
+    pipeline_status?: string;
+    pipeline_metadata?: any;
+    file_path?: string;
 }
 
 interface DocumentsTabProps {
@@ -32,6 +39,12 @@ interface DocumentsTabProps {
 
 export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocument, onViewChunks }: DocumentsTabProps) {
     const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
+    const [resumeState, setResumeState] = useState<{
+        docId?: string;
+        filePath?: string;
+        step?: 'ENTITY_EXTRACTED' | 'TRIPLE_EXTRACTED';
+        data?: any;
+    } | undefined>(undefined);
 
     // Prompt/Example Management
     const [promptDialog, setPromptDialog] = useState<{
@@ -57,13 +70,19 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
     };
 
 
-    const getStatusBadge = (status: string) => {
+    const getStatusBadge = (status: string, pipeline_status?: string) => {
         const statusMap: Record<string, { class: string; label: string }> = {
             completed: { class: 'badge-success', label: 'Completed' },
             processing: { class: 'badge-warning', label: 'Processing' },
             deleting: { class: 'badge-warning', label: 'Deleting...' },
             error: { class: 'badge-danger', label: 'Error' }
         };
+
+        if (pipeline_status && status === 'processing') {
+            if (pipeline_status === 'ENTITY_EXTRACTED') return <span className="badge badge-info">Entity Ready</span>;
+            if (pipeline_status === 'TRIPLE_EXTRACTED') return <span className="badge badge-info">Actions Ready</span>;
+        }
+
         const config = statusMap[status] || { class: 'badge-secondary', label: status };
         return <span className={`badge ${config.class}`}>{config.label}</span>;
     };
@@ -81,7 +100,10 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
                     <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 600 }}>Documents ({documents.length})</h3>
                     <button
                         className="btn btn-primary"
-                        onClick={() => setIsUploadModalOpen(true)}
+                        onClick={() => {
+                            setResumeState(undefined); // Reset resume state for new upload
+                            setIsUploadModalOpen(true);
+                        }}
                         style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
                     >
                         <Upload size={18} />
@@ -96,8 +118,8 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
                                 <th style={{ padding: '1rem', textAlign: 'left', fontWeight: 600, fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Filename</th>
                                 <th style={{ padding: '1rem', textAlign: 'left', fontWeight: 600, fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Type</th>
                                 <th style={{ padding: '1rem', textAlign: 'left', fontWeight: 600, fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Status</th>
-                                <th style={{ padding: '1rem', textAlign: 'left', fontWeight: 600, fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Extractor</th>
                                 <th style={{ padding: '1rem', textAlign: 'center', fontWeight: 600, fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Paths</th>
+                                <th style={{ padding: '1rem', textAlign: 'center', fontWeight: 600, fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Sample</th>
                                 <th style={{ padding: '1rem', textAlign: 'center', fontWeight: 600, fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Clean</th>
                                 <th style={{ padding: '1rem', textAlign: 'center', fontWeight: 600, fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Subject</th>
                                 {/* [REMOVED] Inverse column - inverse relations now inferred at query time */}
@@ -117,7 +139,22 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
                                 documents.map((doc) => (
                                     <tr
                                         key={doc.id}
-                                        onClick={() => onViewChunks(doc)}
+                                        onClick={() => {
+                                            // [RESUME LOGIC] Check if document has intermediate state
+                                            if (doc.status === 'processing' && doc.pipeline_status && doc.pipeline_metadata) {
+                                                console.log("Resuming document:", doc.id, doc.pipeline_status);
+                                                setResumeState({
+                                                    docId: doc.id,
+                                                    filePath: doc.file_path,
+                                                    step: doc.pipeline_status as any,
+                                                    data: doc.pipeline_metadata
+                                                });
+                                                setIsUploadModalOpen(true);
+                                            } else {
+                                                // Default: View Chunks
+                                                onViewChunks(doc);
+                                            }
+                                        }}
                                         style={{
                                             borderBottom: '1px solid var(--border)',
                                             cursor: 'pointer',
@@ -131,9 +168,9 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
                                         <td style={{ padding: '1rem' }}>
                                             <span className="badge badge-secondary" style={{ fontSize: '0.75rem' }}>{doc.file_type.toUpperCase()}</span>
                                         </td>
-                                        <td style={{ padding: '1rem' }}>{getStatusBadge(doc.status)}</td>
-                                        <td style={{ padding: '1rem', fontSize: '0.85rem' }}>{doc.extractor_type || '-'}</td>
-                                        <td style={{ padding: '1rem', textAlign: 'center', fontSize: '0.85rem' }}>{doc.max_paths || '-'}</td>
+                                        <td style={{ padding: '1rem' }}>{getStatusBadge(doc.status, doc.pipeline_status)}</td>
+                                        <td style={{ padding: '1rem', textAlign: 'center', fontSize: '0.85rem' }}>{doc.max_paths === 1000 ? '∞' : (doc.max_paths || '-')}</td>
+                                        <td style={{ padding: '1rem', textAlign: 'center', fontSize: '0.85rem' }}>{doc.max_sample_size ? `${doc.max_sample_size / 1000}k` : '-'}</td>
                                         <td style={{ padding: '1rem', textAlign: 'center' }}>
                                             {doc.enable_text_cleaning ? <Check size={16} color="#3b82f6" /> : <XIcon size={16} color="var(--text-tertiary)" />}
                                         </td>
@@ -209,6 +246,7 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
                 onClose={() => setIsUploadModalOpen(false)}
                 kbId={kbId}
                 onUploadComplete={onRefresh}
+                initialState={resumeState}
             />
 
             {promptDialog && (

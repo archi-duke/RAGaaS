@@ -191,7 +191,8 @@ class IngestPipeline:
         extractor_type: GraphExtractorType,
         config: Dict[str, Any],
         examples: Optional[str] = None,
-        custom_prompt: Optional[str] = None
+        custom_prompt: Optional[str] = None,
+        entity_dictionary: Optional[Dict[str, Dict[str, Any]]] = None
     ) -> List[Dict[str, Any]]:
         """Extract graph triples from nodes
 
@@ -211,22 +212,40 @@ class IngestPipeline:
                 if len(text.strip()) < 10:  # Skip too short text
                     continue
                 
-                # Prepare examples
+                # Prepare examples & Global Dictionary
                 examples_text = ""
                 if examples:
                     print(f"[Pipeline] Using Few-Shot Examples ({len(examples)} chars):\n{examples[:100]}...")
                     examples_text = f"\n[Reference Examples (Few-Shot)]\n{examples}\n"
+                
+                # Global Entity Dictionary Injection
+                dictionary_text = ""
+                if entity_dictionary:
+                    # 현재 청크와 관련된 엔티티만 필터링하거나, 전체를 간단히 요약해서 전달
+                    # 여기서는 상위 중요 엔티티 일부만 컨텍스트로 제공 (토큰 절약)
+                    # Simple strategy: Just list canonical names and their aliases
+                    dict_lines = []
+                    for canon, info in list(entity_dictionary.items())[:50]: # Top 50 entities
+                        aliases = ", ".join(info.get("variants", []))
+                        if aliases:
+                            dict_lines.append(f"- {canon} (Aliases: {aliases})")
+                        else:
+                            dict_lines.append(f"- {canon}")
+                    
+                    if dict_lines:
+                        dictionary_text = "\n[Global Entity Dictionary (Use these canonical names)]\n" + "\n".join(dict_lines) + "\n"
 
                 # Use custom prompt or default prompt
                 if custom_prompt:
                     print(f"[Pipeline DEBUG] Custom prompt length: {len(custom_prompt)}. Using .replace() method.")
                     # Use safe replacement to avoid conflicts with JSON braces in prompt
-                    prompt = custom_prompt.replace("{text}", text[:2000]).replace("{examples}", examples_text)
+                    prompt = custom_prompt.replace("{text}", text[:2000]).replace("{examples}", examples_text + dictionary_text)
                 else:
                     prompt = f"""Extract primary entities and their relationships from the following text.
 Format: (Subject, Relation, Object)
 Extract up to 5 triplets.
 {examples_text}
+{dictionary_text}
 Text:
 {text[:2000]}
 
@@ -328,6 +347,7 @@ Triplets (one per line, format: Subject|Relation|Object):"""
         enable_entity_normalization: bool = False,
         normalization_algorithm: str = "embedding",
         normalization_threshold: float = 0.85,
+        entity_dictionary: Optional[Dict[str, Dict[str, Any]]] = None # Global Entity Dictionary
     ) -> Dict[str, Any]:
         """Execute the entire ingestion process"""
         
@@ -360,10 +380,20 @@ Triplets (one per line, format: Subject|Relation|Object):"""
         normalization_suggestions = None
         if graph_extractor_type != GraphExtractorType.NONE:
             print(f"[Pipeline] Extracting graph using {graph_extractor_type}...")
-            triples = self.extract_graph(nodes, graph_extractor_type, graph_config, extraction_examples_yaml, custom_prompt)
+            # Pass Global Entity Dictionary for context injection
+            triples = self.extract_graph(
+                nodes, 
+                graph_extractor_type, 
+                graph_config, 
+                extraction_examples_yaml, 
+                custom_prompt,
+                entity_dictionary=entity_dictionary 
+            )
             print(f"[Pipeline] Extracted {len(triples)} triples.")
             
             # 4. Entity Normalization (Pre-loading)
+            # Global Dictionary가 있으면 이미 상당 부분 정규화가 되었겠지만,
+            # 추가적인 알고리즘 기반 정규화를 수행할 수 있습니다.
             if enable_entity_normalization and len(triples) > 0:
                 from app.core.entity_normalizer import entity_normalizer
                 original_count = len(triples)

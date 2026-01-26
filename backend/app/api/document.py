@@ -28,6 +28,7 @@ async def upload_document(
     normalization_threshold: float = Form(0.85),
     enable_normalization_confirmation: bool = Form(False),
     preview_only: bool = Form(False),
+    entity_dictionary: str = Form(None), # Optional dictionary JSON string
 ):
     # 1. Fetch Knowledge Base
     kb = await KBModel.get(kb_id)
@@ -55,6 +56,8 @@ async def upload_document(
     content = await file.read()
     shared_path = settings.SHARED_STORAGE_PATH
     os.makedirs(shared_path, exist_ok=True)
+    # Important: Always overwrite or use unique timestamp if concurrency is high.
+    # Here using doc.id ensures uniqueness per document process call if new, but if overwriting...
     file_path = os.path.join(shared_path, f"{doc.id}_{doc.filename}")
     
     with open(file_path, "wb") as f:
@@ -86,11 +89,35 @@ async def upload_document(
         "generate_inverse_relations": final_config.get("generate_inverse_relations", True),
     }
 
+    # Update document record with extraction settings
+    doc.extractor_type = graph_config.get("extractor_type")
+    doc.max_paths = graph_config.get("max_paths_per_chunk")
+    doc.enable_text_cleaning = enable_text_cleaning
+    doc.enable_subject_restoration = enable_subject_restoration
+    doc.generate_inverse = graph_config.get("generate_inverse_relations")
+    doc.extraction_examples = extraction_examples_yaml or final_config.get("extraction_examples_yaml")
+    doc.enable_entity_normalization = enable_entity_normalization
+    doc.normalization_algorithm = normalization_algorithm
+    doc.normalization_threshold = normalization_threshold
+    doc.max_sample_size = final_config.get("max_sample_size", 50000)
+    doc.enable_normalization_confirmation = enable_normalization_confirmation
+    doc.custom_prompt = final_config.get("custom_prompt")
+    await doc.save()
+
     # 5. Load Default Prompt/Examples if missing
-    graph_extraction_prompt = final_config.get("custom_prompt")
+    graph_extraction_prompt = doc.custom_prompt
     if not graph_extraction_prompt:
         # Fallback to file-based prompt... (logic omitted for brevity but preserved in real file)
         pass
+
+    # Parse dictionary if provided
+    dict_data = None
+    if entity_dictionary:
+        try:
+            dict_data = json.loads(entity_dictionary)
+            logger.info(f"Received entity dictionary with {len(dict_data)} items")
+        except:
+            logger.error("Failed to parse entity_dictionary JSON")
 
     # 6. Call Ingest Service (Async Task)
     async def call_ingest_service():
@@ -110,7 +137,8 @@ async def upload_document(
                 normalization_algorithm=normalization_algorithm,
                 normalization_threshold=normalization_threshold,
                 preview_only=preview_only,
-                callback_url="http://backend:8000/api/document/ingest/callback"
+                callback_url="http://backend:8000/api/document/ingest/callback",
+                entity_dictionary=dict_data
             )
         except Exception as e:
             logger.error(f"[Ingest] Service call failed: {e}")
@@ -131,13 +159,25 @@ async def list_documents(kb_id: str):
     return await DocModel.find(DocModel.kb_id == kb_id).to_list()
 
 @router.delete("/{kb_id}/documents/{doc_id}")
-async def delete_document(kb_id: str, doc_id: str, background_tasks: BackgroundTasks):
+async def delete_document(kb_id: str, doc_id: str):
     doc = await DocModel.find_one(DocModel.id == doc_id, DocModel.kb_id == kb_id)
     if not doc: return {"ok": False}
+    
+    # Optional: Mark as deleting just in case crash, but we are waiting now.
     doc.status = DocumentStatus.DELETING.value
     await doc.save()
+    
     from app.services.ingestion.cleanup_service import cleanup_service
-    background_tasks.add_task(cleanup_service.perform_cascading_deletion, kb_id, doc_id)
+    try:
+        # EXECUTE SYNCHRONOUSLY (WAIT) to ensure completion
+        await cleanup_service.perform_cascading_deletion(kb_id, doc_id)
+    except Exception as e:
+        logger.error(f"Deletion failed synchronously: {e}")
+        # Even if failed, we try to force delete doc record in cleanup_service. 
+        # If it raised here, it means cleanup_service failed critically.
+        # We should probably still return OK if the doc is gone, or error if not.
+        return {"ok": False, "detail": str(e)}
+
     return {"ok": True}
 
 class IngestCallback(BaseModel):
@@ -154,4 +194,37 @@ async def ingest_callback(payload: IngestCallback):
     if doc and payload.status == "completed":
         doc.status = DocumentStatus.COMPLETED.value
         await doc.save()
+        
+        # [Requirement] Delete original file upon completion
+        try:
+            if doc.file_path and os.path.exists(doc.file_path):
+                os.remove(doc.file_path)
+                logger.info(f"Deleted source file for completed document: {doc.file_path}")
+            else:
+                # Fallback check if file_path is empty but file exists in shared storage
+                shared_path = settings.SHARED_STORAGE_PATH
+                potential_path = os.path.join(shared_path, f"{doc.id}_{doc.filename}")
+                if os.path.exists(potential_path):
+                    os.remove(potential_path)
+                    logger.info(f"Deleted source file (fallback path): {potential_path}")
+        except Exception as e:
+            logger.warning(f"Failed to delete source file for {doc.id}: {e}")
+            
     return {"ok": True}
+
+class UpdatePipelineStatusRequest(BaseModel):
+    status: str
+    metadata: Dict[str, Any]
+
+@router.put("/{kb_id}/documents/{doc_id}/pipeline")
+async def update_pipeline_status(kb_id: str, doc_id: str, payload: UpdatePipelineStatusRequest):
+    """Update pipeline intermediate status (for resuming)"""
+    doc = await DocModel.find_one(DocModel.id == doc_id, DocModel.kb_id == kb_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    doc.pipeline_status = payload.status
+    doc.pipeline_metadata = payload.metadata
+    await doc.save()
+    
+    return {"ok": True, "pipeline_status": doc.pipeline_status}

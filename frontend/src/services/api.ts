@@ -72,6 +72,10 @@ export const docApi = {
             if (config.preview_only !== undefined) {
                 formData.append('preview_only', String(config.preview_only));
             }
+            // Send Entity Dictionary (Pass-through)
+            if (config.entity_dictionary) {
+                formData.append('entity_dictionary', JSON.stringify(config.entity_dictionary));
+            }
         }
         return api.post(`/knowledge-bases/${kbId}/documents`, formData, {
             headers: {
@@ -93,6 +97,10 @@ export const docApi = {
     },
     update: (kbId: string, docId: string, data: { extraction_examples?: string; custom_prompt?: string }) =>
         api.patch(`/knowledge-bases/${kbId}/documents/${docId}`, data),
+
+    // [NEW] Update Pipeline Status (for Resume)
+    updatePipelineStatus: (kbId: string, docId: string, data: { status: string; metadata: any }) =>
+        api.put(`/knowledge-bases/${kbId}/documents/${docId}/pipeline`, data),
 };
 
 export const retrievalApi = {
@@ -182,6 +190,7 @@ export const extractionApi = {
         enable_normalization_confirmation?: boolean;
         extraction_examples_yaml?: string;
         custom_prompt?: string;
+        entity_dictionary?: any;
     }) => ingestApi.post('/preview', data),
 
     confirm: (previewId: string, data?: {

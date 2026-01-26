@@ -289,46 +289,8 @@ export default function KnowledgeBaseDetail() {
         useDynamicSchema
     ]);
 
-    const loadKB = async () => {
-        try {
-            const response = await kbApi.get(id!);
-            const kbData = response.data;
-            setKb(kbData);
+    // loadKB has been moved below
 
-            // KB에 graph_backend가 설정되어 있으면 그래프 검색 자동 활성화
-            // (단, 사용자가 저장한 설정이 없을 때만)
-            const settingsKey = `retrievalSettings_${id}`;
-            const saved = localStorage.getItem(settingsKey);
-            const isGraphRAG = kbData.graph_backend === 'neo4j' || kbData.graph_backend === 'ontology';
-
-            if (!saved) {
-                // 저장된 설정이 없으면 KB의 graph_backend에 맞게 기본값 설정
-                if (isGraphRAG) {
-                    console.log(`[KB ${id}] Auto-enabling graph search (graph_backend: ${kbData.graph_backend})`);
-                    setEnableGraphSearch(true);
-                    setSearchStrategy('hybrid_graph');
-                } else {
-                    setEnableGraphSearch(false);
-                    setSearchStrategy('ann');
-                }
-            } else {
-                // 저장된 설정이 있어도 현재 KB의 graph_backend와 호환되지 않으면 조정
-                const savedSettings = JSON.parse(saved);
-                if (savedSettings.searchStrategy === 'hybrid_graph' && !isGraphRAG) {
-                    // Graph가 없는 KB인데 hybrid_graph가 설정되어 있으면 ann으로 변경
-                    console.log(`[KB ${id}] Resetting searchStrategy from hybrid_graph to ann (no graph backend)`);
-                    setSearchStrategy('ann');
-                    setEnableGraphSearch(false);
-                } else if (isGraphRAG && !savedSettings.enableGraphSearch) {
-                    // Graph KB인데 그래프 검색이 비활성화되어 있으면 활성화
-                    console.log(`[KB ${id}] Graph KB detected, enabling graph search`);
-                    setEnableGraphSearch(true);
-                }
-            }
-        } catch (error) {
-            console.error('Failed to load KB:', error);
-        }
-    };
 
     const handlePromote = async () => {
         if (!id) return;
@@ -443,12 +405,73 @@ export default function KnowledgeBaseDetail() {
             // 3. Frontend removes document when status === 'deleted' (see WebSocket handler)
         } catch (error) {
             console.error('Failed to delete document:', error);
-            alert('Failed to delete document');
             // Revert by reloading from server
             loadDocs();
         }
     };
 
+
+    const [error, setError] = useState<string | null>(null);
+
+    // ... (existing code)
+
+    const loadKB = async () => {
+        try {
+            setError(null);
+            const response = await kbApi.get(id!);
+            const kbData = response.data;
+            setKb(kbData);
+
+            // ... (settings logic) ...
+
+            const settingsKey = `retrievalSettings_${id}`;
+            const saved = localStorage.getItem(settingsKey);
+            const isGraphRAG = kbData.graph_backend === 'neo4j' || kbData.graph_backend === 'ontology';
+
+            if (!saved) {
+                if (isGraphRAG) {
+                    console.log(`[KB ${id}] Auto-enabling graph search (graph_backend: ${kbData.graph_backend})`);
+                    setEnableGraphSearch(true);
+                    setSearchStrategy('hybrid_graph');
+                } else {
+                    setEnableGraphSearch(false);
+                    setSearchStrategy('ann');
+                }
+            } else {
+                const savedSettings = JSON.parse(saved);
+                if (savedSettings.searchStrategy === 'hybrid_graph' && !isGraphRAG) {
+                    console.log(`[KB ${id}] Resetting searchStrategy from hybrid_graph to ann (no graph backend)`);
+                    setSearchStrategy('ann');
+                    setEnableGraphSearch(false);
+                } else if (isGraphRAG && !savedSettings.enableGraphSearch) {
+                    console.log(`[KB ${id}] Graph KB detected, enabling graph search`);
+                    setEnableGraphSearch(true);
+                }
+            }
+        } catch (error: any) {
+            console.error('Failed to load KB:', error);
+            setError(error.response?.status === 404 ? 'Knowledge Base not found.' : 'Failed to load Knowledge Base.');
+        }
+    };
+
+    // ... (other functions) ...
+
+    if (error) {
+        return (
+            <div style={{ padding: '4rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+                <HelpCircle size={48} style={{ marginBottom: '1rem', opacity: 0.5 }} />
+                <h2 style={{ fontSize: '1.5rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '0.5rem' }}>
+                    {error}
+                </h2>
+                <p style={{ marginBottom: '2rem' }}>
+                    The Knowledge Base you are looking for does not exist or has been deleted.
+                </p>
+                <Link to="/" className="btn btn-primary">
+                    Go to Dashboard
+                </Link>
+            </div>
+        );
+    }
 
     if (!kb) {
         return (

@@ -33,7 +33,12 @@ class Document(Document):
     enable_entity_normalization: Optional[bool] = False
     normalization_algorithm: Optional[str] = "embedding"  # embedding | string | llm
     normalization_threshold: Optional[float] = 0.85
+    max_sample_size: Optional[int] = 50000
     enable_normalization_confirmation: Optional[bool] = False
+    
+    # Pipeline State (for Resuming)
+    pipeline_status: Optional[str] = None # e.g. "ENTITY_EXTRACTED", "TRIPLE_EXTRACTED"
+    pipeline_metadata: Optional[dict] = None # Stores intermediate data (preview_id, dictionary, summary)
 
     class Settings:
         name = "documents"

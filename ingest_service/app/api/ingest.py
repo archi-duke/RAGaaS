@@ -79,6 +79,7 @@ class IngestRequest(BaseModel):
     enable_normalization_confirmation: bool = False  # User review before applying
     callback_url: Optional[str] = None
     preview_only: bool = False  # Skip processing, just save file path (for preview flows)
+    entity_dictionary: Optional[Dict[str, Any]] = None # Pre-computed dictionary
 
 
 class IngestResponse(BaseModel):
@@ -155,8 +156,8 @@ async def process_ingest_job(job_id: str, request: IngestRequest):
         jobs[job_id]["progress"] = 20
         
         # 3.5 [Doc2Graph] Global Entity Dictionary Construction (Pre-pass)
-        entity_dictionary = None
-        if request.enable_entity_normalization:
+        entity_dictionary = request.entity_dictionary
+        if request.enable_entity_normalization and not entity_dictionary:
             try:
                 from app.core.dictionary_builder import DictionaryBuilder
                 print(f"[IngestJob] Building Global Entity Dictionary for Doc2Graph normalization...")
@@ -180,6 +181,8 @@ async def process_ingest_job(job_id: str, request: IngestRequest):
                 print(f"[IngestJob] ⚠️ Dictionary Building Failed: {e}")
                 import traceback
                 traceback.print_exc()
+        elif request.enable_entity_normalization and entity_dictionary:
+            print(f"[IngestJob] Using provided Pre-computed Entity Dictionary ({len(entity_dictionary)} items).")
 
         jobs[job_id]["progress"] = 30 # Progress Update
 
@@ -422,6 +425,7 @@ class PreviewRequest(BaseModel):
     normalization_threshold: float = 0.85
     enable_normalization_confirmation: bool = False
     sampling_size: Optional[int] = None  # For Doc2Graph Dictionary (Phase 1)
+    entity_dictionary: Optional[Dict[str, Any]] = None # Pre-computed dictionary
 
 
 class PreviewResponse(BaseModel):
@@ -491,8 +495,8 @@ async def create_preview(request: PreviewRequest):
         }
 
         # 2.5 [Doc2Graph] Global Entity Dictionary Construction (Pre-pass)
-        entity_dictionary = None
-        if request.enable_entity_normalization:
+        entity_dictionary = request.entity_dictionary
+        if request.enable_entity_normalization and not entity_dictionary:
             try:
                 from app.core.dictionary_builder import DictionaryBuilder
                 print(f"[Preview] Building Global Entity Dictionary for Doc2Graph normalization...")
@@ -507,6 +511,8 @@ async def create_preview(request: PreviewRequest):
                 print(f"[Preview] ⚠️ Dictionary Building Failed: {e}")
                 import traceback
                 traceback.print_exc()
+        elif request.enable_entity_normalization and entity_dictionary:
+            print(f"[Preview] Using provided Pre-computed Entity Dictionary ({len(entity_dictionary)} items).")
         
         # 3. Run pipeline (same as regular ingest)
         result = await ingest_pipeline.process(

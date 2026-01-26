@@ -34,7 +34,8 @@ class IngestServiceClient:
         normalization_threshold: float = 0.85,
         enable_normalization_confirmation: bool = False,
         callback_url: Optional[str] = None,
-        preview_only: bool = False
+        preview_only: bool = False,
+        entity_dictionary: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """인제스션 작업 생성"""
         payload = {
@@ -54,6 +55,7 @@ class IngestServiceClient:
             "enable_normalization_confirmation": enable_normalization_confirmation,
             "callback_url": callback_url,
             "preview_only": preview_only,
+            "entity_dictionary": entity_dictionary,
         }
 
         

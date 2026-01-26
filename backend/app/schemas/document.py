@@ -35,7 +35,12 @@ class Document(DocumentBase):
     enable_entity_normalization: Optional[bool] = False
     normalization_algorithm: Optional[str] = "embedding"
     normalization_threshold: Optional[float] = 0.85
+    max_sample_size: Optional[int] = 50000
     enable_normalization_confirmation: Optional[bool] = False
+    
+    # Pipeline State (for Resuming)
+    pipeline_status: Optional[str] = None
+    pipeline_metadata: Optional[dict] = None
 
     class Config:
         from_attributes = True
