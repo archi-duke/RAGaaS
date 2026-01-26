@@ -761,8 +761,8 @@ async def create_dictionary_preview(request: PreviewRequest):
         
         dict_builder = DictionaryBuilder(ingest_pipeline.llm)
         
-        # Use window_size=30000 (default) or from request if provided
-        sampling_size = request.sampling_size if request.sampling_size and request.sampling_size > 0 else 30000
+        # Use window_size=5000 (default) or from request if provided
+        sampling_size = request.sampling_size if request.sampling_size and request.sampling_size > 0 else 5000
         
         t2 = time.time()
         entity_dictionary = await dict_builder.build_from_text(text, sampling_size=sampling_size)

@@ -19,7 +19,7 @@ class DictionaryBuilder:
         self.noun_extractor = NounExtractor(llm)
         self.contextual_grouper = ContextualGrouper(llm)
     
-    async def build_from_text(self, text: str, sampling_size: int = 30000) -> Dict[str, Dict[str, Any]]:
+    async def build_from_text(self, text: str, sampling_size: int = 5000) -> Dict[str, Dict[str, Any]]:
         """
         Global Entity Dictionary from Raw Text (Doc2Graph Phase 1 Optimized)
         No pre-chunking required.
@@ -38,11 +38,11 @@ class DictionaryBuilder:
             return {}
         
         # Phase 2: Contextual Grouping (LLM Only)
-        # TEMPORARY: Skip grouping to verify extraction speed & quality (Pass 1 only)
-        # entity_dict = await self.contextual_grouper.group_nouns(raw_entity_map)
+        # Apply strict grouping and type consolidation
+        entity_dict = await self.contextual_grouper.group_nouns(raw_entity_map)
         
-        # Pass 1 결과 그대로 반환
-        entity_dict = raw_entity_map 
+        # Pass 1 결과 그대로 반환 -> (이제 Grouping 적용됨)
+        # entity_dict = raw_entity_map 
 
         print(f"[DictionaryBuilder] Dictionary built with {len(entity_dict)} canonical entities.")
         return entity_dict

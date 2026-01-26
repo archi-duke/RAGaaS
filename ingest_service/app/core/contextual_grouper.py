@@ -24,7 +24,7 @@ class ContextualGrouper:
 
     async def group_nouns(self, raw_entity_map: Dict[str, Any], chunks: Any = None) -> Dict[str, Any]:
         """
-        Groups raw entities using LLM prompts only. (Doc2Graph logic)
+        Groups raw entities using LLM prompts (Doc2Graph logic).
         """
         # 1. Prepare candidate list
         candidates = list(raw_entity_map.keys())
@@ -33,42 +33,36 @@ class ContextualGrouper:
 
         logger.info(f"[Grouper] Consolidating {len(candidates)} candidates using Doc2Graph strategy...")
 
-        # 2. Split into batches if too many candidates (to avoid context limit)
-        # Doc2Graph usually handles few hundred entities at once.
-        batch_size = 500
+        # 2. Split into batches
+        batch_size = 300 # Doc2Graph defaultish
         batches = [candidates[i:i + batch_size] for i in range(0, len(candidates), batch_size)]
         
         mappings = {}
         
-        for batch in batches:
-            batch_mapping = await self._process_batch(batch)
+        for batch_keys in batches:
+            batch_mapping = await self._process_batch_simple(batch_keys)
             mappings.update(batch_mapping)
 
         # 3. Apply mappings to create final dictionary
         final_dict = {}
-        for original_name, data in raw_entity_map.items():
+        
+        for original_name, original_data in raw_entity_map.items():
+            # Canonical Mapping
             canonical_name = mappings.get(original_name, original_name)
             
             if canonical_name not in final_dict:
                 final_dict[canonical_name] = {
-                    "type": "Entity", # Doc2Graph doesn't infer strict types during grouping
+                    "type": "Entity", # Revert to generic type as Doc2Graph doesn't infer types
                     "variants": set(),
                     "chunk_ids": set()
                 }
             
-            # Add variant only if it's different from the canonical name
-            if original_name != canonical_name:
-                final_dict[canonical_name]["variants"].add(original_name)
+            final_dict[canonical_name]["variants"].add(original_name)
             
-            # Merge chunk IDs
-            final_dict[canonical_name]["chunk_ids"].update(data["chunk_ids"])
-            
-            # Inherit types if available and specific
-            if "types" in data:
-                # Simple logic to keep existing types
-                pass
-
-        # Convert sets to lists for JSON serialization
+            if "chunk_ids" in original_data:
+                final_dict[canonical_name]["chunk_ids"].update(original_data["chunk_ids"])
+        
+        # Convert sets to lists
         return {
             name: {
                 "type": info["type"],
@@ -78,50 +72,55 @@ class ContextualGrouper:
             for name, info in final_dict.items()
         }
 
-    async def _process_batch(self, candidates: List[str]) -> Dict[str, str]:
-        candidates_str = ", ".join(candidates)
+    async def _process_batch_simple(self, candidates: List[str]) -> Dict[str, str]:
+        """
+        Doc2Graph style grouping without Types.
+        """
+        candidates_str = "\n".join(candidates)
         
-        # Doc2Graph Strict Prompt
         user_prompt = (
-            "다음 명사 리스트에서 **'동일한 인물'이나 '동일한 특정 개체'를 지칭하는 단어들**을 그룹화해줘.\n"
-            "특히 '오징어', '게임' 처럼 단어가 분리되어 리스트에 있고, 이들이 합쳐진 '오징어 게임'도 리스트에 있다면 **'오징어 게임'을 대표어로 하여 통합**해.\n"
-            "'프론트', '맨'이 '프론트 맨'의 일부라면 '프론트 맨'으로 통합해.\n"
-            "단, '성기훈', '기훈' 같은 이름 변형은 계속 그룹화하되, **의미가 단순히 비슷한 유의어(예: 자동차-탈것)는 묶지 마.**\n\n"
-            "출력 형식 (JSON):\n"
-            "{\n"
-            "  \"groups\": [\n"
-            "    {\"canonical\": \"대표단어\", \"variants\": [\"변형1\", \"변형2\"]},\n"
-            "    ...\n"
-            "  ]\n"
-            "}\n\n"
-            f"명사 리스트:\n[{candidates_str}]"
+            "다음 명사 리스트에서 **'철자나 표기법이 유사하여 같은 단어로 볼 수 있는 것들'만** 그룹화해줘.\n"
+            "단어의 의미를 해석해서 추론하지 말고, **글자 형태가 비슷한 경우**에만 통합해야 해.\n\n"
+            "[그룹화 규칙]\n"
+            "1. **띄어쓰기/붙여쓰기 차이**: (예: '오징어 게임' = '오징어게임', '프론트 맨' = '프론트맨') -> 긴 쪽이나 띄어쓰기가 된 쪽을 대표어로.\n"
+            "2. **이름의 일부 포함**: (예: '성기훈' = '기훈', '조상우' = '상우') -> 풀네임을 대표어로.\n"
+            "3. **조사/접미사 제거**: (예: '참가자들' -> '참가자')\n"
+            "4. **절대 금지**: 의미가 같아도 글자가 다르면 묶지 마. (예: '프론트 맨'과 '황인호'는 글자가 다르므로 절대 묶으면 안 됨!)\n\n"
+            "출력 형식: '대표단어, 변형1, 변형2...'\n"
+            f"리스트:\n{candidates_str}"
         )
 
         try:
             response = await self.client.chat.completions.create(
-                model="gpt-4o", # Grouping needs high intelligence, sticking to 4o per Doc2Graph
+                model="gpt-4o",
                 messages=[
                     {"role": "system", "content": self.system_prompt},
                     {"role": "user", "content": user_prompt}
                 ],
-                temperature=0,
-                response_format={"type": "json_object"}
+                temperature=0
             )
-            data = json.loads(response.choices[0].message.content)
-            groups = data.get("groups", [])
+            content = response.choices[0].message.content
             
+            # Parse Doc2Graph style output
+            # Line format: "Representative, Variant1, Variant2"
             mapping = {}
-            for group in groups:
-                canonical = group.get("canonical")
-                variants = group.get("variants", [])
-                if canonical:
-                    for v in variants:
-                        mapping[v] = canonical
-                    # Ensure canonical maps to itself (implied, but good for safety)
-                    mapping[canonical] = canonical
+            lines = content.split('\n')
+            
+            for line in lines:
+                # Remove numbers if present (e.g. "1. Sung Ki-hoon, Ki-hoon")
+                import re
+                clean_line = re.sub(r'^\d+\.\s*', '', line.strip())
+                clean_line = re.sub(r'^-\s*', '', clean_line)
+                
+                parts = [p.strip() for p in clean_line.split(',') if p.strip()]
+                if not parts: continue
+                
+                representative = parts[0]
+                for p in parts:
+                    mapping[p] = representative
             
             return mapping
 
         except Exception as e:
             logger.error(f"[Grouper] Batch processing failed: {e}")
-            return {}  # Return empty mapping on failure (preserve originals)_dict
+            return {}
