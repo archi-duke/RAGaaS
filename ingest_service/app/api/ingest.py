@@ -462,6 +462,9 @@ class ConfirmRequest(BaseModel):
     """Confirm Request - Save previewed data"""
     enable_inference: bool = False
     callback_url: Optional[str] = None
+    # For crash recovery:
+    kb_id: Optional[str] = None
+    doc_id: Optional[str] = None
 
 
 @router.post("/preview", response_model=PreviewResponse)
@@ -575,8 +578,75 @@ async def confirm_preview(
     background_tasks: BackgroundTasks
 ):
     """Confirm and save previewed data to database."""
+    
+    # [Recovery Logic] If cache missed (e.g. restart), try to load from temp storage
     if preview_id not in preview_cache:
-        raise HTTPException(status_code=404, detail="Preview not found or expired")
+        if request.kb_id and request.doc_id:
+            print(f"[Confirm] Cache miss for {preview_id}. Attempting recovery from disk for doc {request.doc_id}...")
+            try:
+                from app.utils.temp_storage import temp_storage
+                
+                # Check if files exist
+                triples_path = temp_storage.get_file_path(request.kb_id, request.doc_id, "triples.json")
+                chunks_path = temp_storage.get_file_path(request.kb_id, request.doc_id, "chunks.json")
+                
+                if triples_path.exists() and chunks_path.exists():
+                    import json
+                    from llama_index.core.schema import TextNode
+                    
+                    # Load Triples
+                    with open(triples_path, "r", encoding="utf-8") as f:
+                        triples_data = json.load(f)
+                        
+                    # Load Chunks (Nodes)
+                    with open(chunks_path, "r", encoding="utf-8") as f:
+                        chunks_raw = json.load(f)
+                        nodes = []
+                        embeddings = {} # Embeddings might be lost if not saved? 
+                        # Wait, embeddings are usually in a separate file or large.
+                        # For now, let's assume embeddings need re-generation or are in chunks?
+                        # If chunks_json contains embedding field?
+                        # Usually chunks_json is list of dicts.
+                        
+                        for c in chunks_raw:
+                            # Reconstruct TextNode
+                            node = TextNode(
+                                text=c.get("content", ""),
+                                id_=c.get("node_id") or c.get("id"),
+                                metadata=c.get("metadata", {})
+                            )
+                            # Embedding?
+                            if "embedding" in c and c["embedding"]:
+                                node.embedding = c["embedding"]
+                                embeddings[node.node_id] = c["embedding"]
+                            nodes.append(node)
+                            
+                    # Reconstruct Cache
+                    preview_cache[preview_id] = {
+                        "preview_id": preview_id,
+                        "kb_id": request.kb_id,
+                        "doc_id": request.doc_id,
+                        "graph_store": "neo4j", # Defaulting to neo4j if lost
+                        "generate_inverse_relations": True, # Default
+                        "nodes": nodes,
+                        "embeddings": embeddings, 
+                        "triples": triples_data,
+                        "node_count": len(nodes),
+                        "triple_count": len(triples_data),
+                        "created_at": datetime.utcnow().isoformat(),
+                        "normalization_suggestions": None,
+                        "enable_entity_normalization": False,
+                        "enable_normalization_confirmation": False,
+                        "stats": None
+                    }
+                    print(f"[Confirm] ✅ Successfully recovered preview data from disk.")
+                else:
+                    print(f"[Confirm] ❌ Recovery failed: Temp files not found.")
+            except Exception as e:
+                print(f"[Confirm] ❌ Recovery error: {e}")
+        
+    if preview_id not in preview_cache:
+        raise HTTPException(status_code=404, detail="Preview not found or expired (Logic: Server Restarted?)")
     
     cached = preview_cache[preview_id]
     

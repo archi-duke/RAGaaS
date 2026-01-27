@@ -69,6 +69,13 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
         docId: null
     });
 
+    // Error Dialog State
+    const [errorDialog, setErrorDialog] = useState<{ isOpen: boolean; title: string; message: string }>({
+        isOpen: false,
+        title: '',
+        message: ''
+    });
+
     const handleViewEntities = async (docId: string, filename: string) => {
         setIsLoadingResults(true);
         try {
@@ -118,32 +125,41 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
         if (processingDocId) return;
         setProcessingDocId(doc.id);
 
+        let currentStep = "INIT";
+
         try {
             // Determine Current State
             const isTripleWait = doc.pipeline_status === 'TRIPLE_EXTRACTED' || doc.status === 'TRIPLE_EXTRACTED';
             const isEntityWait = doc.pipeline_status === 'ENTITY_EXTRACTED' || doc.status === 'ENTITY_EXTRACTED';
 
+            currentStep = "FETCH_PIPELINE";
             // 1. Fetch Pipeline Data (Dictionary or Triples)
             console.log(`[Continue] Fetching pipeline data for doc ${doc.id}...`);
             const pipeRes = await docApi.getPipelineData(kbId, doc.id);
             const pipelineData = pipeRes.data || {};
 
             if (isTripleWait) {
+                currentStep = "CONFIRMING";
                 // NEXT: Confirm Ingestion
                 console.log("[Continue] TRIPLE_EXTRACTED -> Confirming...");
-                const previewId = pipelineData.preview_id || doc.pipeline_metadata?.preview_id;
+                // Prefer pipeline_metadata.preview_id, fallback to pipelineData.preview_id
+                const previewId = doc.pipeline_metadata?.preview_id || pipelineData.preview_id;
 
                 if (!previewId) {
-                    throw new Error('Missing Preview ID for confirmation.');
+                    console.error("Missing Preview ID. Metadata:", doc.pipeline_metadata, "PipelineData:", pipelineData);
+                    throw new Error(`Missing Preview ID for confirmation. Doc ID: ${doc.id}`);
                 }
 
                 await extractionApi.confirm(previewId, {
                     enable_inference: doc.enable_inference ?? false,
-                    callback_url: "http://127.0.0.1:8000/api/knowledge-bases/ingest/callback"
+                    callback_url: "http://127.0.0.1:8000/api/knowledge-bases/ingest/callback",
+                    kb_id: kbId,
+                    doc_id: doc.id
                 });
 
                 console.log("[Continue] Confirmed.");
             } else if (isEntityWait) {
+                currentStep = "UPDATE_STATUS_EXTRACTING";
                 // NEXT: Extract Triples
                 console.log("[Continue] ENTITY_EXTRACTED -> Extracting Triples...");
 
@@ -158,6 +174,7 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
                 });
                 onRefresh();
 
+                currentStep = "PREVIEW_REQUEST";
                 // Robust File Path Lookup
                 let filePath = doc.file_path || pipelineData.file_path;
                 // Fallback if missing or placeholder
@@ -167,8 +184,6 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
                 }
 
                 // Construct Params from Doc
-                // Note: If original params are not saved on 'doc' object in DB, we use defaults.
-                // Ideally, backend should persist these params in metadata.
                 const res = await extractionApi.preview({
                     kb_id: kbId,
                     doc_id: doc.id,
@@ -194,6 +209,7 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
                     callback_url: "http://127.0.0.1:8000/api/knowledge-bases/ingest/callback"
                 });
 
+                currentStep = "UPDATE_STATUS_TRIPLE_EXTRACTED";
                 // Save Result (TRIPLE_EXTRACTED)
                 await docApi.updatePipelineStatus(kbId, doc.id, {
                     status: 'TRIPLE_EXTRACTED',
@@ -207,15 +223,24 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
                     }
                 });
                 console.log("[Continue] Triple Extraction Complete.");
+
+                // [AUTO-CONFIRM OPTION]
+                // If user wants explicit flow: Entity -> Triple -> Confirm, we stop here.
+                // If user wants Entity -> [Triple -> Confirm] (Seamless), we can add confirm here.
+                // For now, let's stick to the visible steps unless requested otherwise, 
+                // BUT we fixed the Confirm step to be recoverable.
             }
 
             onRefresh();
 
         } catch (error: any) {
-            console.error("Continue processing failed:", error);
+            console.error(`Continue processing failed at step: ${currentStep}`, error);
             const msg = error.response?.data?.detail || error.message || "Operation failed";
-            // Use setTimeout to allow UI to settle before alerting
-            setTimeout(() => window.alert(`doc2graph: Failed to continue processing.\n\nError: ${msg}`), 100);
+            setErrorDialog({
+                isOpen: true,
+                title: `Error at step: ${currentStep}`,
+                message: msg
+            });
         } finally {
             setProcessingDocId(null);
         }
@@ -521,6 +546,17 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
                     />
                 )
             }
+
+            <ConfirmDialog
+                isOpen={errorDialog.isOpen}
+                title={errorDialog.title}
+                message={errorDialog.message}
+                onConfirm={() => setErrorDialog(prev => ({ ...prev, isOpen: false }))}
+                onCancel={() => setErrorDialog(prev => ({ ...prev, isOpen: false }))}
+                confirmText="Close"
+                cancelText="Dismiss"
+                isDestructive={true}
+            />
         </>
     );
 }

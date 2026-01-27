@@ -173,6 +173,8 @@ export const retrievalApi = {
 // Ingest Service API (runs on port 8001)
 const ingestApi = axios.create({
     baseURL: 'http://127.0.0.1:8001/api',
+    // Set timeout to Infinity (0) to allow long-running extraction jobs
+    timeout: 0,
     headers: {
         'Content-Type': 'application/json',
     },
@@ -201,6 +203,8 @@ export const extractionApi = {
     confirm: (previewId: string, data?: {
         enable_inference?: boolean;
         callback_url?: string;
+        kb_id?: string;
+        doc_id?: string;
     }) => ingestApi.post(`/confirm/${previewId}`, data || {}),
 
     discard: (previewId: string) => ingestApi.delete(`/preview/${previewId}`),
