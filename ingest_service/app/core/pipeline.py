@@ -333,6 +333,8 @@ Triplets (one per line, format: Subject|Relation|Object):"""
         normalization_threshold: float = 0.85,
         entity_dictionary: Optional[Dict[str, Dict[str, Any]]] = None,
         sampling_size: Optional[int] = None, # User-defined sampling size
+        kb_id: Optional[str] = None,  # ✅ 추가: 임시 파일 저장용
+        doc_id: Optional[str] = None,  # ✅ 추가: 임시 파일 저장용
         job_id: Optional[str] = None, # For cancellation checks
         status_callback: Optional[any] = None # Async function(status: str)
     ) -> Dict[str, Any]:
@@ -365,6 +367,15 @@ Triplets (one per line, format: Subject|Relation|Object):"""
             dict_builder = DictionaryBuilder(self.llm)
             effective_sampling_size = sampling_size if sampling_size else 10000
             entity_dictionary = await dict_builder.build_from_text(text, sampling_size=effective_sampling_size)
+            
+            # ✅ 엔티티 추출 완료 상태 전송
+            if status_callback:
+                await status_callback("ENTITY_EXTRACTED")
+            
+            # ✅ 임시 파일 저장: 엔티티 사전
+            if kb_id and doc_id and entity_dictionary:
+                from app.utils.temp_storage import temp_storage
+                await temp_storage.save_entity_dictionary(kb_id, doc_id, entity_dictionary)
         stats.append({"step": "Step 1: Entity Extraction (Pre-pass)", "duration": round(time.time() - t1, 2)})
         
         # PHASE 2: Chunking (Triple-level)
@@ -398,6 +409,25 @@ Triplets (one per line, format: Subject|Relation|Object):"""
                 custom_prompt,
                 entity_dictionary=entity_dictionary 
             )
+            
+            # ✅ 트리플 추출 완료 상태 전송
+            if status_callback:
+                await status_callback("TRIPLE_EXTRACTED")
+            
+            # ✅ 임시 파일 저장: 트리플
+            if kb_id and doc_id and triples:
+                from app.utils.temp_storage import temp_storage
+                await temp_storage.save_triples(kb_id, doc_id, triples)
+        
+        # ✅ 임시 파일 저장: 청크 (트리플 추출 여부와 관계없이 항상 저장)
+        if kb_id and doc_id and nodes:
+            from app.utils.temp_storage import temp_storage
+            chunks_data = [{
+                "content": node.get_content(), 
+                "metadata": node.metadata,
+                "node_id": node.node_id
+            } for node in nodes]
+            await temp_storage.save_chunks(kb_id, doc_id, chunks_data)
         stats.append({"step": f"Step 3: Triple Extraction ({len(triples)} triples)", "duration": round(time.time() - t3, 2)})
             
         # PHASE 4: Post-normalization

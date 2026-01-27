@@ -108,12 +108,15 @@ async def send_pipeline_status(callback_url: str, job_id: str, doc_id: str, kb_i
     if not callback_url: return
     import httpx
     try:
+        # ✅ COMPLETED 상태일 때는 status를 'completed'로 전송
+        overall_status = "completed" if status == "COMPLETED" else "processing"
+        
         async with httpx.AsyncClient() as client:
             await client.post(callback_url, json={
                 "job_id": job_id,
                 "doc_id": doc_id,
                 "kb_id": kb_id,
-                "status": "processing",
+                "status": overall_status,
                 "pipeline_status": status
             })
     except Exception as e:
@@ -181,6 +184,8 @@ async def process_ingest_job(job_id: str, request: IngestRequest):
             normalization_threshold=request.normalization_threshold,
             entity_dictionary=request.entity_dictionary,
             sampling_size=request.sampling_size,
+            kb_id=request.kb_id,  # ✅ 추가
+            doc_id=request.doc_id,  # ✅ 추가
             job_id=job_id,
             status_callback=pipeline_callback
         )
@@ -188,10 +193,21 @@ async def process_ingest_job(job_id: str, request: IngestRequest):
         if not result or jobs.get(job_id, {}).get("status") == JobStatus.CANCELLED:
             return
         
+        # ✅ 임시 파일 저장: 메타데이터 (통계 정보)
+        from app.utils.temp_storage import temp_storage
+        await temp_storage.save_metadata(request.kb_id, request.doc_id, {
+            "node_count": result["node_count"],
+            "triple_count": result["triple_count"],
+            "stats": result.get("stats", [])
+        })
+        
         jobs[job_id]["progress"] = 80
         if jobs[job_id]["status"] == JobStatus.CANCELLED:
              print(f"[IngestJob] Job {job_id} cancelled before saving.")
              return
+        
+        # ✅ STORING 상태 전송 (DB 저장 시작)
+        await send_pipeline_status(request.callback_url, job_id, request.doc_id, request.kb_id, "STORING")
         
         # 5. Save (Milvus, Neo4j/Fuseki)
         print(f"[IngestJob] Saving to databases for doc {request.doc_id}...")
@@ -278,6 +294,9 @@ async def process_ingest_job(job_id: str, request: IngestRequest):
         }
         jobs[job_id]["updated_at"] = datetime.utcnow().isoformat()
         print(f"[IngestJob] ✅ Job {job_id} COMPLETED for doc {request.doc_id}")
+        
+        # ✅ COMPLETED 상태 전송 (완료)
+        await send_pipeline_status(request.callback_url, job_id, request.doc_id, request.kb_id, "COMPLETED")
 
 
         
@@ -506,6 +525,8 @@ async def create_preview(request: PreviewRequest):
             normalization_threshold=request.normalization_threshold,
             entity_dictionary=request.entity_dictionary,
             sampling_size=request.sampling_size,
+            kb_id=request.kb_id,  # ✅ 추가
+            doc_id=request.doc_id,  # ✅ 추가
             status_callback=pipeline_callback
         )
         
@@ -666,6 +687,9 @@ async def _save_preview_data(
         del preview_cache[preview_id]
         
         print(f"[Confirm] ✅ Preview {preview_id} saved successfully")
+        
+        # ✅ COMPLETED 상태 전송 (완료)
+        await send_pipeline_status(callback_url, job_id, doc_id, kb_id, "COMPLETED")
         
         # Callback
         if callback_url:

@@ -112,8 +112,11 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
 
 
     const getStatusBadge = (status: string, pipeline_status?: string) => {
+        // Royal Blue styling for standard 'completed' status
+        const publishedStyle = { backgroundColor: '#4169E1', color: 'white', borderColor: '#4169E1' };
+
         const statusMap: Record<string, { class: string; label: string }> = {
-            completed: { class: 'badge-success', label: 'Published' }, // Changed to Published
+            completed: { class: 'badge-success', label: 'Published' },
             processing: { class: 'badge-warning', label: 'Processing' },
             deleting: { class: 'badge-warning', label: 'Deleting...' },
             error: { class: 'badge-danger', label: 'Error' }
@@ -122,26 +125,31 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
         // Graph Pipeline Status Overrides
         if (status === 'processing' && pipeline_status) {
             switch (pipeline_status) {
+                // Active Steps (Processing style)
                 case 'EXTRACTING_ENTITIES':
                     return <span className="badge badge-warning" style={{ animation: 'pulse 2s infinite' }}>Entities...</span>;
-                case 'ENTITY_EXTRACTED':
-                    return <span className="badge badge-success" style={{ backgroundColor: '#0ea5e9', borderColor: '#0ea5e9' }}>Entities</span>;
                 case 'EXTRACTING_TRIPLES':
                     return <span className="badge badge-warning" style={{ animation: 'pulse 2s infinite' }}>Triples...</span>;
-                case 'TRIPLE_EXTRACTED':
-                    return <span className="badge badge-success" style={{ backgroundColor: '#8b5cf6', borderColor: '#8b5cf6' }}>Triples</span>;
                 case 'STORING':
                     return <span className="badge badge-warning" style={{ animation: 'pulse 2s infinite' }}>Storing</span>;
+
+                // Completed Intermediate Steps (Old Published style - Green)
+                case 'ENTITY_EXTRACTED':
+                    return <span className="badge badge-success">Entities</span>;
+                case 'TRIPLE_EXTRACTED':
+                    return <span className="badge badge-success">Triples</span>;
+
+                // Final Step (Royal Blue)
                 case 'COMPLETED':
-                    return <span className="badge badge-success">Published</span>;
+                    return <span className="badge" style={publishedStyle}>Published</span>;
+
                 default:
-                    // Fallback to standard processing
                     break;
             }
         }
 
         // Final Status Overrides
-        if (status === 'completed') return <span className="badge badge-success">Published</span>;
+        if (status === 'completed') return <span className="badge" style={publishedStyle}>Published</span>;
 
         const config = statusMap[status] || { class: 'badge-secondary', label: status };
         return <span className={`badge ${config.class}`}>{config.label}</span>;
@@ -200,17 +208,9 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
                                     <tr
                                         key={doc.id}
                                         onClick={() => {
-                                            // [RESUME LOGIC] If processing, always show the upload/pipeline modal
+                                            // [MODIFIED] If processing, do nothing (no response)
                                             if (doc.status === 'processing') {
-                                                console.log("Resuming document:", doc.id, doc.pipeline_status);
-                                                setResumeState({
-                                                    docId: doc.id,
-                                                    filename: doc.filename,
-                                                    filePath: doc.file_path,
-                                                    step: doc.pipeline_status as any,
-                                                    data: doc.pipeline_metadata
-                                                });
-                                                setIsUploadModalOpen(true);
+                                                return;
                                             } else {
                                                 // Default: View Chunks
                                                 onViewChunks(doc);
@@ -218,12 +218,10 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
                                         }}
                                         style={{
                                             borderBottom: '1px solid var(--border)',
-                                            cursor: 'pointer',
+                                            cursor: doc.status === 'processing' ? 'default' : 'pointer', // Change cursor
                                             transition: 'background-color 0.15s ease'
                                         }}
-                                        className="hover:bg-gray-50"
-                                        onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'rgba(0,0,0,0.02)'}
-                                        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                                        className={doc.status === 'processing' ? '' : "hover:bg-gray-50"}
                                     >
                                         <td style={{ padding: '1rem', fontWeight: 500 }}>{doc.filename}</td>
                                         <td style={{ padding: '1rem' }}>
@@ -251,8 +249,8 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
                                                         handleViewEntities(doc.id, doc.filename);
                                                     }}
                                                     title="View Entity List"
-                                                    disabled={isLoadingResults}
-                                                    style={{ color: '#3b82f6' }}
+                                                    disabled={isLoadingResults || doc.status === 'processing'} // Disable if processing
+                                                    style={{ color: doc.status === 'processing' ? 'var(--text-tertiary)' : '#3b82f6' }}
                                                 >
                                                     <Book size={18} />
                                                 </button>
@@ -263,8 +261,8 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
                                                         handleViewTriples(doc.id, doc.filename);
                                                     }}
                                                     title="View Triple List"
-                                                    disabled={isLoadingResults}
-                                                    style={{ color: '#3b82f6' }}
+                                                    disabled={isLoadingResults || doc.status === 'processing'} // Disable if processing
+                                                    style={{ color: doc.status === 'processing' ? 'var(--text-tertiary)' : '#3b82f6' }}
                                                 >
                                                     <Database size={18} />
                                                 </button>
@@ -272,7 +270,14 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
                                                     className="btn btn-icon danger"
                                                     onClick={(e) => {
                                                         e.stopPropagation();
-                                                        onDeleteDocument(doc.id);
+                                                        const isProcessing = doc.status === 'processing';
+                                                        const message = isProcessing
+                                                            ? "현재 진행 중인 작업을 중단하고 문서를 삭제하시겠습니까?"
+                                                            : "정말 이 문서를 삭제하시겠습니까?";
+
+                                                        if (window.confirm(message)) {
+                                                            onDeleteDocument(doc.id);
+                                                        }
                                                     }}
                                                     title="Delete Document"
                                                     style={{
