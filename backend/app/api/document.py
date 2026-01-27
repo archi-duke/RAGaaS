@@ -30,6 +30,7 @@ async def upload_document(
     enable_normalization_confirmation: bool = Form(False),
     preview_only: bool = Form(False),
     entity_dictionary: str = Form(None), # Optional dictionary JSON string
+    execution_mode: str = Form("batch"), # batch | step
 ):
     # 1. Fetch Knowledge Base
     kb = await KBModel.get(kb_id)
@@ -39,18 +40,24 @@ async def upload_document(
     # 2. Handle Document Record (Check for overwrite)
     existing_doc = await DocModel.find_one(DocModel.kb_id == kb_id, DocModel.filename == file.filename)
     
+    # Init Metadata with Execution Mode
+    pipeline_metadata = {"execution_mode": execution_mode}
+
     if existing_doc:
         logger.info(f"Overwriting document: {file.filename}")
         doc = existing_doc
         doc.status = DocumentStatus.PROCESSING.value
         doc.updated_at = datetime.utcnow()
+        # Merge existing metadata if needed, but for new upload we reset usually
+        doc.pipeline_metadata = pipeline_metadata
     else:
         doc = DocModel(
             kb_id=kb_id,
             filename=file.filename,
             file_type=file.filename.split(".")[-1],
             status=DocumentStatus.PROCESSING.value,
-            pipeline_status="UPLOADED"
+            pipeline_status="UPLOADED",
+            pipeline_metadata=pipeline_metadata
         )
         await doc.insert()
 

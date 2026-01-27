@@ -30,7 +30,10 @@ interface Document {
     max_sample_size?: number;
     // Pipeline Persistence
     pipeline_status?: string;
-    pipeline_metadata?: any;
+    pipeline_metadata?: {
+        execution_mode?: 'batch' | 'step';
+        [key: string]: any;
+    };
     file_path?: string;
     chunking_strategy?: string;
     chunking_config?: any;
@@ -257,9 +260,15 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
     };
 
 
-    const getStatusBadge = (status: string, pipeline_status?: string) => {
+    // Helper to get status badge
+    const getStatusBadge = (status: string, pipeline_status?: string, metadata?: any) => {
         // Royal Blue styling for standard 'completed' status
         const publishedStyle = { backgroundColor: '#4169E1', color: 'white', borderColor: '#4169E1' };
+
+        // [CHECK MODE] If Batch Mode, force Processing badge for intermediate states
+        if (metadata?.execution_mode === 'batch' && (pipeline_status === 'TRIPLE_EXTRACTED' || pipeline_status === 'ENTITY_EXTRACTED')) {
+            return <span className="badge badge-warning" style={{ animation: 'pulse 2s infinite' }}>Processing...</span>;
+        }
 
         const statusMap: Record<string, { class: string; label: string }> = {
             completed: { class: 'badge-success', label: 'Published' },
@@ -370,14 +379,17 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
                                             const isTripleWait = doc.pipeline_status === 'TRIPLE_EXTRACTED' || doc.status === 'TRIPLE_EXTRACTED';
                                             const isEntityWait = doc.pipeline_status === 'ENTITY_EXTRACTED' || doc.status === 'ENTITY_EXTRACTED';
 
-                                            if (isTripleWait || isEntityWait) {
-                                                // [MODIFIED] Direct Continue (No Modal)
+                                            // [CHECK MODE] If this is a Batch Run, ignore intermediate waiting states!
+                                            const isBatchMode = doc.pipeline_metadata?.execution_mode === 'batch';
+
+                                            if ((isTripleWait || isEntityWait) && !isBatchMode) {
+                                                // [MODIFIED] Direct Continue (No Modal) - Only if NOT Batch Mode
                                                 handleContinueProcessing(doc);
                                                 return;
                                             }
 
-                                            // If processing, do nothing (no response)
-                                            if (doc.status === 'processing') {
+                                            // If processing (or batch mode running), do nothing (no response)
+                                            if (doc.status === 'processing' || (isBatchMode && (isTripleWait || isEntityWait))) {
                                                 return;
                                             } else {
                                                 // Default: View Chunks
@@ -399,7 +411,7 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
                                         <td style={{ padding: '1rem' }}>
                                             <span className="badge badge-secondary" style={{ fontSize: '0.75rem' }}>{doc.file_type.toUpperCase()}</span>
                                         </td>
-                                        <td style={{ padding: '1rem' }}>{getStatusBadge(doc.status, doc.pipeline_status)}</td>
+                                        <td style={{ padding: '1rem' }}>{getStatusBadge(doc.status, doc.pipeline_status, doc.pipeline_metadata)}</td>
                                         <td style={{ padding: '1rem', textAlign: 'center', fontSize: '0.85rem' }}>{doc.max_paths === 1000 ? '∞' : (doc.max_paths || '-')}</td>
                                         <td style={{ padding: '1rem', textAlign: 'center', fontSize: '0.85rem' }}>{doc.max_sample_size ? `${doc.max_sample_size / 1000}k` : '-'}</td>
                                         <td style={{ padding: '1rem', textAlign: 'center' }}>
@@ -414,9 +426,10 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
                                         </td>
                                         <td style={{ padding: '1rem', textAlign: 'center' }}>
                                             <div style={{ display: 'flex', justifyContent: 'center', gap: '0.5rem' }}>
-                                                {/* CONTINUE BUTTON */}
+                                                {/* CONTINUE BUTTON - Hide if Batch Mode */}
                                                 {((doc.pipeline_status === 'TRIPLE_EXTRACTED' || doc.status === 'TRIPLE_EXTRACTED') ||
-                                                    (doc.pipeline_status === 'ENTITY_EXTRACTED' || doc.status === 'ENTITY_EXTRACTED')) && (
+                                                    (doc.pipeline_status === 'ENTITY_EXTRACTED' || doc.status === 'ENTITY_EXTRACTED')) &&
+                                                    doc.pipeline_metadata?.execution_mode !== 'batch' && (
                                                         <button
                                                             className="btn btn-primary"
                                                             onClick={(e) => {

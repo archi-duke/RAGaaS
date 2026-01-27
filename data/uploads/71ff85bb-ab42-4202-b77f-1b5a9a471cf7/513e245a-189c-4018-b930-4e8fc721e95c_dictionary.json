@@ -1,0 +1,1365 @@
+{
+  "오징어 게임": {
+    "type": "Entity",
+    "variants": [
+      "오징어 게임"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "서바이벌 드라마": {
+    "type": "Entity",
+    "variants": [
+      "서바이벌 드라마"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "오징어 (놀이)": {
+    "type": "Entity",
+    "variants": [
+      "오징어 (놀이)"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "오징어 게임: 더 챌린지": {
+    "type": "Entity",
+    "variants": [
+      "오징어 게임: 더 챌린지"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "황동혁": {
+    "type": "Entity",
+    "variants": [
+      "황동혁"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "대한민국": {
+    "type": "Entity",
+    "variants": [
+      "대한민국"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "디스토피아": {
+    "type": "Entity",
+    "variants": [
+      "디스토피아"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "생존 스릴러": {
+    "type": "Entity",
+    "variants": [
+      "생존 스릴러"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "넷플릭스": {
+    "type": "Entity",
+    "variants": [
+      "넷플릭스"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "TV 시리즈": {
+    "type": "Entity",
+    "variants": [
+      "TV 시리즈"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "재정적 어려움": {
+    "type": "Entity",
+    "variants": [
+      "경제적 어려움",
+      "재정적 어려움"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "플레이어": {
+    "type": "Entity",
+    "variants": [
+      "플레이어"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "상금": {
+    "type": "Entity",
+    "variants": [
+      "상금"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "어린이 게임": {
+    "type": "Entity",
+    "variants": [
+      "어린이 게임"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "비밀 대회": {
+    "type": "Entity",
+    "variants": [
+      "비밀 대회"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "이정재": {
+    "type": "Entity",
+    "variants": [
+      "이정재"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "앙상블 출연진": {
+    "type": "Entity",
+    "variants": [
+      "앙상블 출연진"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "스릴러": {
+    "type": "Entity",
+    "variants": [
+      "스릴러"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "드라마": {
+    "type": "Entity",
+    "variants": [
+      "드라마"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "생존": {
+    "type": "Entity",
+    "variants": [
+      "생존"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "방송 국가": {
+    "type": "Entity",
+    "variants": [
+      "방송 국가"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "방송 채널": {
+    "type": "Entity",
+    "variants": [
+      "방송 채널"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "방송 기간": {
+    "type": "Entity",
+    "variants": [
+      "방송 기간"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "방송 시간": {
+    "type": "Entity",
+    "variants": [
+      "방송 시간"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "방송 시즌": {
+    "type": "Entity",
+    "variants": [
+      "방송 시즌"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "방송 횟수": {
+    "type": "Entity",
+    "variants": [
+      "방송 횟수"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "싸이런픽쳐스": {
+    "type": "Entity",
+    "variants": [
+      "싸이런픽쳐스"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "연출": {
+    "type": "Entity",
+    "variants": [
+      "연출"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "각본": {
+    "type": "Entity",
+    "variants": [
+      "각본"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "출연자": {
+    "type": "Entity",
+    "variants": [
+      "출연자"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "위하준": {
+    "type": "Entity",
+    "variants": [
+      "위하준"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "이병헌": {
+    "type": "Entity",
+    "variants": [
+      "이병헌"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "음악": {
+    "type": "Entity",
+    "variants": [
+      "음악"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "정재일": {
+    "type": "Entity",
+    "variants": [
+      "정재일"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "언어": {
+    "type": "Entity",
+    "variants": [
+      "언어"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "한국어": {
+    "type": "Entity",
+    "variants": [
+      "한국어"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "외부 링크": {
+    "type": "Entity",
+    "variants": [
+      "외부 링크"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "공식 웹사이트": {
+    "type": "Entity",
+    "variants": [
+      "공식 웹사이트"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "자본주의": {
+    "type": "Entity",
+    "variants": [
+      "자본주의"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "계급 격차": {
+    "type": "Entity",
+    "variants": [
+      "계급 격차"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "아이디어": {
+    "type": "Entity",
+    "variants": [
+      "아이디어"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "해외 프로그램": {
+    "type": "Entity",
+    "variants": [
+      "해외 프로그램"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "제작사": {
+    "type": "Entity",
+    "variants": [
+      "제작사"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "오징어 게임 시즌 1": {
+    "type": "Entity",
+    "variants": [
+      "오징어 게임 시즌 1"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "비평가": {
+    "type": "Entity",
+    "variants": [
+      "비평가"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "호평": {
+    "type": "Entity",
+    "variants": [
+      "호평"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "국제적 관심": {
+    "type": "Entity",
+    "variants": [
+      "국제적 관심"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "프라임타임 에미상": {
+    "type": "Entity",
+    "variants": [
+      "프라임타임 에미상"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "골든 글로브상": {
+    "type": "Entity",
+    "variants": [
+      "골든 글로브상"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "오징어 게임 시즌 2": {
+    "type": "Entity",
+    "variants": [
+      "오징어 게임 시즌 2"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "제작": {
+    "type": "Entity",
+    "variants": [
+      "제작"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "오징어 게임 시즌 3": {
+    "type": "Entity",
+    "variants": [
+      "오징어 게임 시즌 3"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "마지막 시즌": {
+    "type": "Entity",
+    "variants": [
+      "마지막 시즌"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "줄거리": {
+    "type": "Entity",
+    "variants": [
+      "줄거리"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "한국": {
+    "type": "Entity",
+    "variants": [
+      "한국"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "이혼": {
+    "type": "Entity",
+    "variants": [
+      "이혼"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "아버지": {
+    "type": "Entity",
+    "variants": [
+      "아버지"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "노모": {
+    "type": "Entity",
+    "variants": [
+      "노모"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "도박 중독자": {
+    "type": "Entity",
+    "variants": [
+      "도박 중독자"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "성기훈": {
+    "type": "Entity",
+    "variants": [
+      "기훈",
+      "성기훈"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "기회": {
+    "type": "Entity",
+    "variants": [
+      "기회"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "장소": {
+    "type": "Entity",
+    "variants": [
+      "장소"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "운동복": {
+    "type": "Entity",
+    "variants": [
+      "운동복"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "경비원": {
+    "type": "Entity",
+    "variants": [
+      "경비원"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "경기": {
+    "type": "Entity",
+    "variants": [
+      "경기"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "프론트 맨": {
+    "type": "Entity",
+    "variants": [
+      "프론트 맨",
+      "프론트맨"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "사망": {
+    "type": "Entity",
+    "variants": [
+      "사망"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "대상": {
+    "type": "Entity",
+    "variants": [
+      "대상"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "어린 시절 친구": {
+    "type": "Entity",
+    "variants": [
+      "어린 시절 친구"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "조상우": {
+    "type": "Entity",
+    "variants": [
+      "조상우"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "탈북자": {
+    "type": "Entity",
+    "variants": [
+      "탈북자"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "강새벽": {
+    "type": "Entity",
+    "variants": [
+      "강새벽"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "동맹": {
+    "type": "Entity",
+    "variants": [
+      "동맹"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "신체적 비틀림": {
+    "type": "Entity",
+    "variants": [
+      "신체적 비틀림"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "정신적 비틀림": {
+    "type": "Entity",
+    "variants": [
+      "정신적 비틀림"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "황준호": {
+    "type": "Entity",
+    "variants": [
+      "황준호"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "형사": {
+    "type": "Entity",
+    "variants": [
+      "형사"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "형": {
+    "type": "Entity",
+    "variants": [
+      "형"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "경호원": {
+    "type": "Entity",
+    "variants": [
+      "경호원"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "시즌 2": {
+    "type": "Entity",
+    "variants": [
+      "시즌 2"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "복수": {
+    "type": "Entity",
+    "variants": [
+      "복수"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "동생": {
+    "type": "Entity",
+    "variants": [
+      "동생"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "경찰관": {
+    "type": "Entity",
+    "variants": [
+      "경찰관"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "준호": {
+    "type": "Entity",
+    "variants": [
+      "준호"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "오일남": {
+    "type": "Entity",
+    "variants": [
+      "오일남",
+      "일남"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "통제권": {
+    "type": "Entity",
+    "variants": [
+      "통제권"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "본성": {
+    "type": "Entity",
+    "variants": [
+      "본성"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "등장인물": {
+    "type": "Entity",
+    "variants": [
+      "등장인물"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "오징어 게임의 등장인물 목록": {
+    "type": "Entity",
+    "variants": [
+      "오징어 게임의 등장인물 목록"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "운전사": {
+    "type": "Entity",
+    "variants": [
+      "운전사"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "어머니": {
+    "type": "Entity",
+    "variants": [
+      "어머니"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "딸": {
+    "type": "Entity",
+    "variants": [
+      "딸"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "재정적 안정": {
+    "type": "Entity",
+    "variants": [
+      "재정적 안정"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "게임": {
+    "type": "Entity",
+    "variants": [
+      "게임"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "박해수": {
+    "type": "Entity",
+    "variants": [
+      "박해수"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "증권회사": {
+    "type": "Entity",
+    "variants": [
+      "증권회사"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "투자팀장": {
+    "type": "Entity",
+    "variants": [
+      "투자팀장"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "후배": {
+    "type": "Entity",
+    "variants": [
+      "후배"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "서울대학교": {
+    "type": "Entity",
+    "variants": [
+      "서울대학교"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "고객": {
+    "type": "Entity",
+    "variants": [
+      "고객"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "투자": {
+    "type": "Entity",
+    "variants": [
+      "투자"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "경찰": {
+    "type": "Entity",
+    "variants": [
+      "경찰"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "잠복형사": {
+    "type": "Entity",
+    "variants": [
+      "잠복형사"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "정호연": {
+    "type": "Entity",
+    "variants": [
+      "정호연"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "북한": {
+    "type": "Entity",
+    "variants": [
+      "북한"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "함경북도": {
+    "type": "Entity",
+    "variants": [
+      "함경북도"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "부모님": {
+    "type": "Entity",
+    "variants": [
+      "부모님"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "브로커": {
+    "type": "Entity",
+    "variants": [
+      "브로커"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "가족": {
+    "type": "Entity",
+    "variants": [
+      "가족"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "집": {
+    "type": "Entity",
+    "variants": [
+      "집"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "오영수": {
+    "type": "Entity",
+    "variants": [
+      "오영수"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "외부 세계": {
+    "type": "Entity",
+    "variants": [
+      "외부 세계"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "게임 제작자": {
+    "type": "Entity",
+    "variants": [
+      "게임 제작자"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "뇌종양": {
+    "type": "Entity",
+    "variants": [
+      "뇌종양"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "장풍": {
+    "type": "Entity",
+    "variants": [
+      "장풍"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "Duke": {
+    "type": "Entity",
+    "variants": [
+      "Duke"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "허성태": {
+    "type": "Entity",
+    "variants": [
+      "허성태"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "장덕수": {
+    "type": "Entity",
+    "variants": [
+      "장덕수"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "상사": {
+    "type": "Entity",
+    "variants": [
+      "상사"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "부하": {
+    "type": "Entity",
+    "variants": [
+      "부하"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "도박 빚": {
+    "type": "Entity",
+    "variants": [
+      "도박 빚"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "갱스터": {
+    "type": "Entity",
+    "variants": [
+      "갱스터"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "아누팜 트리파티": {
+    "type": "Entity",
+    "variants": [
+      "아누팜 트리파티"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "알리 압둘": {
+    "type": "Entity",
+    "variants": [
+      "알리 압둘"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "고용주": {
+    "type": "Entity",
+    "variants": [
+      "고용주"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "임금": {
+    "type": "Entity",
+    "variants": [
+      "임금"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "파키스탄": {
+    "type": "Entity",
+    "variants": [
+      "파키스탄"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "이주 노동자": {
+    "type": "Entity",
+    "variants": [
+      "이주 노동자"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "김주령": {
+    "type": "Entity",
+    "variants": [
+      "김주령"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "한미녀": {
+    "type": "Entity",
+    "variants": [
+      "한미녀"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "여자": {
+    "type": "Entity",
+    "variants": [
+      "여자"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "김덕겸": {
+    "type": "Entity",
+    "variants": [
+      "김덕겸"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "황인호": {
+    "type": "Entity",
+    "variants": [
+      "황인호"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "게임 감독자": {
+    "type": "Entity",
+    "variants": [
+      "게임 감독자"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "사람": {
+    "type": "Entity",
+    "variants": [
+      "사람"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "오영일": {
+    "type": "Entity",
+    "variants": [
+      "오영일"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "이서환": {
+    "type": "Entity",
+    "variants": [
+      "이서환"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "박정배": {
+    "type": "Entity",
+    "variants": [
+      "박정배"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "술집": {
+    "type": "Entity",
+    "variants": [
+      "술집"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "시즌 회수": {
+    "type": "Entity",
+    "variants": [
+      "시즌 회수"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "방송 날짜": {
+    "type": "Entity",
+    "variants": [
+      "방송 날짜"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "시즌 1": {
+    "type": "Entity",
+    "variants": [
+      "시즌 1"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "시즌 3": {
+    "type": "Entity",
+    "variants": [
+      "시즌 3"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "무궁화 꽃이 피던 날": {
+    "type": "Entity",
+    "variants": [
+      "무궁화 꽃이 피던 날"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "지옥": {
+    "type": "Entity",
+    "variants": [
+      "지옥"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "우산을 쓴 남자": {
+    "type": "Entity",
+    "variants": [
+      "우산을 쓴 남자"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "쫄려도 편먹기": {
+    "type": "Entity",
+    "variants": [
+      "쫄려도 편먹기"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "평등한 세상": {
+    "type": "Entity",
+    "variants": [
+      "평등한 세상"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "깐부": {
+    "type": "Entity",
+    "variants": [
+      "깐부"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "VIPS": {
+    "type": "Entity",
+    "variants": [
+      "VIPS"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  },
+  "운수 좋은 날": {
+    "type": "Entity",
+    "variants": [
+      "운수 좋은 날"
+    ],
+    "chunk_ids": [
+      "doc_global"
+    ]
+  }
+}

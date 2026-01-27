@@ -1,0 +1,146 @@
+{
+  "created_at": "2026-01-27T15:51:40.927023",
+  "triple_count": 20,
+  "triples": [
+    {
+      "subject": "1. 오징어 게임",
+      "predicate": "제작",
+      "object": "황동혁",
+      "source_node_id": "bb8342d3-9365-433a-9473-e1b720606670",
+      "confidence": 0.7
+    },
+    {
+      "subject": "2. 오징어 게임",
+      "predicate": "방송 채널",
+      "object": "넷플릭스",
+      "source_node_id": "bb8342d3-9365-433a-9473-e1b720606670",
+      "confidence": 0.7
+    },
+    {
+      "subject": "3. 플레이어",
+      "predicate": "목표",
+      "object": "상금",
+      "source_node_id": "bb8342d3-9365-433a-9473-e1b720606670",
+      "confidence": 0.7
+    },
+    {
+      "subject": "4. 황동혁",
+      "predicate": "구상",
+      "object": "아이디어",
+      "source_node_id": "bb8342d3-9365-433a-9473-e1b720606670",
+      "confidence": 0.7
+    },
+    {
+      "subject": "5. 오징어 게임",
+      "predicate": "방송 국가",
+      "object": "대한민국",
+      "source_node_id": "bb8342d3-9365-433a-9473-e1b720606670",
+      "confidence": 0.7
+    },
+    {
+      "subject": "1. 성기훈",
+      "predicate": "참여",
+      "object": "비밀 대회",
+      "source_node_id": "d651fcba-105a-415e-9aa7-bf65a8a846bb",
+      "confidence": 0.7
+    },
+    {
+      "subject": "2. 성기훈",
+      "predicate": "동맹",
+      "object": "조상우",
+      "source_node_id": "d651fcba-105a-415e-9aa7-bf65a8a846bb",
+      "confidence": 0.7
+    },
+    {
+      "subject": "3. 성기훈",
+      "predicate": "동맹",
+      "object": "강새벽",
+      "source_node_id": "d651fcba-105a-415e-9aa7-bf65a8a846bb",
+      "confidence": 0.7
+    },
+    {
+      "subject": "4. 프론트맨",
+      "predicate": "감독",
+      "object": "게임",
+      "source_node_id": "d651fcba-105a-415e-9aa7-bf65a8a846bb",
+      "confidence": 0.7
+    },
+    {
+      "subject": "5. 성기훈",
+      "predicate": "목표",
+      "object": "상금",
+      "source_node_id": "d651fcba-105a-415e-9aa7-bf65a8a846bb",
+      "confidence": 0.7
+    },
+    {
+      "subject": "1. 박해수",
+      "predicate": "역",
+      "object": "조상우",
+      "source_node_id": "2133541b-1671-4151-9f32-39f8e5feb534",
+      "confidence": 0.7
+    },
+    {
+      "subject": "2. 위하준",
+      "predicate": "역",
+      "object": "황준호",
+      "source_node_id": "2133541b-1671-4151-9f32-39f8e5feb534",
+      "confidence": 0.7
+    },
+    {
+      "subject": "3. 정호연",
+      "predicate": "역",
+      "object": "강새벽",
+      "source_node_id": "2133541b-1671-4151-9f32-39f8e5feb534",
+      "confidence": 0.7
+    },
+    {
+      "subject": "4. 오영수",
+      "predicate": "역",
+      "object": "오일남",
+      "source_node_id": "2133541b-1671-4151-9f32-39f8e5feb534",
+      "confidence": 0.7
+    },
+    {
+      "subject": "5. 이병헌",
+      "predicate": "역",
+      "object": "황인호",
+      "source_node_id": "2133541b-1671-4151-9f32-39f8e5feb534",
+      "confidence": 0.7
+    },
+    {
+      "subject": "1. 오징어 게임 시즌 1",
+      "predicate": "방송 날짜",
+      "object": "2021년 9월 17일",
+      "source_node_id": "d90e3124-bb13-4d4f-b0de-6c692f5bac78",
+      "confidence": 0.7
+    },
+    {
+      "subject": "2. 오징어 게임 시즌 2",
+      "predicate": "방송 날짜",
+      "object": "2024년 12월 26일",
+      "source_node_id": "d90e3124-bb13-4d4f-b0de-6c692f5bac78",
+      "confidence": 0.7
+    },
+    {
+      "subject": "3. 오징어 게임 시즌 3",
+      "predicate": "방송 날짜",
+      "object": "2025년",
+      "source_node_id": "d90e3124-bb13-4d4f-b0de-6c692f5bac78",
+      "confidence": 0.7
+    },
+    {
+      "subject": "4. 이서환",
+      "predicate": "역할",
+      "object": "390번 박정배",
+      "source_node_id": "d90e3124-bb13-4d4f-b0de-6c692f5bac78",
+      "confidence": 0.7
+    },
+    {
+      "subject": "5. 오징어 게임",
+      "predicate": "장르",
+      "object": "서바이벌 드라마",
+      "source_node_id": "d90e3124-bb13-4d4f-b0de-6c692f5bac78",
+      "confidence": 0.7
+    }
+  ]
+}

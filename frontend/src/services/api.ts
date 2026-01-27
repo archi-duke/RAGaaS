@@ -72,9 +72,12 @@ export const docApi = {
             if (config.preview_only !== undefined) {
                 formData.append('preview_only', String(config.preview_only));
             }
-            // Send Entity Dictionary (Pass-through)
             if (config.entity_dictionary) {
                 formData.append('entity_dictionary', JSON.stringify(config.entity_dictionary));
+            }
+            // Send Execution Mode (batch | step)
+            if (config.execution_mode) {
+                formData.append('execution_mode', config.execution_mode);
             }
         }
         return api.post(`/knowledge-bases/${kbId}/documents`, formData, {

@@ -280,7 +280,8 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                 ...graphParams,
                 chunking_strategy: strategy,
                 chunking_config: chunkingConfig,
-                entity_dictionary: dictionaryData?.dictionary
+                entity_dictionary: dictionaryData?.dictionary,
+                execution_mode: 'batch'
             };
 
             if (file) {
@@ -363,7 +364,8 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                         ...graphParams,
                         chunking_strategy: strategy,
                         chunking_config: chunkingConfig,
-                        preview_only: true
+                        preview_only: true,
+                        execution_mode: 'step'
                     });
                     currentDocId = uploadRes.data.id;
                     currentFilePath = uploadRes.data.file_path;
