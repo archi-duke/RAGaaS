@@ -1,0 +1,1045 @@
+[
+  {
+    "subject": "오징어 게임",
+    "predicate": "제작된",
+    "object": "대한민국",
+    "source_node_id": "82514848-bb34-410e-bfb0-37df83881ad2",
+    "confidence": 0.9
+  },
+  {
+    "subject": "오징어 게임",
+    "predicate": "장르",
+    "object": "서바이벌 드라마",
+    "source_node_id": "82514848-bb34-410e-bfb0-37df83881ad2",
+    "confidence": 0.9
+  },
+  {
+    "subject": "오징어 게임",
+    "predicate": "형식",
+    "object": "리얼리티 프로그램",
+    "source_node_id": "82514848-bb34-410e-bfb0-37df83881ad2",
+    "confidence": 0.9
+  },
+  {
+    "subject": "오징어 게임",
+    "predicate": "관련된",
+    "object": "오징어 게임: 더 챌린지",
+    "source_node_id": "82514848-bb34-410e-bfb0-37df83881ad2",
+    "confidence": 0.9
+  },
+  {
+    "subject": "오징어 게임",
+    "predicate": "제작, 각본, 감독을 맡은",
+    "object": "황동혁",
+    "source_node_id": "82514848-bb34-410e-bfb0-37df83881ad2",
+    "confidence": 0.9
+  },
+  {
+    "subject": "오징어 게임",
+    "predicate": "설정",
+    "object": "디스토피아",
+    "source_node_id": "82514848-bb34-410e-bfb0-37df83881ad2",
+    "confidence": 0.9
+  },
+  {
+    "subject": "오징어 게임",
+    "predicate": "장르",
+    "object": "생존 스릴러",
+    "source_node_id": "82514848-bb34-410e-bfb0-37df83881ad2",
+    "confidence": 0.9
+  },
+  {
+    "subject": "오징어 게임",
+    "predicate": "방영된",
+    "object": "넷플릭스",
+    "source_node_id": "82514848-bb34-410e-bfb0-37df83881ad2",
+    "confidence": 0.9
+  },
+  {
+    "subject": "오징어 게임",
+    "predicate": "has_제작 연도",
+    "object": "2021",
+    "source_node_id": "82514848-bb34-410e-bfb0-37df83881ad2",
+    "confidence": 0.9
+  },
+  {
+    "subject": "오징어 게임",
+    "predicate": "has_영어 제목",
+    "object": "Squid Game",
+    "source_node_id": "82514848-bb34-410e-bfb0-37df83881ad2",
+    "confidence": 0.9
+  },
+  {
+    "subject": "시리즈",
+    "predicate": "중심으로 전개된다",
+    "object": "비밀 대회",
+    "source_node_id": "ef068233-4438-4f8c-8e5f-3e54a6186cb3",
+    "confidence": 0.9
+  },
+  {
+    "subject": "비밀 대회",
+    "predicate": "목표로",
+    "object": "상금",
+    "source_node_id": "ef068233-4438-4f8c-8e5f-3e54a6186cb3",
+    "confidence": 0.9
+  },
+  {
+    "subject": "상금",
+    "predicate": "가치",
+    "object": "미화 3,986만 달러",
+    "source_node_id": "ef068233-4438-4f8c-8e5f-3e54a6186cb3",
+    "confidence": 0.9
+  },
+  {
+    "subject": "플레이어",
+    "predicate": "목숨을 걸고",
+    "object": "어린이 게임",
+    "source_node_id": "ef068233-4438-4f8c-8e5f-3e54a6186cb3",
+    "confidence": 0.9
+  },
+  {
+    "subject": "시리즈",
+    "predicate": "제목은",
+    "object": "한국 어린이 게임",
+    "source_node_id": "ef068233-4438-4f8c-8e5f-3e54a6186cb3",
+    "confidence": 0.9
+  },
+  {
+    "subject": "한국 어린이 게임",
+    "predicate": "따왔다",
+    "object": "오징어",
+    "source_node_id": "ef068233-4438-4f8c-8e5f-3e54a6186cb3",
+    "confidence": 0.9
+  },
+  {
+    "subject": "이정재",
+    "predicate": "이끈다",
+    "object": "앙상블 출연진",
+    "source_node_id": "ef068233-4438-4f8c-8e5f-3e54a6186cb3",
+    "confidence": 0.9
+  },
+  {
+    "subject": "비밀 대회",
+    "predicate": "has_상금",
+    "object": "456억 원",
+    "source_node_id": "ef068233-4438-4f8c-8e5f-3e54a6186cb3",
+    "confidence": 0.9
+  },
+  {
+    "subject": "비밀 대회",
+    "predicate": "has_플레이어 수",
+    "object": "455명",
+    "source_node_id": "ef068233-4438-4f8c-8e5f-3e54a6186cb3",
+    "confidence": 0.9
+  },
+  {
+    "subject": "오징어",
+    "predicate": "has_종류",
+    "object": "한국 어린이 게임",
+    "source_node_id": "ef068233-4438-4f8c-8e5f-3e54a6186cb3",
+    "confidence": 0.9
+  },
+  {
+    "subject": "스릴러",
+    "predicate": "장르",
+    "object": "스릴러",
+    "source_node_id": "a011f8ea-4508-4a01-9cf4-557bd78770d5",
+    "confidence": 0.9
+  },
+  {
+    "subject": "드라마",
+    "predicate": "장르",
+    "object": "드라마",
+    "source_node_id": "a011f8ea-4508-4a01-9cf4-557bd78770d5",
+    "confidence": 0.9
+  },
+  {
+    "subject": "생존",
+    "predicate": "장르",
+    "object": "생존",
+    "source_node_id": "a011f8ea-4508-4a01-9cf4-557bd78770d5",
+    "confidence": 0.9
+  },
+  {
+    "subject": "대한민국",
+    "predicate": "방송 국가",
+    "object": "대한민국",
+    "source_node_id": "a011f8ea-4508-4a01-9cf4-557bd78770d5",
+    "confidence": 0.9
+  },
+  {
+    "subject": "넷플릭스",
+    "predicate": "방송 채널",
+    "object": "넷플릭스",
+    "source_node_id": "a011f8ea-4508-4a01-9cf4-557bd78770d5",
+    "confidence": 0.9
+  },
+  {
+    "subject": "2021년 9월 17일",
+    "predicate": "방송 시작일",
+    "object": "2021년 9월 17일",
+    "source_node_id": "a011f8ea-4508-4a01-9cf4-557bd78770d5",
+    "confidence": 0.9
+  },
+  {
+    "subject": "32~76분",
+    "predicate": "방송 시간",
+    "object": "32~76분",
+    "source_node_id": "a011f8ea-4508-4a01-9cf4-557bd78770d5",
+    "confidence": 0.9
+  },
+  {
+    "subject": "2",
+    "predicate": "방송 시즌",
+    "object": "2",
+    "source_node_id": "a011f8ea-4508-4a01-9cf4-557bd78770d5",
+    "confidence": 0.9
+  },
+  {
+    "subject": "16",
+    "predicate": "방송 횟수",
+    "object": "16",
+    "source_node_id": "a011f8ea-4508-4a01-9cf4-557bd78770d5",
+    "confidence": 0.9
+  },
+  {
+    "subject": "(주)싸이런픽쳐스",
+    "predicate": "제작",
+    "object": "(주)싸이런픽쳐스",
+    "source_node_id": "a011f8ea-4508-4a01-9cf4-557bd78770d5",
+    "confidence": 0.9
+  },
+  {
+    "subject": "황동혁",
+    "predicate": "연출",
+    "object": "황동혁",
+    "source_node_id": "a011f8ea-4508-4a01-9cf4-557bd78770d5",
+    "confidence": 0.9
+  },
+  {
+    "subject": "황동혁",
+    "predicate": "각본",
+    "object": "황동혁",
+    "source_node_id": "a011f8ea-4508-4a01-9cf4-557bd78770d5",
+    "confidence": 0.9
+  },
+  {
+    "subject": "이정재",
+    "predicate": "출연자",
+    "object": "이정재",
+    "source_node_id": "a011f8ea-4508-4a01-9cf4-557bd78770d5",
+    "confidence": 0.9
+  },
+  {
+    "subject": "위하준",
+    "predicate": "출연자",
+    "object": "위하준",
+    "source_node_id": "a011f8ea-4508-4a01-9cf4-557bd78770d5",
+    "confidence": 0.9
+  },
+  {
+    "subject": "이병헌",
+    "predicate": "출연자",
+    "object": "이병헌",
+    "source_node_id": "a011f8ea-4508-4a01-9cf4-557bd78770d5",
+    "confidence": 0.9
+  },
+  {
+    "subject": "정재일",
+    "predicate": "음악",
+    "object": "정재일",
+    "source_node_id": "a011f8ea-4508-4a01-9cf4-557bd78770d5",
+    "confidence": 0.9
+  },
+  {
+    "subject": "한국어",
+    "predicate": "언어",
+    "object": "한국어",
+    "source_node_id": "a011f8ea-4508-4a01-9cf4-557bd78770d5",
+    "confidence": 0.9
+  },
+  {
+    "subject": "공식 웹사이트",
+    "predicate": "외부 링크",
+    "object": "공식 웹사이트",
+    "source_node_id": "a011f8ea-4508-4a01-9cf4-557bd78770d5",
+    "confidence": 0.9
+  },
+  {
+    "subject": "황동혁",
+    "predicate": "구상하다",
+    "object": "아이디어",
+    "source_node_id": "a011f8ea-4508-4a01-9cf4-557bd78770d5",
+    "confidence": 0.9
+  },
+  {
+    "subject": "황동혁",
+    "predicate": "기반하다",
+    "object": "경제적 어려움",
+    "source_node_id": "a011f8ea-4508-4a01-9cf4-557bd78770d5",
+    "confidence": 0.9
+  },
+  {
+    "subject": "황동혁",
+    "predicate": "기반하다",
+    "object": "자본주의의 계급 격차",
+    "source_node_id": "a011f8ea-4508-4a01-9cf4-557bd78770d5",
+    "confidence": 0.9
+  },
+  {
+    "subject": "황동혁",
+    "predicate": "has_별칭",
+    "object": "없음",
+    "source_node_id": "a011f8ea-4508-4a01-9cf4-557bd78770d5",
+    "confidence": 0.9
+  },
+  {
+    "subject": "황동혁",
+    "predicate": "집필하다",
+    "object": "이 이야기",
+    "source_node_id": "fd9e91eb-44b7-455a-9c9f-ccba3a79d3bc",
+    "confidence": 0.9
+  },
+  {
+    "subject": "넷플릭스",
+    "predicate": "관심을 갖다",
+    "object": "아이디어",
+    "source_node_id": "fd9e91eb-44b7-455a-9c9f-ccba3a79d3bc",
+    "confidence": 0.9
+  },
+  {
+    "subject": "아이디어",
+    "predicate": "자금을 조달할",
+    "object": "제작사",
+    "source_node_id": "fd9e91eb-44b7-455a-9c9f-ccba3a79d3bc",
+    "confidence": 0.9
+  },
+  {
+    "subject": "오징어 게임 시즌 1",
+    "predicate": "출시되다",
+    "object": "2021년 9월 17일",
+    "source_node_id": "fd9e91eb-44b7-455a-9c9f-ccba3a79d3bc",
+    "confidence": 0.9
+  },
+  {
+    "subject": "오징어 게임 시즌 1",
+    "predicate": "받다",
+    "object": "비평가들의 호평과 국제적인 관심",
+    "source_node_id": "fd9e91eb-44b7-455a-9c9f-ccba3a79d3bc",
+    "confidence": 0.9
+  },
+  {
+    "subject": "오징어 게임 시즌 1",
+    "predicate": "가 되다",
+    "object": "넷플릭스에서 가장 많이 시청한 시리즈",
+    "source_node_id": "fd9e91eb-44b7-455a-9c9f-ccba3a79d3bc",
+    "confidence": 0.9
+  },
+  {
+    "subject": "오징어 게임 시즌 1",
+    "predicate": "받다",
+    "object": "프라임타임 에미상 6개와 골든 글로브상 1개를 포함한 수많은 상",
+    "source_node_id": "fd9e91eb-44b7-455a-9c9f-ccba3a79d3bc",
+    "confidence": 0.9
+  },
+  {
+    "subject": "오징어 게임 시즌 1",
+    "predicate": "제작은 시작되다",
+    "object": "2023년 7월",
+    "source_node_id": "fd9e91eb-44b7-455a-9c9f-ccba3a79d3bc",
+    "confidence": 0.9
+  },
+  {
+    "subject": "오징어 게임 시즌 1",
+    "predicate": "개봉되다",
+    "object": "2024년 12월 26일",
+    "source_node_id": "fd9e91eb-44b7-455a-9c9f-ccba3a79d3bc",
+    "confidence": 0.9
+  },
+  {
+    "subject": "오징어 게임 시즌 1",
+    "predicate": "has_방송 날짜",
+    "object": "2021년 9월 17일",
+    "source_node_id": "fd9e91eb-44b7-455a-9c9f-ccba3a79d3bc",
+    "confidence": 0.9
+  },
+  {
+    "subject": "오징어 게임 시즌 1",
+    "predicate": "has_제작 시작일",
+    "object": "2023년 7월",
+    "source_node_id": "fd9e91eb-44b7-455a-9c9f-ccba3a79d3bc",
+    "confidence": 0.9
+  },
+  {
+    "subject": "오징어 게임 시즌 1",
+    "predicate": "has_개봉일",
+    "object": "2024년 12월 26일",
+    "source_node_id": "fd9e91eb-44b7-455a-9c9f-ccba3a79d3bc",
+    "confidence": 0.9
+  },
+  {
+    "subject": "오징어 게임 시즌 1",
+    "predicate": "연속 촬영돼",
+    "object": "오징어 게임 시즌 1",
+    "source_node_id": "c0c6cf4d-d256-4817-b8eb-d5a9dc036f10",
+    "confidence": 0.9
+  },
+  {
+    "subject": "성기훈",
+    "predicate": "초대된다",
+    "object": "어린이 게임",
+    "source_node_id": "c0c6cf4d-d256-4817-b8eb-d5a9dc036f10",
+    "confidence": 0.9
+  },
+  {
+    "subject": "성기훈",
+    "predicate": "알게 된다",
+    "object": "455명의 다른 플레이어들",
+    "source_node_id": "c0c6cf4d-d256-4817-b8eb-d5a9dc036f10",
+    "confidence": 0.9
+  },
+  {
+    "subject": "성기훈",
+    "predicate": "처해 있는",
+    "object": "재정적 어려움",
+    "source_node_id": "c0c6cf4d-d256-4817-b8eb-d5a9dc036f10",
+    "confidence": 0.9
+  },
+  {
+    "subject": "성기훈",
+    "predicate": "has_상태",
+    "object": "빚진 도박 중독자",
+    "source_node_id": "c0c6cf4d-d256-4817-b8eb-d5a9dc036f10",
+    "confidence": 0.9
+  },
+  {
+    "subject": "성기훈",
+    "predicate": "has_가족",
+    "object": "이혼한 아버지, 노모와 함께 살고 있음",
+    "source_node_id": "c0c6cf4d-d256-4817-b8eb-d5a9dc036f10",
+    "confidence": 0.9
+  },
+  {
+    "subject": "상금",
+    "predicate": "has_종류",
+    "object": "큰 상금",
+    "source_node_id": "c0c6cf4d-d256-4817-b8eb-d5a9dc036f10",
+    "confidence": 0.9
+  },
+  {
+    "subject": "455명",
+    "predicate": "has_수",
+    "object": "455명",
+    "source_node_id": "c0c6cf4d-d256-4817-b8eb-d5a9dc036f10",
+    "confidence": 0.9
+  },
+  {
+    "subject": "선수",
+    "predicate": "입다",
+    "object": "녹색 운동복",
+    "source_node_id": "bb1dd00a-c17f-45ad-9f2c-4025bd0d44a1",
+    "confidence": 0.9
+  },
+  {
+    "subject": "경비원",
+    "predicate": "입다",
+    "object": "분홍색 점프수트",
+    "source_node_id": "bb1dd00a-c17f-45ad-9f2c-4025bd0d44a1",
+    "confidence": 0.9
+  },
+  {
+    "subject": "경비원",
+    "predicate": "감시하다",
+    "object": "선수",
+    "source_node_id": "bb1dd00a-c17f-45ad-9f2c-4025bd0d44a1",
+    "confidence": 0.9
+  },
+  {
+    "subject": "프론트맨",
+    "predicate": "감독하다",
+    "object": "경기",
+    "source_node_id": "bb1dd00a-c17f-45ad-9f2c-4025bd0d44a1",
+    "confidence": 0.9
+  },
+  {
+    "subject": "플레이어",
+    "predicate": "깨닫다",
+    "object": "게임에서 지면 사망으로 이어진다는 사실",
+    "source_node_id": "bb1dd00a-c17f-45ad-9f2c-4025bd0d44a1",
+    "confidence": 0.9
+  },
+  {
+    "subject": "사망",
+    "predicate": "차지하다",
+    "object": "1억 원",
+    "source_node_id": "bb1dd00a-c17f-45ad-9f2c-4025bd0d44a1",
+    "confidence": 0.9
+  },
+  {
+    "subject": "1억 원",
+    "predicate": "환산하다",
+    "object": "약 6,800달러",
+    "source_node_id": "bb1dd00a-c17f-45ad-9f2c-4025bd0d44a1",
+    "confidence": 0.9
+  },
+  {
+    "subject": "456억 달러",
+    "predicate": "환산하다",
+    "object": "약 3,100만 달러",
+    "source_node_id": "bb1dd00a-c17f-45ad-9f2c-4025bd0d44a1",
+    "confidence": 0.9
+  },
+  {
+    "subject": "1억 원",
+    "predicate": "has_상금",
+    "object": "1억 원",
+    "source_node_id": "bb1dd00a-c17f-45ad-9f2c-4025bd0d44a1",
+    "confidence": 0.9
+  },
+  {
+    "subject": "456억 달러",
+    "predicate": "has_잠재적 대상",
+    "object": "456억 달러",
+    "source_node_id": "bb1dd00a-c17f-45ad-9f2c-4025bd0d44a1",
+    "confidence": 0.9
+  },
+  {
+    "subject": "2024년",
+    "predicate": "has_상금 환산 기준 연도",
+    "object": "2024년",
+    "source_node_id": "bb1dd00a-c17f-45ad-9f2c-4025bd0d44a1",
+    "confidence": 0.9
+  },
+  {
+    "subject": "기훈",
+    "predicate": "친구",
+    "object": "조상우",
+    "source_node_id": "2e773461-66fe-48bb-a1dc-e80e53b66d91",
+    "confidence": 0.9
+  },
+  {
+    "subject": "기훈",
+    "predicate": "동맹을 맺다",
+    "object": "다른 플레이어들",
+    "source_node_id": "2e773461-66fe-48bb-a1dc-e80e53b66d91",
+    "confidence": 0.9
+  },
+  {
+    "subject": "기훈",
+    "predicate": "노력하다",
+    "object": "게임의 신체적, 정신적 비틀림에서 살아남기",
+    "source_node_id": "2e773461-66fe-48bb-a1dc-e80e53b66d91",
+    "confidence": 0.9
+  },
+  {
+    "subject": "황준호",
+    "predicate": "잠입하다",
+    "object": "게임",
+    "source_node_id": "2e773461-66fe-48bb-a1dc-e80e53b66d91",
+    "confidence": 0.9
+  },
+  {
+    "subject": "기훈",
+    "predicate": "결심하다",
+    "object": "게임에 다시 참가하기",
+    "source_node_id": "2e773461-66fe-48bb-a1dc-e80e53b66d91",
+    "confidence": 0.9
+  },
+  {
+    "subject": "기훈",
+    "predicate": "합류하다",
+    "object": "준호",
+    "source_node_id": "2e773461-66fe-48bb-a1dc-e80e53b66d91",
+    "confidence": 0.9
+  },
+  {
+    "subject": "기훈",
+    "predicate": "복수 다짐하다",
+    "object": "프론트맨",
+    "source_node_id": "2e773461-66fe-48bb-a1dc-e80e53b66d91",
+    "confidence": 0.9
+  },
+  {
+    "subject": "기훈",
+    "predicate": "has_별칭",
+    "object": "주인공",
+    "source_node_id": "2e773461-66fe-48bb-a1dc-e80e53b66d91",
+    "confidence": 0.9
+  },
+  {
+    "subject": "게임",
+    "predicate": "has_특징",
+    "object": "신체적, 정신적 비틀림",
+    "source_node_id": "2e773461-66fe-48bb-a1dc-e80e53b66d91",
+    "confidence": 0.9
+  },
+  {
+    "subject": "시즌 2",
+    "predicate": "has_시간",
+    "object": "3년 만",
+    "source_node_id": "2e773461-66fe-48bb-a1dc-e80e53b66d91",
+    "confidence": 0.9
+  },
+  {
+    "subject": "프론트맨",
+    "predicate": "갖게 되다",
+    "object": "게임의 모든 통제권",
+    "source_node_id": "3577bd39-69b8-461e-aaf6-2709def0f3fd",
+    "confidence": 0.9
+  },
+  {
+    "subject": "기훈",
+    "predicate": "깨닫게 하려고 한다",
+    "object": "사람의 본성으로 인해 게임을 끝낼 방법이 없다는 것",
+    "source_node_id": "3577bd39-69b8-461e-aaf6-2709def0f3fd",
+    "confidence": 0.9
+  },
+  {
+    "subject": "성기훈",
+    "predicate": "역",
+    "object": "456번",
+    "source_node_id": "3577bd39-69b8-461e-aaf6-2709def0f3fd",
+    "confidence": 0.9
+  },
+  {
+    "subject": "성기훈",
+    "predicate": "제자",
+    "object": "오일남",
+    "source_node_id": "3577bd39-69b8-461e-aaf6-2709def0f3fd",
+    "confidence": 0.9
+  },
+  {
+    "subject": "성기훈",
+    "predicate": "사용하다",
+    "object": "장풍",
+    "source_node_id": "3577bd39-69b8-461e-aaf6-2709def0f3fd",
+    "confidence": 0.9
+  },
+  {
+    "subject": "성기훈",
+    "predicate": "has_상태",
+    "object": "이혼한 운전사이자 도박 중독자",
+    "source_node_id": "3577bd39-69b8-461e-aaf6-2709def0f3fd",
+    "confidence": 0.9
+  },
+  {
+    "subject": "성기훈",
+    "predicate": "has_가족",
+    "object": "어머니와 함께 살고 있음",
+    "source_node_id": "3577bd39-69b8-461e-aaf6-2709def0f3fd",
+    "confidence": 0.9
+  },
+  {
+    "subject": "성기훈",
+    "predicate": "has_부양",
+    "object": "딸을 재정적으로 부양하기 위해 애쓰고 있음",
+    "source_node_id": "3577bd39-69b8-461e-aaf6-2709def0f3fd",
+    "confidence": 0.9
+  },
+  {
+    "subject": "성기훈",
+    "predicate": "양육하다",
+    "object": "딸",
+    "source_node_id": "ecf05bdb-c211-4990-acc4-572f3dc423bf",
+    "confidence": 0.9
+  },
+  {
+    "subject": "성기훈",
+    "predicate": "참여하다",
+    "object": "게임",
+    "source_node_id": "ecf05bdb-c211-4990-acc4-572f3dc423bf",
+    "confidence": 0.9
+  },
+  {
+    "subject": "성기훈",
+    "predicate": "끝내기 시작하다",
+    "object": "프론트맨",
+    "source_node_id": "ecf05bdb-c211-4990-acc4-572f3dc423bf",
+    "confidence": 0.9
+  },
+  {
+    "subject": "조상우",
+    "predicate": "후배",
+    "object": "성기훈",
+    "source_node_id": "ecf05bdb-c211-4990-acc4-572f3dc423bf",
+    "confidence": 0.9
+  },
+  {
+    "subject": "조상우",
+    "predicate": "공부하다",
+    "object": "서울대학교",
+    "source_node_id": "ecf05bdb-c211-4990-acc4-572f3dc423bf",
+    "confidence": 0.9
+  },
+  {
+    "subject": "조상우",
+    "predicate": "피해가다",
+    "object": "경찰관",
+    "source_node_id": "ecf05bdb-c211-4990-acc4-572f3dc423bf",
+    "confidence": 0.9
+  },
+  {
+    "subject": "조상우",
+    "predicate": "지게 된",
+    "object": "빚",
+    "source_node_id": "ecf05bdb-c211-4990-acc4-572f3dc423bf",
+    "confidence": 0.9
+  },
+  {
+    "subject": "성기훈",
+    "predicate": "has_상태",
+    "object": "재정적으로 안정됨",
+    "source_node_id": "ecf05bdb-c211-4990-acc4-572f3dc423bf",
+    "confidence": 0.9
+  },
+  {
+    "subject": "박해수",
+    "predicate": "has_역할",
+    "object": "218번 조상우 역",
+    "source_node_id": "ecf05bdb-c211-4990-acc4-572f3dc423bf",
+    "confidence": 0.9
+  },
+  {
+    "subject": "조상우",
+    "predicate": "has_직업",
+    "object": "전 증권회사 투자팀장",
+    "source_node_id": "ecf05bdb-c211-4990-acc4-572f3dc423bf",
+    "confidence": 0.9
+  },
+  {
+    "subject": "위하준",
+    "predicate": "역",
+    "object": "황준호",
+    "source_node_id": "f8d88152-930c-45ac-a1e5-592315b949e2",
+    "confidence": 0.9
+  },
+  {
+    "subject": "위하준",
+    "predicate": "알게 된다",
+    "object": "프론트맨",
+    "source_node_id": "f8d88152-930c-45ac-a1e5-592315b949e2",
+    "confidence": 0.9
+  },
+  {
+    "subject": "정호연",
+    "predicate": "역",
+    "object": "강새벽",
+    "source_node_id": "f8d88152-930c-45ac-a1e5-592315b949e2",
+    "confidence": 0.9
+  },
+  {
+    "subject": "강새벽",
+    "predicate": "출신",
+    "object": "북한 함경북도",
+    "source_node_id": "f8d88152-930c-45ac-a1e5-592315b949e2",
+    "confidence": 0.9
+  },
+  {
+    "subject": "강새벽",
+    "predicate": "참여하다",
+    "object": "게임",
+    "source_node_id": "f8d88152-930c-45ac-a1e5-592315b949e2",
+    "confidence": 0.9
+  },
+  {
+    "subject": "강새벽",
+    "predicate": "구해줄",
+    "object": "부모님",
+    "source_node_id": "f8d88152-930c-45ac-a1e5-592315b949e2",
+    "confidence": 0.9
+  },
+  {
+    "subject": "강새벽",
+    "predicate": "위해",
+    "object": "브로커",
+    "source_node_id": "f8d88152-930c-45ac-a1e5-592315b949e2",
+    "confidence": 0.9
+  },
+  {
+    "subject": "위하준",
+    "predicate": "has_직업",
+    "object": "경찰관",
+    "source_node_id": "f8d88152-930c-45ac-a1e5-592315b949e2",
+    "confidence": 0.9
+  },
+  {
+    "subject": "위하준",
+    "predicate": "has_형",
+    "object": "프론트맨",
+    "source_node_id": "f8d88152-930c-45ac-a1e5-592315b949e2",
+    "confidence": 0.9
+  },
+  {
+    "subject": "정호연",
+    "predicate": "has_출신",
+    "object": "탈북자",
+    "source_node_id": "f8d88152-930c-45ac-a1e5-592315b949e2",
+    "confidence": 0.9
+  },
+  {
+    "subject": "강새벽",
+    "predicate": "has_부모님",
+    "object": "국경 너머에 있음",
+    "source_node_id": "f8d88152-930c-45ac-a1e5-592315b949e2",
+    "confidence": 0.9
+  },
+  {
+    "subject": "오일남",
+    "predicate": "역",
+    "object": "001번 오일남",
+    "source_node_id": "ea359079-0f45-48c1-be56-6e67bf5075b8",
+    "confidence": 0.9
+  },
+  {
+    "subject": "오일남",
+    "predicate": "고수",
+    "object": "장풍",
+    "source_node_id": "ea359079-0f45-48c1-be56-6e67bf5075b8",
+    "confidence": 0.9
+  },
+  {
+    "subject": "오일남",
+    "predicate": "제자",
+    "object": "Duke",
+    "source_node_id": "ea359079-0f45-48c1-be56-6e67bf5075b8",
+    "confidence": 0.9
+  },
+  {
+    "subject": "장덕수",
+    "predicate": "역",
+    "object": "101번 장덕수",
+    "source_node_id": "ea359079-0f45-48c1-be56-6e67bf5075b8",
+    "confidence": 0.9
+  },
+  {
+    "subject": "장덕수",
+    "predicate": "게임에 뛰어드는",
+    "object": "갱스터",
+    "source_node_id": "ea359079-0f45-48c1-be56-6e67bf5075b8",
+    "confidence": 0.9
+  },
+  {
+    "subject": "알리 압둘",
+    "predicate": "게임에 참여하는",
+    "object": "이주 노동자",
+    "source_node_id": "ea359079-0f45-48c1-be56-6e67bf5075b8",
+    "confidence": 0.9
+  },
+  {
+    "subject": "알리 압둘",
+    "predicate": "부양하는",
+    "object": "젊은 가족",
+    "source_node_id": "ea359079-0f45-48c1-be56-6e67bf5075b8",
+    "confidence": 0.9
+  },
+  {
+    "subject": "오일남",
+    "predicate": "has_질병",
+    "object": "뇌종양",
+    "source_node_id": "ea359079-0f45-48c1-be56-6e67bf5075b8",
+    "confidence": 0.9
+  },
+  {
+    "subject": "장덕수",
+    "predicate": "has_부채",
+    "object": "막대한 도박 빚",
+    "source_node_id": "ea359079-0f45-48c1-be56-6e67bf5075b8",
+    "confidence": 0.9
+  },
+  {
+    "subject": "알리 압둘",
+    "predicate": "has_출신 국가",
+    "object": "파키스탄",
+    "source_node_id": "ea359079-0f45-48c1-be56-6e67bf5075b8",
+    "confidence": 0.9
+  },
+  {
+    "subject": "김주령",
+    "predicate": "역",
+    "object": "한미녀",
+    "source_node_id": "8ae4574e-a841-4b0f-9d42-0cd52b728c2d",
+    "confidence": 0.9
+  },
+  {
+    "subject": "김덕겸",
+    "predicate": "역",
+    "object": "Duke",
+    "source_node_id": "8ae4574e-a841-4b0f-9d42-0cd52b728c2d",
+    "confidence": 0.9
+  },
+  {
+    "subject": "김덕겸",
+    "predicate": "장풍의 창시자이다",
+    "object": "장풍",
+    "source_node_id": "8ae4574e-a841-4b0f-9d42-0cd52b728c2d",
+    "confidence": 0.9
+  },
+  {
+    "subject": "이병헌",
+    "predicate": "역",
+    "object": "황인호",
+    "source_node_id": "8ae4574e-a841-4b0f-9d42-0cd52b728c2d",
+    "confidence": 0.9
+  },
+  {
+    "subject": "황인호",
+    "predicate": "게임 감독자이자 2015년 판 게임의 승자인",
+    "object": "프론트맨",
+    "source_node_id": "8ae4574e-a841-4b0f-9d42-0cd52b728c2d",
+    "confidence": 0.9
+  },
+  {
+    "subject": "황인호",
+    "predicate": "변장하여",
+    "object": "오영일",
+    "source_node_id": "8ae4574e-a841-4b0f-9d42-0cd52b728c2d",
+    "confidence": 0.9
+  },
+  {
+    "subject": "황인호",
+    "predicate": "다시",
+    "object": "프론트맨",
+    "source_node_id": "8ae4574e-a841-4b0f-9d42-0cd52b728c2d",
+    "confidence": 0.9
+  },
+  {
+    "subject": "황인호",
+    "predicate": "has_별칭",
+    "object": "프론트맨",
+    "source_node_id": "8ae4574e-a841-4b0f-9d42-0cd52b728c2d",
+    "confidence": 0.9
+  },
+  {
+    "subject": "황인호",
+    "predicate": "has_변장한 이름",
+    "object": "오영일",
+    "source_node_id": "8ae4574e-a841-4b0f-9d42-0cd52b728c2d",
+    "confidence": 0.9
+  },
+  {
+    "subject": "김주령",
+    "predicate": "has_성격",
+    "object": "시끄럽고 교활한",
+    "source_node_id": "8ae4574e-a841-4b0f-9d42-0cd52b728c2d",
+    "confidence": 0.9
+  },
+  {
+    "subject": "김덕겸",
+    "predicate": "has_타입",
+    "object": "전설적 인물",
+    "source_node_id": "8ae4574e-a841-4b0f-9d42-0cd52b728c2d",
+    "confidence": 0.9
+  },
+  {
+    "subject": "이병헌",
+    "predicate": "has_역할",
+    "object": "황인호",
+    "source_node_id": "8ae4574e-a841-4b0f-9d42-0cd52b728c2d",
+    "confidence": 0.9
+  },
+  {
+    "subject": "이서환",
+    "predicate": "역",
+    "object": "박정배",
+    "source_node_id": "9dfa2d07-0b1e-45d2-a891-b22f7122eb0c",
+    "confidence": 0.9
+  },
+  {
+    "subject": "이서환",
+    "predicate": "오징어 게임에 뛰어드는",
+    "object": "오징어 게임",
+    "source_node_id": "9dfa2d07-0b1e-45d2-a891-b22f7122eb0c",
+    "confidence": 0.9
+  },
+  {
+    "subject": "오징어 게임",
+    "predicate": "방송 날짜",
+    "object": "2021년 9월 17일",
+    "source_node_id": "9dfa2d07-0b1e-45d2-a891-b22f7122eb0c",
+    "confidence": 0.9
+  },
+  {
+    "subject": "오징어 게임",
+    "predicate": "방송 날짜",
+    "object": "2024년 12월 26일",
+    "source_node_id": "9dfa2d07-0b1e-45d2-a891-b22f7122eb0c",
+    "confidence": 0.9
+  },
+  {
+    "subject": "오징어 게임",
+    "predicate": "방송 예정 연도",
+    "object": "2025년",
+    "source_node_id": "9dfa2d07-0b1e-45d2-a891-b22f7122eb0c",
+    "confidence": 0.9
+  },
+  {
+    "subject": "오징어 게임",
+    "predicate": "방송 예정 연도",
+    "object": "2026년",
+    "source_node_id": "9dfa2d07-0b1e-45d2-a891-b22f7122eb0c",
+    "confidence": 0.9
+  },
+  {
+    "subject": "무궁화 꽃이 피던 날",
+    "predicate": "has_공개 날짜",
+    "object": "2021년 9월 17일",
+    "source_node_id": "7e203f70-c642-4d70-8d48-4cf45e9d2249",
+    "confidence": 0.9
+  },
+  {
+    "subject": "지옥",
+    "predicate": "has_공개 날짜",
+    "object": "2021년 9월 17일",
+    "source_node_id": "7e203f70-c642-4d70-8d48-4cf45e9d2249",
+    "confidence": 0.9
+  },
+  {
+    "subject": "우산을 쓴 남자",
+    "predicate": "has_공개 날짜",
+    "object": "2021년 9월 17일",
+    "source_node_id": "7e203f70-c642-4d70-8d48-4cf45e9d2249",
+    "confidence": 0.9
+  },
+  {
+    "subject": "쫄려도 편먹기",
+    "predicate": "has_공개 날짜",
+    "object": "2021년 9월 17일",
+    "source_node_id": "7e203f70-c642-4d70-8d48-4cf45e9d2249",
+    "confidence": 0.9
+  },
+  {
+    "subject": "평등한 세상",
+    "predicate": "has_공개 날짜",
+    "object": "2021년 9월 17일",
+    "source_node_id": "7e203f70-c642-4d70-8d48-4cf45e9d2249",
+    "confidence": 0.9
+  },
+  {
+    "subject": "깐부",
+    "predicate": "has_공개 날짜",
+    "object": "2021년 9월 17일",
+    "source_node_id": "7e203f70-c642-4d70-8d48-4cf45e9d2249",
+    "confidence": 0.9
+  },
+  {
+    "subject": "VIPS",
+    "predicate": "has_공개 날짜",
+    "object": "2021년 9월 17일",
+    "source_node_id": "7e203f70-c642-4d70-8d48-4cf45e9d2249",
+    "confidence": 0.9
+  },
+  {
+    "subject": "프론트맨",
+    "predicate": "has_공개 날짜",
+    "object": "2021년 9월 17일",
+    "source_node_id": "7e203f70-c642-4d70-8d48-4cf45e9d2249",
+    "confidence": 0.9
+  },
+  {
+    "subject": "운수 좋은 날",
+    "predicate": "has_공개 날짜",
+    "object": "2021년 9월 17일",
+    "source_node_id": "7e203f70-c642-4d70-8d48-4cf45e9d2249",
+    "confidence": 0.9
+  }
+]

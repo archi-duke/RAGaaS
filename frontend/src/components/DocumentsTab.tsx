@@ -1,5 +1,9 @@
 import React, { useState } from 'react';
 import { Upload, FileText, Trash2, Database, Book, Check, X as XIcon } from 'lucide-react';
+import { SvgIcon } from '@progress/kendo-react-common';
+import { chevronDoubleRightIcon } from '@progress/kendo-svg-icons';
+import '@progress/kendo-theme-bootstrap/dist/all.css';
+
 import UploadDocumentModal from './UploadDocumentModal';
 import EntityDictionaryModal from './EntityDictionaryModal';
 import ExtractionPreviewModal from './ExtractionPreviewModal';
@@ -28,6 +32,8 @@ interface Document {
     pipeline_status?: string;
     pipeline_metadata?: any;
     file_path?: string;
+    chunking_strategy?: string;
+    chunking_config?: any;
 }
 
 interface DocumentsTabProps {
@@ -41,6 +47,7 @@ interface DocumentsTabProps {
 
 export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocument, onViewChunks }: DocumentsTabProps) {
     const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
+    const [processingDocId, setProcessingDocId] = useState<string | null>(null);
     const [resumeState, setResumeState] = useState<{
         docId?: string;
         filename?: string;
@@ -104,6 +111,113 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
             alert("Failed to fetch data.");
         } finally {
             setIsLoadingResults(false);
+        }
+    };
+
+    const handleContinueProcessing = async (doc: Document) => {
+        if (processingDocId) return;
+        setProcessingDocId(doc.id);
+
+        try {
+            // Determine Current State
+            const isTripleWait = doc.pipeline_status === 'TRIPLE_EXTRACTED' || doc.status === 'TRIPLE_EXTRACTED';
+            const isEntityWait = doc.pipeline_status === 'ENTITY_EXTRACTED' || doc.status === 'ENTITY_EXTRACTED';
+
+            // 1. Fetch Pipeline Data (Dictionary or Triples)
+            console.log(`[Continue] Fetching pipeline data for doc ${doc.id}...`);
+            const pipeRes = await docApi.getPipelineData(kbId, doc.id);
+            const pipelineData = pipeRes.data || {};
+
+            if (isTripleWait) {
+                // NEXT: Confirm Ingestion
+                console.log("[Continue] TRIPLE_EXTRACTED -> Confirming...");
+                const previewId = pipelineData.preview_id || doc.pipeline_metadata?.preview_id;
+
+                if (!previewId) {
+                    throw new Error('Missing Preview ID for confirmation.');
+                }
+
+                await extractionApi.confirm(previewId, {
+                    enable_inference: doc.enable_inference ?? false,
+                    callback_url: "http://127.0.0.1:8000/api/knowledge-bases/ingest/callback"
+                });
+
+                console.log("[Continue] Confirmed.");
+            } else if (isEntityWait) {
+                // NEXT: Extract Triples
+                console.log("[Continue] ENTITY_EXTRACTED -> Extracting Triples...");
+
+                if (!pipelineData.dictionary) {
+                    console.warn("[Continue] No entity dictionary found. This might cause extraction to fail or run without dictionary.");
+                }
+
+                // Update status to loading
+                await docApi.updatePipelineStatus(kbId, doc.id, {
+                    status: 'EXTRACTING_TRIPLES',
+                    metadata: pipelineData
+                });
+                onRefresh();
+
+                // Robust File Path Lookup
+                let filePath = doc.file_path || pipelineData.file_path;
+                // Fallback if missing or placeholder
+                if (!filePath || filePath === 'RESUME_AUTO_LOOKUP') {
+                    filePath = `/data/uploads/${kbId}/${doc.id}_${doc.filename}`;
+                    console.log(`[Continue] Path missing. Constructed fallback: ${filePath}`);
+                }
+
+                // Construct Params from Doc
+                // Note: If original params are not saved on 'doc' object in DB, we use defaults.
+                // Ideally, backend should persist these params in metadata.
+                const res = await extractionApi.preview({
+                    kb_id: kbId,
+                    doc_id: doc.id,
+                    file_path: filePath,
+                    chunking: {
+                        strategy: doc.chunking_strategy || 'fixed_size',
+                        ...(doc.chunking_config || {})
+                    },
+                    graph: {
+                        extractor_type: (doc.extractor_type as any) || 'simple',
+                        max_paths_per_chunk: doc.max_paths || 20,
+                        num_workers: 4,
+                        generate_inverse_relations: doc.generate_inverse ?? true,
+                    },
+                    enable_text_cleaning: doc.enable_text_cleaning ?? false,
+                    enable_subject_restoration: doc.enable_subject_restoration ?? true,
+                    enable_entity_normalization: doc.enable_entity_normalization ?? true,
+                    normalization_algorithm: 'embedding',
+                    normalization_threshold: 0.85,
+                    max_sample_size: doc.max_sample_size || 50000,
+
+                    entity_dictionary: pipelineData.dictionary,
+                    callback_url: "http://127.0.0.1:8000/api/knowledge-bases/ingest/callback"
+                });
+
+                // Save Result (TRIPLE_EXTRACTED)
+                await docApi.updatePipelineStatus(kbId, doc.id, {
+                    status: 'TRIPLE_EXTRACTED',
+                    metadata: {
+                        preview_id: res.data.preview_id,
+                        doc_id: doc.id,
+                        triples: res.data.triples,
+                        node_count: res.data.node_count,
+                        file_path: filePath,
+                        dictionary: pipelineData.dictionary
+                    }
+                });
+                console.log("[Continue] Triple Extraction Complete.");
+            }
+
+            onRefresh();
+
+        } catch (error: any) {
+            console.error("Continue processing failed:", error);
+            const msg = error.response?.data?.detail || error.message || "Operation failed";
+            // Use setTimeout to allow UI to settle before alerting
+            setTimeout(() => window.alert(`doc2graph: Failed to continue processing.\n\nError: ${msg}`), 100);
+        } finally {
+            setProcessingDocId(null);
         }
     };
 
@@ -226,7 +340,18 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
                                     <tr
                                         key={doc.id}
                                         onClick={() => {
-                                            // [MODIFIED] If processing, do nothing (no response)
+                                            // [MODIFIED] Check for Waiting State (Step Run Paused)
+                                            // Robust check: pipeline_status OR status
+                                            const isTripleWait = doc.pipeline_status === 'TRIPLE_EXTRACTED' || doc.status === 'TRIPLE_EXTRACTED';
+                                            const isEntityWait = doc.pipeline_status === 'ENTITY_EXTRACTED' || doc.status === 'ENTITY_EXTRACTED';
+
+                                            if (isTripleWait || isEntityWait) {
+                                                // [MODIFIED] Direct Continue (No Modal)
+                                                handleContinueProcessing(doc);
+                                                return;
+                                            }
+
+                                            // If processing, do nothing (no response)
                                             if (doc.status === 'processing') {
                                                 return;
                                             } else {
@@ -237,7 +362,11 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
                                         style={{
                                             borderBottom: '1px solid var(--border)',
                                             cursor: doc.status === 'processing' ? 'default' : 'pointer', // Change cursor
-                                            transition: 'background-color 0.15s ease'
+                                            transition: 'background-color 0.15s ease',
+                                            backgroundColor: (
+                                                (doc.pipeline_status === 'TRIPLE_EXTRACTED' || doc.status === 'TRIPLE_EXTRACTED') ||
+                                                (doc.pipeline_status === 'ENTITY_EXTRACTED' || doc.status === 'ENTITY_EXTRACTED')
+                                            ) ? '#f0fdf4' : undefined // Slight green tint for waiting
                                         }}
                                         className={doc.status === 'processing' ? '' : "hover:bg-gray-50"}
                                     >
@@ -260,6 +389,37 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
                                         </td>
                                         <td style={{ padding: '1rem', textAlign: 'center' }}>
                                             <div style={{ display: 'flex', justifyContent: 'center', gap: '0.5rem' }}>
+                                                {/* CONTINUE BUTTON */}
+                                                {((doc.pipeline_status === 'TRIPLE_EXTRACTED' || doc.status === 'TRIPLE_EXTRACTED') ||
+                                                    (doc.pipeline_status === 'ENTITY_EXTRACTED' || doc.status === 'ENTITY_EXTRACTED')) && (
+                                                        <button
+                                                            className="btn btn-primary"
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                handleContinueProcessing(doc);
+                                                            }}
+                                                            disabled={!!processingDocId}
+                                                            title="Continue Processing"
+                                                            style={{
+                                                                padding: '0.4rem',
+                                                                minWidth: 'auto',
+                                                                borderRadius: '6px',
+                                                                opacity: processingDocId === doc.id ? 0.7 : 1,
+                                                                display: 'flex',
+                                                                alignItems: 'center',
+                                                                justifyContent: 'center',
+                                                                fontSize: '0.8rem',
+                                                                fontWeight: 600
+                                                            }}
+                                                        >
+                                                            {processingDocId === doc.id ? (
+                                                                <span className="spinner-small" style={{ width: '16px', height: '16px', border: '2px solid rgba(255,255,255,0.3)', borderTopColor: 'white' }}></span>
+                                                            ) : (
+                                                                <SvgIcon icon={chevronDoubleRightIcon} style={{ width: '18px', height: '18px' }} />
+                                                            )}
+                                                        </button>
+                                                    )}
+
                                                 <button
                                                     className="btn btn-icon"
                                                     onClick={(e) => {
@@ -272,6 +432,7 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
                                                 >
                                                     <Book size={18} />
                                                 </button>
+
                                                 <button
                                                     className="btn btn-icon"
                                                     onClick={(e) => {
@@ -306,7 +467,7 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
                         </tbody>
                     </table>
                 </div>
-            </div>
+            </div >
 
             <UploadDocumentModal
                 isOpen={isUploadModalOpen}
@@ -335,27 +496,31 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
                 isDestructive={true}
             />
 
-            {dictionaryData && (
-                <EntityDictionaryModal
-                    isOpen={showDictionaryModal}
-                    onClose={() => setShowDictionaryModal(false)}
-                    dictionary={dictionaryData.dictionary}
-                    entityCount={dictionaryData.entity_count}
-                />
-            )}
+            {
+                dictionaryData && (
+                    <EntityDictionaryModal
+                        isOpen={showDictionaryModal}
+                        onClose={() => setShowDictionaryModal(false)}
+                        dictionary={dictionaryData.dictionary}
+                        entityCount={dictionaryData.entity_count}
+                    />
+                )
+            }
 
-            {previewData && (
-                <ExtractionPreviewModal
-                    isOpen={showPreviewModal}
-                    onClose={() => setShowPreviewModal(false)}
-                    previewId={previewData.preview_id}
-                    triples={previewData.triples}
-                    nodeCount={previewData.node_count}
-                    onConfirm={handlePreviewConfirm}
-                    onDiscard={() => setShowPreviewModal(false)}
-                    viewOnly={true}
-                />
-            )}
+            {
+                previewData && (
+                    <ExtractionPreviewModal
+                        isOpen={showPreviewModal}
+                        onClose={() => setShowPreviewModal(false)}
+                        previewId={previewData.preview_id}
+                        triples={previewData.triples}
+                        nodeCount={previewData.node_count}
+                        onConfirm={handlePreviewConfirm}
+                        onDiscard={() => setShowPreviewModal(false)}
+                        viewOnly={true}
+                    />
+                )
+            }
         </>
     );
 }

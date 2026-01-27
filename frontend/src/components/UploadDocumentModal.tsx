@@ -95,6 +95,9 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
         stats?: any[];
     } | null>(null);
 
+    // New State for Step Run
+    const [isStepRunning, setIsStepRunning] = useState(false);
+
     const [messageDialog, setMessageDialog] = useState<{ isOpen: boolean; title: string; message: string; type: 'info' | 'success' | 'error' }>({
         isOpen: false,
         title: '',
@@ -167,6 +170,7 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
             setIsEntityExtracted(false);
             setIsUploading(false);
             setIsExtracting(false);
+            setIsStepRunning(false);
             setResumedDocId(null);
             setMessageDialog({ isOpen: false, title: '', message: '', type: 'info' });
 
@@ -221,7 +225,8 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                         } else if (initialState.step === 'TRIPLE_EXTRACTED' && initialState.data) {
                             setPreviewData(initialState.data);
                             setIsEntityExtracted(true);
-                            setShowPreviewModal(true);
+                            // Don't auto-show modal if just resuming to 'Continue' state, let user decide
+                            // setShowPreviewModal(true);
                         }
                     }
                 }
@@ -266,37 +271,11 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
     };
 
     const handleUpload = async () => {
-        // [Resume Logic] If Triple Preview is done, just confirm it
-        if (previewData && previewData.preview_id) {
-            setIsExtracting(true);
-            try {
-                await extractionApi.confirm(previewData.preview_id, {
-                    enable_inference: graphParams.enable_inference,
-                    callback_url: "http://127.0.0.1:8000/api/knowledge-bases/ingest/callback"
-                });
-                onUploadComplete();
-                onClose();
-            } catch (error) {
-                console.error("Confirmation failed:", error);
-                setMessageDialog({
-                    isOpen: true,
-                    title: 'Save Failed',
-                    message: 'Failed to confirm ingestion.',
-                    type: 'error'
-                });
-            } finally {
-                setIsExtracting(false);
-            }
-            return;
-        }
-
-        // Standard Upload
+        // Standard Upload (Batch Run)
         if (!file && !resumedDocId) return;
 
         setIsUploading(true);
         try {
-            // [Resume Logic] If Entity Dictionary is done, pass it to skip building
-            // [Resume Logic] If Entity Dictionary is done, pass it to skip building
             const config = {
                 ...graphParams,
                 chunking_strategy: strategy,
@@ -309,7 +288,10 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                 onUploadComplete();
                 onClose();
             } else if (resumedDocId) {
-                alert("Cannot upload without file. Please proceed with Extraction steps.");
+                // If resuming but choosing Batch Run, we might trigger a re-process or just continue?
+                // The current backend doesn't support 're-batch' easily from frontend without re-upload in this flow.
+                // But for now, let's assume Batch Run is primarily for new uploads.
+                alert("Cannot batch run without file. Please proceed with Extraction steps or re-upload.");
             }
 
         } catch (err) {
@@ -356,8 +338,8 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
 
     // --- ACTION HANDLERS ---
 
-    const handleExtractEntities = async () => {
-        if (!file && !resumedDocId) return;
+    const handleExtractEntities = async (silent: boolean = false) => {
+        if (!file && !resumedDocId) return null;
 
         setIsExtracting(true);
         try {
@@ -373,6 +355,8 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                 });
                 currentDocId = uploadRes.data.id;
                 currentFilePath = uploadRes.data.file_path || `/data/uploads/${kbId}/${currentDocId}_${file.name}`;
+                // Update local state for subsequent steps
+                setResumedDocId(currentDocId);
             } else if (resumedDocId) {
                 if (file) {
                     const uploadRes = await docApi.upload(kbId, file, {
@@ -413,27 +397,28 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                 callback_url: "http://127.0.0.1:8000/api/knowledge-bases/ingest/callback"
             });
 
-            setDictionaryData({
+            const dictData = {
                 preview_id: res.data.preview_id,
                 doc_id: currentDocId,
                 file_path: currentFilePath,
                 entity_count: res.data.entity_count,
                 dictionary: res.data.dictionary
-            });
+            };
 
-            setShowDictionaryModal(true);
+            setDictionaryData(dictData);
             setIsEntityExtracted(true);
 
             await docApi.updatePipelineStatus(kbId, currentDocId, {
                 status: 'ENTITY_EXTRACTED',
                 metadata: {
-                    preview_id: res.data.preview_id,
-                    doc_id: currentDocId,
-                    file_path: currentFilePath,
-                    entity_count: res.data.entity_count,
-                    dictionary: res.data.dictionary
+                    ...dictData
                 }
             });
+
+            if (!silent) {
+                setShowDictionaryModal(true);
+            }
+            return dictData;
 
         } catch (err: any) {
             console.error('Entity Extraction failed:', err);
@@ -444,18 +429,22 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                 type: 'error'
             });
             setIsEntityExtracted(false);
+            return null;
         } finally {
             setIsExtracting(false);
         }
     };
 
-    const handleExtractTriples = async () => {
-        if (!kbId) return;
+    const handleExtractTriples = async (silent: boolean = false, entityDataOverride?: any) => {
+        if (!kbId) return null;
 
         setIsExtracting(true);
         try {
-            let currentDocId = dictionaryData?.doc_id || resumedDocId;
-            let currentFilePath = dictionaryData?.file_path || initialState?.filePath || "";
+            // Use override or state
+            const dictionaryInfo = entityDataOverride || dictionaryData;
+
+            let currentDocId = dictionaryInfo?.doc_id || resumedDocId;
+            let currentFilePath = dictionaryInfo?.file_path || initialState?.filePath || "";
 
             if (!currentFilePath) {
                 const effectiveFileName = file?.name || initialState?.filename;
@@ -509,30 +498,32 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                 custom_prompt: graphParams.custom_prompt || undefined,
                 normalization_algorithm: graphParams.normalization_algorithm,
                 normalization_threshold: graphParams.normalization_threshold,
-                entity_dictionary: dictionaryData?.dictionary,
+                entity_dictionary: dictionaryInfo?.dictionary,
                 callback_url: "http://127.0.0.1:8000/api/knowledge-bases/ingest/callback"
             });
 
-            setPreviewData({
+            const tripleData = {
                 preview_id: res.data.preview_id,
                 doc_id: currentDocId,
                 triples: res.data.triples,
                 node_count: res.data.node_count,
                 stats: res.data.stats,
-            });
+            };
+
+            setPreviewData(tripleData);
 
             await docApi.updatePipelineStatus(kbId, currentDocId, {
                 status: 'TRIPLE_EXTRACTED',
                 metadata: {
-                    preview_id: res.data.preview_id,
-                    doc_id: currentDocId,
-                    triples: res.data.triples,
-                    node_count: res.data.node_count,
+                    ...tripleData,
                     file_path: currentFilePath
                 }
             });
 
-            setShowPreviewModal(true);
+            if (!silent) {
+                setShowPreviewModal(true);
+            }
+            return tripleData;
 
         } catch (err: any) {
             console.error('Triple Extraction failed:', err);
@@ -553,8 +544,48 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                     type: 'error'
                 });
             }
+            return null;
         } finally {
             setIsExtracting(false);
+        }
+    };
+
+    const handleContinue = async () => {
+        // Step 2: From Entity Extracted -> Extract Triples
+        if (dictionaryData && !previewData) {
+            console.log("handleContinue: Resuming from Entity Extraction -> Extract Triples");
+            await handleExtractTriples(true); // Silent run
+            onUploadComplete();
+            onClose();
+            return;
+        }
+
+        // Step 3: From Triple Extracted -> Confirm
+        if (previewData) {
+            console.log("handleContinue: Resuming from Triple Extraction -> Confirm");
+            await handlePreviewConfirm();
+            return;
+        }
+    };
+
+    const handleStepRun = async () => {
+        if (!file && !resumedDocId) return;
+        setIsStepRunning(true);
+
+        try {
+            // 1. Run Entity Extraction (Silent)
+            // Step Run now STOPS after Entity Extraction.
+            const entityResult = await handleExtractEntities(true);
+            if (!entityResult) throw new Error("Entity Extraction failed");
+
+            // 3. Close (Enter Waiting State)
+            onUploadComplete();
+            onClose();
+
+        } catch (error) {
+            console.error("Step Run failed:", error);
+        } finally {
+            setIsStepRunning(false);
         }
     };
 
@@ -583,7 +614,9 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                                 padding: '2rem',
                                 textAlign: 'center',
                                 cursor: 'pointer',
-                                background: '#fafafa'
+                                background: '#fafafa',
+                                opacity: resumedDocId ? 0.6 : 1,
+                                pointerEvents: resumedDocId ? 'none' : 'auto'
                             }}
                             onClick={() => fileInputRef.current?.click()}
                         >
@@ -601,6 +634,7 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                                     }
                                 }}
                                 accept=".txt,.pdf,.md"
+                                disabled={!!resumedDocId}
                             />
                             {file ? (
                                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', color: 'var(--primary)' }}>
@@ -853,86 +887,46 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                     )}
 
                     <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '1rem' }}>
-                        <button className="btn" onClick={onClose} disabled={isUploading || isExtracting || showPreviewModal || showDictionaryModal}>Cancel</button>
-                        {isGraphEnabled && (
-                            <>
-                                <button
-                                    className="btn"
-                                    onClick={handleExtractEntities}
-                                    disabled={(!file && !resumedDocId) || isUploading || isExtracting || showPreviewModal || showDictionaryModal}
-                                    style={{
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        gap: '0.5rem',
-                                        border: '1px solid #3b82f6',
-                                        color: '#3b82f6'
-                                    }}
-                                    title="Pipeline Step 1: Extract Entities"
-                                >
-                                    <Eye size={16} />
-                                    {isExtracting ? 'Processing...' : (isEntityExtracted ? 'Re-extract Entities' : 'Extract Entities')}
-                                    {isEntityExtracted && (
-                                        <button
-                                            className="btn"
-                                            onClick={() => setShowDictionaryModal(true)}
-                                            style={{ color: '#3b82f6', border: '1px solid #3b82f6', padding: '0.25rem 0.5rem', fontSize: '0.75rem' }}
-                                        >
-                                            View Dictionary
-                                        </button>
-                                    )}
-                                </button>
+                        <button className="btn" onClick={onClose} disabled={isUploading || isExtracting || isStepRunning}>Cancel</button>
 
-                                {previewData?.stats && (
-                                    <div style={{ padding: '1rem', background: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0', marginBottom: '1rem', textAlign: 'left', fontSize: '0.85rem' }}>
-                                        <h5 style={{ margin: '0 0 0.5rem 0', fontWeight: 600, color: '#334155' }}>Processing Stats</h5>
-                                        <table style={{ width: '100%' }}>
-                                            <tbody>
-                                                {previewData.stats.map((s, idx) => (
-                                                    <tr key={idx}>
-                                                        <td style={{ color: '#64748b' }}>{s.step}</td>
-                                                        <td style={{ textAlign: 'right', fontWeight: 500, color: s.step.includes('Total') ? '#3b82f6' : '#334155' }}>{s.duration}s</td>
-                                                    </tr>
-                                                ))}
-                                            </tbody>
-                                        </table>
-                                    </div>
+                        {/* RESUME MODE: Show Continue if we are in waiting state (Have docID, and either dictionary or triples) */}
+                        {resumedDocId && (
+                            <button
+                                className="btn btn-primary"
+                                onClick={handleContinue}
+                                disabled={isUploading || isExtracting || isStepRunning}
+                            >
+                                Continue
+                            </button>
+                        )}
+
+                        {/* STANDARD MODE: Show Step Run & Batch Run (Upload) - Only if NOT resuming */}
+                        {!resumedDocId && (
+                            <>
+                                {isGraphEnabled && (
+                                    <button
+                                        className="btn"
+                                        onClick={handleStepRun}
+                                        disabled={(!file && !resumedDocId) || isUploading || isExtracting || isStepRunning}
+                                        style={{
+                                            border: '1px solid #3b82f6',
+                                            color: '#3b82f6',
+                                            background: 'white'
+                                        }}
+                                    >
+                                        {isStepRunning ? 'Processing Step Run...' : 'Step Run'}
+                                    </button>
                                 )}
+
                                 <button
-                                    className="btn"
-                                    onClick={handleExtractTriples}
-                                    disabled={(!file && !resumedDocId) || isUploading || isExtracting || !isEntityExtracted || showPreviewModal || showDictionaryModal}
-                                    style={{
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        gap: '0.5rem',
-                                        border: '1px solid #3b82f6',
-                                        color: isEntityExtracted ? '#3b82f6' : '#94a3b8',
-                                        borderColor: isEntityExtracted ? '#3b82f6' : '#e2e8f0',
-                                        opacity: isEntityExtracted ? 1 : 0.6
-                                    }}
-                                    title={isEntityExtracted ? "Pipeline Step 2: Extract Triples" : "Please run Extract Entities first"}
+                                    className="btn btn-primary"
+                                    onClick={handleUpload}
+                                    disabled={(!file && !resumedDocId) || isUploading || isExtracting || isStepRunning}
                                 >
-                                    <Database size={16} />
-                                    {isExtracting ? 'Processing...' : 'Extract Triples'}
-                                    {previewData && (
-                                        <button
-                                            className="btn"
-                                            onClick={(e) => { e.stopPropagation(); setShowPreviewModal(true); }}
-                                            style={{ color: '#3b82f6', border: '1px solid #3b82f6', padding: '0.25rem 0.5rem', fontSize: '0.75rem', marginLeft: '0.5rem' }}
-                                        >
-                                            View Triples
-                                        </button>
-                                    )}
+                                    {isUploading ? 'Uploading...' : 'Batch Run'}
                                 </button>
                             </>
                         )}
-                        <button
-                            className="btn btn-primary"
-                            onClick={handleUpload}
-                            disabled={(!file && !resumedDocId) || isUploading || isExtracting || showPreviewModal || showDictionaryModal}
-                        >
-                            {isUploading ? 'Uploading...' : (previewData ? 'Confirm Ingestion' : 'Upload')}
-                        </button>
                     </div>
                 </div>
             </div>
