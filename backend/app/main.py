@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.core.database import init_db
-from app.api import knowledge_base, document, retrieval, graph_viewer
+from app.api import knowledge_base, document, retrieval, graph_viewer, websocket_endpoint
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -33,6 +33,7 @@ app.include_router(knowledge_base.router, prefix="/api/knowledge-bases", tags=["
 app.include_router(document.router, prefix="/api/knowledge-bases", tags=["documents"])
 app.include_router(retrieval.router, prefix="/api/knowledge-bases", tags=["retrieval"])
 app.include_router(graph_viewer.router, prefix="/api/graph", tags=["graph"])
+app.include_router(websocket_endpoint.router, prefix="/api", tags=["websocket"])
 
 @app.get("/api/health")
 async def health_check():

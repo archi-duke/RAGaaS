@@ -272,7 +272,7 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
             try {
                 await extractionApi.confirm(previewData.preview_id, {
                     enable_inference: graphParams.enable_inference,
-                    callback_url: "http://backend:8000/api/document/ingest/callback"
+                    callback_url: "http://127.0.0.1:8000/api/knowledge-bases/ingest/callback"
                 });
                 onUploadComplete();
                 onClose();
@@ -331,6 +331,7 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
         try {
             await extractionApi.confirm(previewData.preview_id, {
                 enable_inference: graphParams.enable_inference,
+                callback_url: "http://127.0.0.1:8000/api/knowledge-bases/ingest/callback"
             });
             onUploadComplete();
             onClose();
@@ -347,19 +348,8 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
         }
     };
 
-    const handlePreviewDiscard = async () => {
-        if (!previewData) return;
-        try {
-            await extractionApi.discard(previewData.preview_id);
-            if (previewData.doc_id) {
-                await docApi.delete(kbId, previewData.doc_id);
-            }
-        } catch (err) {
-            console.error('Discard cleanup failed:', err);
-        }
-        setPreviewData(null);
+    const handlePreviewDiscard = () => {
         setShowPreviewModal(false);
-        onClose();
     };
 
     const isGraphEnabled = kbConfig && kbConfig.graph_backend && kbConfig.graph_backend !== 'none';
@@ -404,6 +394,12 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
 
             if (!currentDocId) throw new Error("No Document ID");
 
+            // Update status for real-time reflection
+            await docApi.updatePipelineStatus(kbId, currentDocId, {
+                status: 'EXTRACTING_ENTITIES',
+                metadata: {}
+            });
+
             console.log("Requesting Entity Dictionary Preview...");
             const res = await extractionApi.previewDictionary({
                 kb_id: kbId,
@@ -414,6 +410,7 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                     ...chunkingConfig
                 },
                 sampling_size: graphParams.max_sample_size,
+                callback_url: "http://127.0.0.1:8000/api/knowledge-bases/ingest/callback"
             });
 
             setDictionaryData({
@@ -482,6 +479,12 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                 throw new Error("Missing Document ID. Please upload a file first.");
             }
 
+            // Update status for real-time reflection
+            await docApi.updatePipelineStatus(kbId, currentDocId, {
+                status: 'EXTRACTING_TRIPLES',
+                metadata: {}
+            });
+
             console.log("Requesting Triple Extraction Preview...", { currentDocId, currentFilePath });
             const res = await extractionApi.preview({
                 kb_id: kbId,
@@ -507,6 +510,7 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                 normalization_algorithm: graphParams.normalization_algorithm,
                 normalization_threshold: graphParams.normalization_threshold,
                 entity_dictionary: dictionaryData?.dictionary,
+                callback_url: "http://127.0.0.1:8000/api/knowledge-bases/ingest/callback"
             });
 
             setPreviewData({
@@ -849,13 +853,13 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                     )}
 
                     <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '1rem' }}>
-                        <button className="btn" onClick={onClose} disabled={isUploading || isExtracting}>Cancel</button>
+                        <button className="btn" onClick={onClose} disabled={isUploading || isExtracting || showPreviewModal || showDictionaryModal}>Cancel</button>
                         {isGraphEnabled && (
                             <>
                                 <button
                                     className="btn"
                                     onClick={handleExtractEntities}
-                                    disabled={(!file && !resumedDocId) || isUploading || isExtracting}
+                                    disabled={(!file && !resumedDocId) || isUploading || isExtracting || showPreviewModal || showDictionaryModal}
                                     style={{
                                         display: 'flex',
                                         alignItems: 'center',
@@ -867,6 +871,15 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                                 >
                                     <Eye size={16} />
                                     {isExtracting ? 'Processing...' : (isEntityExtracted ? 'Re-extract Entities' : 'Extract Entities')}
+                                    {isEntityExtracted && (
+                                        <button
+                                            className="btn"
+                                            onClick={() => setShowDictionaryModal(true)}
+                                            style={{ color: '#3b82f6', border: '1px solid #3b82f6', padding: '0.25rem 0.5rem', fontSize: '0.75rem' }}
+                                        >
+                                            View Dictionary
+                                        </button>
+                                    )}
                                 </button>
 
                                 {previewData?.stats && (
@@ -887,7 +900,7 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                                 <button
                                     className="btn"
                                     onClick={handleExtractTriples}
-                                    disabled={(!file && !resumedDocId) || isUploading || isExtracting || !isEntityExtracted}
+                                    disabled={(!file && !resumedDocId) || isUploading || isExtracting || !isEntityExtracted || showPreviewModal || showDictionaryModal}
                                     style={{
                                         display: 'flex',
                                         alignItems: 'center',
@@ -901,15 +914,24 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                                 >
                                     <Database size={16} />
                                     {isExtracting ? 'Processing...' : 'Extract Triples'}
+                                    {previewData && (
+                                        <button
+                                            className="btn"
+                                            onClick={(e) => { e.stopPropagation(); setShowPreviewModal(true); }}
+                                            style={{ color: '#3b82f6', border: '1px solid #3b82f6', padding: '0.25rem 0.5rem', fontSize: '0.75rem', marginLeft: '0.5rem' }}
+                                        >
+                                            View Triples
+                                        </button>
+                                    )}
                                 </button>
                             </>
                         )}
                         <button
                             className="btn btn-primary"
                             onClick={handleUpload}
-                            disabled={(!file && !resumedDocId) || isUploading || isExtracting}
+                            disabled={(!file && !resumedDocId) || isUploading || isExtracting || showPreviewModal || showDictionaryModal}
                         >
-                            {isUploading ? 'Uploading...' : 'Upload'}
+                            {isUploading ? 'Uploading...' : (previewData ? 'Confirm Ingestion' : 'Upload')}
                         </button>
                     </div>
                 </div>

@@ -195,6 +195,7 @@ export const extractionApi = {
         extraction_examples_yaml?: string;
         custom_prompt?: string;
         entity_dictionary?: any;
+        callback_url?: string;
     }) => ingestApi.post('/preview', data),
 
     confirm: (previewId: string, data?: {
@@ -234,6 +235,7 @@ export const extractionApi = {
         file_path: string;
         chunking?: any;
         sampling_size?: number;
+        callback_url?: string;
     }) => ingestApi.post('/preview-dictionary', data),
 };
 

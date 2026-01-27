@@ -37,7 +37,7 @@ export default function ExtractionPreviewModal({
             backgroundColor: 'rgba(0,0,0,0.6)',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             zIndex: 60
-        }} onClick={onClose}>
+        }}>
             <div
                 className="card"
                 style={{

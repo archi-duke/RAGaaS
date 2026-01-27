@@ -73,16 +73,35 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
 
     const getStatusBadge = (status: string, pipeline_status?: string) => {
         const statusMap: Record<string, { class: string; label: string }> = {
-            completed: { class: 'badge-success', label: 'Completed' },
+            completed: { class: 'badge-success', label: 'Published' }, // Changed to Published
             processing: { class: 'badge-warning', label: 'Processing' },
             deleting: { class: 'badge-warning', label: 'Deleting...' },
             error: { class: 'badge-danger', label: 'Error' }
         };
 
-        if (pipeline_status && status === 'processing') {
-            if (pipeline_status === 'ENTITY_EXTRACTED') return <span className="badge badge-info">Entity Ready</span>;
-            if (pipeline_status === 'TRIPLE_EXTRACTED') return <span className="badge badge-info">Actions Ready</span>;
+        // Graph Pipeline Status Overrides
+        if (status === 'processing' && pipeline_status) {
+            switch (pipeline_status) {
+                case 'EXTRACTING_ENTITIES':
+                    return <span className="badge badge-warning" style={{ animation: 'pulse 2s infinite' }}>Entities...</span>;
+                case 'ENTITY_EXTRACTED':
+                    return <span className="badge badge-success" style={{ backgroundColor: '#0ea5e9', borderColor: '#0ea5e9' }}>Entities</span>;
+                case 'EXTRACTING_TRIPLES':
+                    return <span className="badge badge-warning" style={{ animation: 'pulse 2s infinite' }}>Triples...</span>;
+                case 'TRIPLE_EXTRACTED':
+                    return <span className="badge badge-success" style={{ backgroundColor: '#8b5cf6', borderColor: '#8b5cf6' }}>Triples</span>;
+                case 'STORING':
+                    return <span className="badge badge-warning" style={{ animation: 'pulse 2s infinite' }}>Storing</span>;
+                case 'COMPLETED':
+                    return <span className="badge badge-success">Published</span>;
+                default:
+                    // Fallback to standard processing
+                    break;
+            }
         }
+
+        // Final Status Overrides
+        if (status === 'completed') return <span className="badge badge-success">Published</span>;
 
         const config = statusMap[status] || { class: 'badge-secondary', label: status };
         return <span className={`badge ${config.class}`}>{config.label}</span>;
@@ -245,7 +264,10 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
 
             <UploadDocumentModal
                 isOpen={isUploadModalOpen}
-                onClose={() => setIsUploadModalOpen(false)}
+                onClose={() => {
+                    setIsUploadModalOpen(false);
+                    onRefresh();
+                }}
                 kbId={kbId}
                 onUploadComplete={onRefresh}
                 initialState={resumeState}

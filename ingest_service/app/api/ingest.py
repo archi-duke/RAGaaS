@@ -103,6 +103,23 @@ class JobStatusResponse(BaseModel):
     error: Optional[str] = None
 
 
+async def send_pipeline_status(callback_url: str, job_id: str, doc_id: str, kb_id: str, status: str):
+    """Helper to send granular pipeline status to backend"""
+    if not callback_url: return
+    import httpx
+    try:
+        async with httpx.AsyncClient() as client:
+            await client.post(callback_url, json={
+                "job_id": job_id,
+                "doc_id": doc_id,
+                "kb_id": kb_id,
+                "status": "processing",
+                "pipeline_status": status
+            })
+    except Exception as e:
+        print(f"[Callback] Failed to send status {status}: {e}")
+
+
 async def process_ingest_job(job_id: str, request: IngestRequest):
     """Process ingestion job in background"""
     try:
@@ -147,6 +164,9 @@ async def process_ingest_job(job_id: str, request: IngestRequest):
         }
         
         # 3. Process with IngestPipeline (Now handles dictionary + chunks + triples in order)
+        async def pipeline_callback(status):
+            await send_pipeline_status(request.callback_url, job_id, request.doc_id, request.kb_id, status)
+
         result = await ingest_pipeline.process(
             text=text,
             chunking_strategy=request.chunking.strategy,
@@ -161,7 +181,8 @@ async def process_ingest_job(job_id: str, request: IngestRequest):
             normalization_threshold=request.normalization_threshold,
             entity_dictionary=request.entity_dictionary,
             sampling_size=request.sampling_size,
-            job_id=job_id
+            job_id=job_id,
+            status_callback=pipeline_callback
         )
         
         if not result or jobs.get(job_id, {}).get("status") == JobStatus.CANCELLED:
@@ -404,6 +425,7 @@ class PreviewRequest(BaseModel):
     enable_normalization_confirmation: bool = False
     sampling_size: Optional[int] = None  # For Doc2Graph Dictionary (Phase 1)
     entity_dictionary: Optional[Dict[str, Any]] = None # Pre-computed dictionary
+    callback_url: Optional[str] = None # For granular status updates
 
 
 class PreviewResponse(BaseModel):
@@ -467,6 +489,9 @@ async def create_preview(request: PreviewRequest):
         }
 
         # 3. Process with IngestPipeline (Multi-phase: Dictionary -> Chunks -> Triples)
+        async def pipeline_callback(status):
+            await send_pipeline_status(request.callback_url, preview_id, request.doc_id, request.kb_id, status)
+
         result = await ingest_pipeline.process(
             text=text,
             chunking_strategy=request.chunking.strategy,
@@ -480,7 +505,8 @@ async def create_preview(request: PreviewRequest):
             normalization_algorithm=request.normalization_algorithm,
             normalization_threshold=request.normalization_threshold,
             entity_dictionary=request.entity_dictionary,
-            sampling_size=request.sampling_size
+            sampling_size=request.sampling_size,
+            status_callback=pipeline_callback
         )
         
         print(f"[Preview] Extracted {len(result['triples'])} triples, {result['node_count']} nodes")
@@ -581,6 +607,9 @@ async def _save_preview_data(
         
         kb_id = cached["kb_id"]
         doc_id = cached["doc_id"]
+        
+        # [New] Send STORING status
+        await send_pipeline_status(callback_url, job_id, doc_id, kb_id, "STORING")
         
         # 1. Save to Milvus
         print(f"[Confirm] Saving {cached['node_count']} chunks to Milvus...")
@@ -725,6 +754,9 @@ async def create_dictionary_preview(request: PreviewRequest):
         # Use window_size=5000 (default) or from request if provided
         sampling_size = request.sampling_size if request.sampling_size and request.sampling_size > 0 else 5000
         
+        if request.callback_url:
+            await send_pipeline_status(request.callback_url, preview_id, request.doc_id, request.kb_id, "EXTRACTING_ENTITIES")
+
         t2 = time.time()
         entity_dictionary = await dict_builder.build_from_text(text, sampling_size=sampling_size)
         t3 = time.time()

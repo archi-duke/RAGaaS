@@ -333,7 +333,8 @@ Triplets (one per line, format: Subject|Relation|Object):"""
         normalization_threshold: float = 0.85,
         entity_dictionary: Optional[Dict[str, Dict[str, Any]]] = None,
         sampling_size: Optional[int] = None, # User-defined sampling size
-        job_id: Optional[str] = None # For cancellation checks
+        job_id: Optional[str] = None, # For cancellation checks
+        status_callback: Optional[any] = None # Async function(status: str)
     ) -> Dict[str, Any]:
         """Execute the entire ingestion process in Doc2Graph order with timing stats."""
         import time
@@ -355,6 +356,10 @@ Triplets (one per line, format: Subject|Relation|Object):"""
         t1 = time.time()
         if enable_entity_normalization and not entity_dictionary:
             if job_id and jobs.get(job_id, {}).get("status") == JobStatus.CANCELLED: return {}
+            
+            if status_callback:
+                await status_callback("EXTRACTING_ENTITIES")
+                
             print(f"[Pipeline] Phase 1: Building Global Entity Dictionary...")
             from app.core.dictionary_builder import DictionaryBuilder
             dict_builder = DictionaryBuilder(self.llm)
@@ -381,6 +386,9 @@ Triplets (one per line, format: Subject|Relation|Object):"""
         triples = []
         normalization_suggestions = None
         if graph_extractor_type != GraphExtractorType.NONE:
+            if status_callback:
+                await status_callback("EXTRACTING_TRIPLES")
+                
             print(f"[Pipeline] Phase 3: Extracting graph triples in parallel...")
             triples = await self.extract_graph(
                 nodes, 

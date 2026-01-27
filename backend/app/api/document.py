@@ -10,6 +10,7 @@ from app.models.document import Document as DocModel, DocumentStatus
 from app.models.knowledge_base import KnowledgeBase as KBModel
 from app.schemas import Document
 from app.core.config import settings
+from app.core.websocket_manager import manager
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -141,7 +142,7 @@ async def upload_document(
                 normalization_algorithm=normalization_algorithm,
                 normalization_threshold=normalization_threshold,
                 preview_only=preview_only,
-                callback_url="http://backend:8000/api/document/ingest/callback",
+                callback_url="http://127.0.0.1:8000/api/knowledge-bases/ingest/callback",
                 entity_dictionary=dict_data
             )
         except Exception as e:
@@ -153,6 +154,15 @@ async def upload_document(
     
     # 7. Finalize and Return
     await doc.save()
+
+    # Broadcast initial status to WebSocket
+    await manager.broadcast(kb_id, {
+        "type": "document_status_update",
+        "doc_id": str(doc.id),
+        "status": doc.status,
+        "pipeline_status": doc.pipeline_status
+    })
+
     doc_dict = doc.dict()
     doc_dict['id'] = str(doc.id)
     doc_dict['file_path'] = file_path
@@ -189,23 +199,46 @@ class IngestCallback(BaseModel):
     doc_id: str
     kb_id: str
     status: str
+    pipeline_status: Optional[str] = None
     result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
 
 @router.post("/ingest/callback")
 async def ingest_callback(payload: IngestCallback):
     doc = await DocModel.find_one(DocModel.id == payload.doc_id, DocModel.kb_id == payload.kb_id)
-    if doc and payload.status == "completed":
+    if not doc:
+        return {"ok": False, "error": "Document not found"}
+
+    # Update Status
+    if payload.status == "completed":
         doc.status = DocumentStatus.COMPLETED.value
-        await doc.save()
-        
-        # [Requirement] Delete original file upon completion
+        doc.pipeline_status = "COMPLETED"
+    elif payload.status == "failed":
+        doc.status = DocumentStatus.ERROR.value
+    else:
+        # Intermediate status (processing)
+        doc.status = DocumentStatus.PROCESSING.value
+        if payload.pipeline_status:
+            doc.pipeline_status = payload.pipeline_status
+
+    await doc.save()
+
+    # Broadcast update to WebSocket
+    await manager.broadcast(payload.kb_id, {
+        "type": "document_status_update",
+        "doc_id": payload.doc_id,
+        "status": doc.status,
+        "pipeline_status": doc.pipeline_status
+    })
+
+    # Cleanup source file if completed
+    if payload.status == "completed":
         try:
             if doc.file_path and os.path.exists(doc.file_path):
                 os.remove(doc.file_path)
                 logger.info(f"Deleted source file for completed document: {doc.file_path}")
             else:
-                # Fallback check if file_path is empty but file exists in shared storage
+                # Fallback check
                 shared_path = settings.SHARED_STORAGE_PATH
                 potential_path = os.path.join(shared_path, doc.kb_id, f"{doc.id}_{doc.filename}")
                 if os.path.exists(potential_path):
@@ -284,9 +317,19 @@ async def update_pipeline_status(kb_id: str, doc_id: str, payload: UpdatePipelin
         else:
              logger.warning(f"Metadata 'triples' field exists but is not a list: {type(metadata['triples'])}")
 
+    doc.status = DocumentStatus.PROCESSING.value
     doc.pipeline_status = status
     doc.pipeline_metadata = metadata
     await doc.save()
+
+    # Broadcast update
+    from app.core.websocket_manager import manager
+    await manager.broadcast(kb_id, {
+        "type": "document_status_update",
+        "doc_id": doc_id,
+        "status": doc.status,
+        "pipeline_status": doc.pipeline_status
+    })
     
     return {"ok": True, "pipeline_status": doc.pipeline_status}
 

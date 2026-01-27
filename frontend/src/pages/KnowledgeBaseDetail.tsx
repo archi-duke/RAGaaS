@@ -98,6 +98,7 @@ export default function KnowledgeBaseDetail() {
     // Resizable Panel State
     const [chatPanelWidth, setChatPanelWidth] = useState(50); // percentage
     const [isResizing, setIsResizing] = useState(false);
+    const [wsConnected, setWsConnected] = useState(false);
 
     const handleResizerMouseDown = (e: React.MouseEvent) => {
         e.preventDefault();
@@ -141,7 +142,7 @@ export default function KnowledgeBaseDetail() {
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
 
         let wsUrl;
-        if (window.location.port === '3000') {
+        if (window.location.port === '3000' || window.location.port === '5173') {
             // Local Dev: Connect directly to backend port 8000
             wsUrl = `${protocol}//${window.location.hostname}:8000/api/ws/${id}`;
         } else {
@@ -156,9 +157,10 @@ export default function KnowledgeBaseDetail() {
 
         ws.onopen = () => {
             console.log('Connected to WebSocket');
+            setWsConnected(true);
         };
 
-        ws.onmessage = (event) => {
+        ws.onmessage = async (event) => {
             console.log("WS Received:", event.data);
             const data = JSON.parse(event.data);
             if (data.type === 'document_status_update') {
@@ -166,19 +168,30 @@ export default function KnowledgeBaseDetail() {
                 if (data.status === 'deleted') {
                     setDocuments((prevDocs) => prevDocs.filter((doc) => doc.id !== data.doc_id));
                 } else {
-                    setDocuments((prevDocs) =>
-                        prevDocs.map((doc) =>
-                            doc.id === data.doc_id
-                                ? { ...doc, status: data.status }
-                                : doc
-                        )
-                    );
+                    setDocuments((prevDocs) => {
+                        const exists = prevDocs.some(doc => doc.id === data.doc_id);
+                        if (exists) {
+                            return prevDocs.map((doc) =>
+                                doc.id === data.doc_id
+                                    ? { ...doc, status: data.status, pipeline_status: data.pipeline_status }
+                                    : doc
+                            );
+                        } else {
+                            // New document detected (upload or processing started)
+                            // We need to fetch the full doc details to add it to the list
+                            // Check if we are already fetching to avoid race conditions?
+                            // For simplicity, trigger a reload of this specific doc or full list
+                            loadDocs(); // Easiest way to ensure consistency
+                            return prevDocs;
+                        }
+                    });
                 }
             }
         };
 
         ws.onclose = () => {
             console.log('Disconnected from WebSocket');
+            setWsConnected(false);
         };
 
         ws.onerror = (error) => {
@@ -547,7 +560,7 @@ export default function KnowledgeBaseDetail() {
             {/* Config Summary Card removed as per design request */}.
 
             {/* Tabs */}
-            <div className="tabs" style={{ marginBottom: '5px' }}>
+            <div className="tabs" style={{ marginBottom: '5px', display: 'flex', alignItems: 'center' }}>
                 <button
                     className={clsx('tab', activeTab === 'documents' && 'active')}
                     onClick={() => setActiveTab('documents')}
@@ -583,6 +596,22 @@ export default function KnowledgeBaseDetail() {
                         Settings
                     </button>
                 )}
+
+                {/* WebSocket Status Indicator */}
+                <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '6px', marginRight: '10px' }}>
+                    <span style={{
+                        width: '10px',
+                        height: '10px',
+                        borderRadius: '50%',
+                        backgroundColor: wsConnected ? '#22c55e' : '#ef4444',
+                        display: 'inline-block',
+                        boxShadow: wsConnected ? '0 0 5px #22c55e' : 'none',
+                        transition: 'background-color 0.3s ease'
+                    }}></span>
+                    <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                        {wsConnected ? 'Live' : 'Disconnect'}
+                    </span>
+                </div>
             </div>
 
             {/* Tab Content */}
