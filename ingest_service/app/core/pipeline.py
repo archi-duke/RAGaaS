@@ -14,6 +14,7 @@ Supported Graph Extractors:
 - schema: SchemaLLMPathExtractor
 """
 from typing import List, Dict, Any, Optional, Literal
+import asyncio
 from enum import Enum
 
 from llama_index.core import Document, Settings as LlamaSettings
@@ -185,7 +186,7 @@ class IngestPipeline:
         
         return nodes
     
-    def extract_graph(
+    async def extract_graph(
         self,
         nodes: List[BaseNode],
         extractor_type: GraphExtractorType,
@@ -194,120 +195,103 @@ class IngestPipeline:
         custom_prompt: Optional[str] = None,
         entity_dictionary: Optional[Dict[str, Dict[str, Any]]] = None
     ) -> List[Dict[str, Any]]:
-        """Extract graph triples from nodes
-
-        Supports both legacy pipe-delimited format and modern JSON format.
-        JSON format allows richer extraction (entity types, properties, etc.)
-        """
-        
+        """Extract graph triples from nodes in parallel"""
         if extractor_type == GraphExtractorType.NONE:
             return []
         
-        all_triples = []
+        num_workers = config.get("num_workers", 5)
+        sem = asyncio.Semaphore(num_workers)
         
-        # Simplified LLM-based triple extraction
-        for node in nodes:
-            try:
-                text = node.get_content()
-                if len(text.strip()) < 10:  # Skip too short text
-                    continue
-                
-                # Prepare examples & Global Dictionary
-                examples_text = ""
-                if examples:
-                    print(f"[Pipeline] Using Few-Shot Examples ({len(examples)} chars):\n{examples[:100]}...")
-                    examples_text = f"\n[Reference Examples (Few-Shot)]\n{examples}\n"
-                
-                # Global Entity Dictionary Injection
-                dictionary_text = ""
-                if entity_dictionary:
-                    # 현재 청크와 관련된 엔티티만 필터링하거나, 전체를 간단히 요약해서 전달
-                    # 여기서는 상위 중요 엔티티 일부만 컨텍스트로 제공 (토큰 절약)
-                    # Simple strategy: Just list canonical names and their aliases
-                    dict_lines = []
-                    for canon, info in list(entity_dictionary.items())[:50]: # Top 50 entities
-                        aliases = ", ".join(info.get("variants", []))
-                        if aliases:
-                            dict_lines.append(f"- {canon} (Aliases: {aliases})")
-                        else:
-                            dict_lines.append(f"- {canon}")
+        async def process_node(node, idx):
+            async with sem:
+                try:
+                    text = node.get_content()
+                    if len(text.strip()) < 10: return []
                     
-                    if dict_lines:
-                        dictionary_text = "\n[Global Entity Dictionary (Use these canonical names)]\n" + "\n".join(dict_lines) + "\n"
+                    # Dictionary injection
+                    dictionary_text = ""
+                    if entity_dictionary:
+                        dict_lines = []
+                        for canon, info in list(entity_dictionary.items())[:50]:
+                            aliases = ", ".join(info.get("variants", []))
+                            dict_lines.append(f"- {canon} (Aliases: {aliases})" if aliases else f"- {canon}")
+                        if dict_lines:
+                            dictionary_text = "\n[Global Entity Dictionary (Use these canonical names)]\n" + "\n".join(dict_lines) + "\n"
 
-                # Use custom prompt or default prompt
-                if custom_prompt:
-                    print(f"[Pipeline DEBUG] Custom prompt length: {len(custom_prompt)}. Using .replace() method.")
-                    # Use safe replacement to avoid conflicts with JSON braces in prompt
-                    prompt = custom_prompt.replace("{text}", text[:2000]).replace("{examples}", examples_text + dictionary_text)
-                else:
-                    prompt = f"""Extract primary entities and their relationships from the following text.
+                    # Prompt building
+                    # The examples are now directly embedded into the prompt string if provided
+                    examples_prompt_part = f"\n[Reference Examples (Few-Shot)]\n{examples}\n" if examples else ""
+
+                    if custom_prompt:
+                        # Use safe replacement to avoid conflicts with JSON braces in prompt
+                        prompt = custom_prompt.replace("{text}", text[:2000]).replace("{examples}", examples_prompt_part + dictionary_text)
+                    else:
+                        prompt = f"""Extract primary entities and their relationships from the following text.
 Format: (Subject, Relation, Object)
 Extract up to 5 triplets.
-{examples_text}
+{examples_prompt_part}
 {dictionary_text}
 Text:
 {text[:2000]}
 
 Triplets (one per line, format: Subject|Relation|Object):"""
-                
-                response = self.llm.complete(prompt)
-                response_text = response.text.strip()
-                
-                # Try JSON parsing first (modern format)
-                parsed_json = self._try_parse_json(response_text)
-                if parsed_json:
-                    # Extract triples from JSON
-                    triples = parsed_json.get("triples", [])
-                    for t in triples:
-                        if all(k in t for k in ["subject", "predicate", "object"]):
-                            triple = {
-                                "subject": str(t["subject"]).strip(),
-                                "predicate": str(t["predicate"]).strip(),
-                                "object": str(t["object"]).strip(),
-                                "source_node_id": node.node_id,
-                                "confidence": t.get("confidence", 0.8),
-                            }
-                            all_triples.append(triple)
                     
-                    # Also extract properties (entity attributes) as triples
-                    properties = parsed_json.get("properties", [])
-                    for prop in properties:
-                        if all(k in prop for k in ["entity", "property", "value"]):
-                            triple = {
-                                "subject": str(prop["entity"]).strip(),
-                                "predicate": f"has_{prop['property']}",
-                                "object": str(prop["value"]).strip(),
-                                "source_node_id": node.node_id,
-                                "confidence": 0.9,
-                            }
-                            all_triples.append(triple)
-                else:
-                    # Fallback: Legacy pipe-delimited format
-                    for line in response_text.split('\n'):
-                        line = line.strip()
-                        if '|' in line:
-                            parts = line.split('|')
-                            if len(parts) >= 3:
-                                triple = {
-                                    "subject": parts[0].strip(),
-                                    "predicate": parts[1].strip(),
-                                    "object": parts[2].strip(),
+                    if (idx + 1) % 5 == 0 or idx == 0:
+                        print(f"[Pipeline] Processing chunk {idx+1}/{len(nodes)}...")
+                        
+                    response = await self.llm.acomplete(prompt)
+                    response_text = response.text.strip()
+                    
+                    node_triples = []
+                    parsed_json = self._try_parse_json(response_text)
+                    if parsed_json:
+                        for t in parsed_json.get("triples", []):
+                            if all(k in t for k in ["subject", "predicate", "object"]):
+                                node_triples.append({
+                                    "subject": str(t["subject"]).strip(),
+                                    "predicate": str(t["predicate"]).strip(),
+                                    "object": str(t["object"]).strip(),
                                     "source_node_id": node.node_id,
-                                    "confidence": 0.7,
-                                }
-                                all_triples.append(triple)
-                            
-            except Exception as e:
-                print(f"Error extracting from node {node.node_id}: {e}")
-                import traceback
-                traceback.print_exc()
-                continue
-            
-            if len(all_triples) > 0 and len(all_triples) % 5 == 0:
-                print(f"[Pipeline] Extraction progress: {len(all_triples)} triples extracted so far...")
+                                    "confidence": t.get("confidence", 0.8),
+                                })
+                        # Also extract properties (entity attributes) as triples
+                        properties = parsed_json.get("properties", [])
+                        for prop in properties:
+                            if all(k in prop for k in ["entity", "property", "value"]):
+                                node_triples.append({
+                                    "subject": str(prop["entity"]).strip(),
+                                    "predicate": f"has_{prop['property']}",
+                                    "object": str(prop["value"]).strip(),
+                                    "source_node_id": node.node_id,
+                                    "confidence": 0.9,
+                                })
+                    else:
+                        for line in response_text.split('\n'):
+                            line = line.strip()
+                            if '|' in line:
+                                parts = line.split('|')
+                                if len(parts) >= 3:
+                                    node_triples.append({
+                                        "subject": parts[0].strip(),
+                                        "predicate": parts[1].strip(),
+                                        "object": parts[2].strip(),
+                                        "source_node_id": node.node_id,
+                                        "confidence": 0.7,
+                                    })
+                    return node_triples
+                except Exception as e:
+                    print(f"Error extracting from node {idx}: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    return []
 
+        tasks = [process_node(node, i) for i, node in enumerate(nodes)]
+        results = await asyncio.gather(*tasks)
         
+        all_triples = []
+        for r in results:
+            all_triples.extend(r)
+            
         return all_triples
 
     def _try_parse_json(self, text: str) -> Optional[Dict[str, Any]]:
@@ -347,41 +331,58 @@ Triplets (one per line, format: Subject|Relation|Object):"""
         enable_entity_normalization: bool = False,
         normalization_algorithm: str = "embedding",
         normalization_threshold: float = 0.85,
-        entity_dictionary: Optional[Dict[str, Dict[str, Any]]] = None # Global Entity Dictionary
+        entity_dictionary: Optional[Dict[str, Dict[str, Any]]] = None,
+        sampling_size: Optional[int] = None, # User-defined sampling size
+        job_id: Optional[str] = None # For cancellation checks
     ) -> Dict[str, Any]:
-        """Execute the entire ingestion process"""
+        """Execute the entire ingestion process in Doc2Graph order with timing stats."""
+        import time
+        from app.api.ingest import jobs, JobStatus
         
+        start_total = time.time()
+        stats = []
+
         graph_config = graph_config or {}
         
-        # 0. Text Cleaning (Pre-chunking)
+        # 0. Text Cleaning
+        t0 = time.time()
         if enable_text_cleaning:
             from app.core.text_cleaner import text_cleaner
-            original_len = len(text)
             text = text_cleaner.clean(text)
-            print(f"[Pipeline] Text cleaned: {original_len} -> {len(text)} chars")
+        stats.append({"step": "Step 0: Text Cleaning", "duration": round(time.time() - t0, 2)})
         
-        # 1. Chunk document
-        print(f"[Pipeline] Chunking document ({len(text)} chars)...")
+        # PHASE 1: Entity Extraction (Global Dictionary)
+        t1 = time.time()
+        if enable_entity_normalization and not entity_dictionary:
+            if job_id and jobs.get(job_id, {}).get("status") == JobStatus.CANCELLED: return {}
+            print(f"[Pipeline] Phase 1: Building Global Entity Dictionary...")
+            from app.core.dictionary_builder import DictionaryBuilder
+            dict_builder = DictionaryBuilder(self.llm)
+            effective_sampling_size = sampling_size if sampling_size else 10000
+            entity_dictionary = await dict_builder.build_from_text(text, sampling_size=effective_sampling_size)
+        stats.append({"step": "Step 1: Entity Extraction (Pre-pass)", "duration": round(time.time() - t1, 2)})
+        
+        # PHASE 2: Chunking (Triple-level)
+        t2 = time.time()
+        if job_id and jobs.get(job_id, {}).get("status") == JobStatus.CANCELLED: return {}
+        print(f"[Pipeline] Phase 2: Chunking document for Triple Extraction...")
         nodes = self.chunk_document(text, chunking_strategy, chunking_config)
-        print(f"[Pipeline] Created {len(nodes)} nodes.")
+        stats.append({"step": f"Step 2: Text Chunking ({len(nodes)} chunks)", "duration": round(time.time() - t2, 2)})
 
-        
-        # 2. Generate embeddings
-        print(f"[Pipeline] Generating embeddings for {len(nodes)} nodes...")
+        # PHASE 3: Triple Extraction & Embeddings
+        t3 = time.time()
+        if job_id and jobs.get(job_id, {}).get("status") == JobStatus.CANCELLED: return {}
+        print(f"[Pipeline] Phase 3: Generating embeddings...")
         embeddings = []
         for i, node in enumerate(nodes):
             embedding = await self.embed_model.aget_text_embedding(node.get_content())
             embeddings.append(embedding)
-            if (i + 1) % 5 == 0:
-                print(f"[Pipeline] Embedded {i+1}/{len(nodes)} nodes...")
         
-        # 3. Extract graph (if enabled)
         triples = []
         normalization_suggestions = None
         if graph_extractor_type != GraphExtractorType.NONE:
-            print(f"[Pipeline] Extracting graph using {graph_extractor_type}...")
-            # Pass Global Entity Dictionary for context injection
-            triples = self.extract_graph(
+            print(f"[Pipeline] Phase 3: Extracting graph triples in parallel...")
+            triples = await self.extract_graph(
                 nodes, 
                 graph_extractor_type, 
                 graph_config, 
@@ -389,46 +390,42 @@ Triplets (one per line, format: Subject|Relation|Object):"""
                 custom_prompt,
                 entity_dictionary=entity_dictionary 
             )
-            print(f"[Pipeline] Extracted {len(triples)} triples.")
+        stats.append({"step": f"Step 3: Triple Extraction ({len(triples)} triples)", "duration": round(time.time() - t3, 2)})
             
-            # 4. Entity Normalization (Pre-loading)
-            # Global Dictionary가 있으면 이미 상당 부분 정규화가 되었겠지만,
-            # 추가적인 알고리즘 기반 정규화를 수행할 수 있습니다.
-            if enable_entity_normalization and len(triples) > 0:
-                from app.core.entity_normalizer import entity_normalizer
-                original_count = len(triples)
-                
-                print(f"[Pipeline] Running entity normalization with {normalization_algorithm} algorithm (threshold={normalization_threshold})...")
-                
-                # 유사 엔티티 찾기 및 제안 생성
-                normalization_suggestions = await entity_normalizer.generate_normalization_suggestions(
-                    triples, 
-                    algorithm=normalization_algorithm,
-                    threshold=normalization_threshold,
-                    embed_model=self.embed_model,  # 임베딩 모델 전달
-                    llm=self.llm  # LLM 모델 전달
-                )
-                
-                print(f"[Pipeline] Found {len(normalization_suggestions)} entity groups to normalize")
-                
-                # [FIX] 제안된 통합을 실제로 트리플에 적용 (자동 적용)
-                if normalization_suggestions:
-                    original_triples_count = len(triples)
-                    triples = entity_normalizer.apply_all_normalizations(triples, normalization_suggestions)
-                    print(f"[Pipeline] Applied similarity-based normalization to {len(triples)} triples")
-                
-                # 기본 정규화는 항상 적용 (중복 제거 등)
-                triples = entity_normalizer.normalize_triples(triples)
-                triples = entity_normalizer.resolve_duplicates(triples)
-                print(f"[Pipeline] After basic normalization: {original_count} -> {len(triples)} triples")
+        # PHASE 4: Post-normalization
+        t4 = time.time()
+        if enable_entity_normalization and len(triples) > 0:
+            if job_id and jobs.get(job_id, {}).get("status") == JobStatus.CANCELLED: return {}
+            from app.core.entity_normalizer import entity_normalizer
+            print(f"[Pipeline] Phase 4: Running final entity normalization...")
+            
+            normalization_suggestions = await entity_normalizer.generate_normalization_suggestions(
+                triples, 
+                algorithm=normalization_algorithm,
+                threshold=normalization_threshold,
+                embed_model=self.embed_model,
+                llm=self.llm
+            )
+            
+            if normalization_suggestions:
+                triples = entity_normalizer.apply_all_normalizations(triples, normalization_suggestions)
+            
+            triples = entity_normalizer.normalize_triples(triples)
+            triples = entity_normalizer.resolve_duplicates(triples)
+        stats.append({"step": "Step 4: Entity Normalization", "duration": round(time.time() - t4, 2)})
+
+        total_duration = round(time.time() - start_total, 2)
+        stats.append({"step": "Total Execution Time", "duration": total_duration})
         
         return {
             "nodes": nodes,
             "embeddings": embeddings,
             "triples": triples,
+            "entity_dictionary": entity_dictionary,
             "node_count": len(nodes),
             "triple_count": len(triples),
             "normalization_suggestions": normalization_suggestions,
+            "stats": stats
         }
 
 

@@ -14,6 +14,8 @@ interface UploadDocumentModalProps {
     initialState?: {
         file?: File; // Optional if starting fresh
         docId?: string;
+        filename?: string;
+        filePath?: string;
         step?: 'ENTITY_EXTRACTED' | 'TRIPLE_EXTRACTED';
         data?: any;
     };
@@ -90,6 +92,7 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
         doc_id: string;
         triples: any[];
         node_count: number;
+        stats?: any[];
     } | null>(null);
 
     const [messageDialog, setMessageDialog] = useState<{ isOpen: boolean; title: string; message: string; type: 'info' | 'success' | 'error' }>({
@@ -111,6 +114,7 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
         enable_text_cleaning: false,  // Format char removal
         enable_subject_restoration: true,  // Restore omitted subjects (KR)
         enable_inference: false,  // Rule-based inference
+        chunk_size: 300, // Matching Doc2Graph (500 chars approx)
         extraction_examples_yaml: '', // Few-Shot Examples (YAML)
         custom_prompt: '', // Custom Extraction Prompt
         enable_entity_normalization: true,  // Default TRUE
@@ -127,6 +131,7 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
     const [dictionaryData, setDictionaryData] = useState<{
         preview_id: string;
         doc_id: string;
+        file_path: string;
         entity_count: number;
         dictionary: any;
     } | null>(null);
@@ -245,36 +250,12 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                 entity_dictionary: dictionaryData?.dictionary
             };
 
-            if (resumedDocId) {
-                // If resuming but NOT finished, we might need to continue processing?
-                // Actually, if we are here (handleUpload clicked), and no previewData,
-                // it means user wants to proceed from Dict -> Upload directly?
-                // Or user just uploaded a fresh file.
-                // If resuming, usually we are in a specific state.
-                // If we have dictionaryData but NO previewData, 'Upload' means "Skip Triples & Just Index"?
-                // Currently 'Upload' button usually implies "Done/Start".
-                // If we have file, we upload.
-                // If we don't have file (resume), we might need an API to "continue ingest" for existing docId.
-                // BUT docApi.upload expects a file.
-                // For now, let's assume 'Resume' brings us to the Modal, and user proceeds with 'Extract Triples' usually.
-                // If they click 'Upload' with dictionary present, they likely want to ingest using that dict.
-
-                // However, without a file object, we can't re-upload.
-                // We need an endpoint to "resume_ingest(docId, config)".
-                // Since we don't have that yet, we'll assume Resume Mode is mostly for VIEWING intermediate data
-                // and moving to Next Step (Extract Triples).
-                // If they want to just "Upload" (Finish) from dictionary state without triples... we need that API.
-                // For now, let's block Upload if no file, UNLESS we implement resume-upload.
-                if (!file) {
-                    alert("Cannot upload without file. Please proceed with Extraction steps.");
-                    return;
-                }
-            }
-
             if (file) {
                 await docApi.upload(kbId, file, config);
                 onUploadComplete();
                 onClose();
+            } else if (resumedDocId) {
+                alert("Cannot upload without file. Please proceed with Extraction steps.");
             }
 
         } catch (err) {
@@ -316,7 +297,6 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
         if (!previewData) return;
         try {
             await extractionApi.discard(previewData.preview_id);
-            // Don't delete doc if resuming? Or maybe yes if they cancel the whole thing.
             if (previewData.doc_id) {
                 await docApi.delete(kbId, previewData.doc_id);
             }
@@ -330,80 +310,41 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
 
     const isGraphEnabled = kbConfig && kbConfig.graph_backend && kbConfig.graph_backend !== 'none';
 
-    // Dynamic Helper to extract params to pass to API
-    const prepareExtractionParams = (docId: string, filePath: string) => ({
-        kb_id: kbId,
-        doc_id: docId,
-        file_path: filePath,
-        chunking: {
-            strategy: 'fixed_size',
-            chunk_size: 1024,
-            chunk_overlap: 20,
-        },
-        graph: {
-            extractor_type: graphParams.extractor_type,
-            max_paths_per_chunk: graphParams.max_paths_per_chunk,
-            max_triplets_per_chunk: graphParams.max_triplets_per_chunk,
-            num_workers: graphParams.num_workers,
-            generate_inverse_relations: graphParams.generate_inverse_relations,
-        },
-        graph_store: kbConfig?.graph_backend === 'neo4j' ? 'neo4j' : 'fuseki',
-        enable_text_cleaning: graphParams.enable_text_cleaning,
-        enable_subject_restoration: graphParams.enable_subject_restoration,
-        enable_entity_normalization: graphParams.enable_entity_normalization,
-        extraction_examples_yaml: graphParams.extraction_examples_yaml || undefined,
-        custom_prompt: graphParams.custom_prompt || undefined,
-        normalization_algorithm: graphParams.normalization_algorithm,
-        normalization_threshold: graphParams.normalization_threshold,
-        entity_dictionary: dictionaryData?.dictionary,
-    });
-
-
     // --- ACTION HANDLERS ---
 
     const handleExtractEntities = async () => {
-        // We need a docId. If resumed, use it. If not, upload file to get one.
         if (!file && !resumedDocId) return;
 
         setIsExtracting(true);
         try {
-            let docId = resumedDocId;
-            let filePath = "";
+            let currentDocId = resumedDocId;
+            let currentFilePath = "";
 
-            if (!docId && file) {
-                // Upload file to backend first to get file_path
+            if (!currentDocId && file) {
                 const uploadRes = await docApi.upload(kbId, file, { ...graphParams, preview_only: true });
-                docId = uploadRes.data.id;
-                filePath = uploadRes.data.file_path || `/data/uploads/${kbId}/${file.name}`;
+                currentDocId = uploadRes.data.id;
+                currentFilePath = uploadRes.data.file_path || `/data/uploads/${kbId}/${currentDocId}_${file.name}`;
             } else if (resumedDocId) {
-                // If resumed, we assume file exists on server. we need path?
-                // Ideally backend knows path from docId. 
-                // Using a special "resume" flag or fetch path?
-                // For now, let's assume we can't easily re-run extraction without path.
-                // If resumed, we probably already HAVE data. 
-                // Re-running means generating NEW data.
-                // We need to fetch document details to get file_path.
-                // For simplicity, if we don't have file object, we warn user or try best effort if stored.
-                // But in this flow, 'Extract Entities' usually starts from scratch or re-does it.
-                if (!file) {
-                    alert("Re-extraction requires the original file. Please upload again.");
-                    setIsExtracting(false);
-                    return;
+                if (file) {
+                    const uploadRes = await docApi.upload(kbId, file, { ...graphParams, preview_only: true });
+                    currentDocId = uploadRes.data.id;
+                    currentFilePath = uploadRes.data.file_path;
+                } else {
+                    // Try to guess path if not available
+                    currentFilePath = initialState?.filePath || "";
+                    if (!currentFilePath && initialState?.filename) {
+                        currentFilePath = `/data/uploads/${kbId}/${resumedDocId}_${initialState.filename}`;
+                    }
                 }
-                // If file present, we treat as fresh upload for re-extraction
-                const uploadRes = await docApi.upload(kbId, file, { ...graphParams, preview_only: true });
-                docId = uploadRes.data.id;
-                filePath = uploadRes.data.file_path;
             }
 
-            // Explicitly call Dictionary Preview
-            console.log("Requesting Entity Dictionary Preview...");
-            if (!docId) throw new Error("No Document ID");
+            if (!currentDocId) throw new Error("No Document ID");
 
+            console.log("Requesting Entity Dictionary Preview...");
             const res = await extractionApi.previewDictionary({
                 kb_id: kbId,
-                doc_id: docId,
-                file_path: filePath, // If null, backend might fail.
+                doc_id: currentDocId,
+                file_path: currentFilePath,
                 chunking: {
                     strategy: 'fixed_size',
                     chunk_size: 1024,
@@ -414,7 +355,8 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
 
             setDictionaryData({
                 preview_id: res.data.preview_id,
-                doc_id: docId,
+                doc_id: currentDocId,
+                file_path: currentFilePath,
                 entity_count: res.data.entity_count,
                 dictionary: res.data.dictionary
             });
@@ -422,12 +364,12 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
             setShowDictionaryModal(true);
             setIsEntityExtracted(true);
 
-            // [PERSIST] Save state to backend
-            await docApi.updatePipelineStatus(kbId, docId, {
+            await docApi.updatePipelineStatus(kbId, currentDocId, {
                 status: 'ENTITY_EXTRACTED',
                 metadata: {
                     preview_id: res.data.preview_id,
-                    doc_id: docId,
+                    doc_id: currentDocId,
+                    file_path: currentFilePath,
                     entity_count: res.data.entity_count,
                     dictionary: res.data.dictionary
                 }
@@ -448,77 +390,38 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
     };
 
     const handleExtractTriples = async () => {
-        // Needs docId.
-        let docId = dictionaryData?.doc_id || resumedDocId;
-        // If we have dictionary data, we usually have doc_id there.
-
-        // Note: If reusing existing dict, we need file_path too for the content extraction!
-        // If resumed without file object, we might fail unless backend handles lookup.
-        // Let's assume for now user must have file OR backend supports lookup.
-        // The `preview` API requires `file_path`.
-        // If we don't have `file` in memory, we can't guess path easily unless we stored it in metadata?
-        // In `DocumentsTab` resume, we passed metadata. Metadata usually doesn't have file_path.
-        // Wait, `docApi.upload` returns file_path. We should probably store it in metadata if we want resume without file.
-
-        // Workaround: If file is missing, prompt user or fail gracefully.
-        // Actually, if we are at "Entity Ready" stage, we might want to proceed to Triples.
-        // To do that, we need the source text. 
-        // If we can't rely on file object, we rely on backend having the file.
-        // Let's pass a dummy path if unknown and hope backend resolves it from doc_id (if we improved backend).
-        // BUT backend currently uses `file_path` param.
-        // Only fix: UploadDocumentModal should ideally retrieve file_path from `initialState` or fetch doc details.
-        // For now, let's use a safe fallback or require file.
-
-        if (!file && !docId) return;
+        if (!kbId) return;
 
         setIsExtracting(true);
         try {
-            let filePath = "";
-            if (file) {
-                // Even if proceeding, we might want to re-upload config? No, just get path.
-                // If we already have docId, maybe just construct path? 
-                filePath = `/data/uploads/${kbId}/${docId}_${file.name}`; // Guess
-            } else {
-                // Resume mode without file object.
-                // We'll try to send empty path and let backend/ingest service handle it or fail.
-                // In previous steps we saw `uploadRes.data.file_path` saved.
-                // If we saved it to `pipeline_metadata`, we could use it.
-                // We didn't save it explicitly. 
-                // We'll have to rely on convention or user re-selecting file if needed.
-                // Let's try finding it via docApi.
+            let currentDocId = dictionaryData?.doc_id || resumedDocId;
+            let currentFilePath = dictionaryData?.file_path || initialState?.filePath || "";
+
+            if (!currentFilePath) {
+                const effectiveFileName = file?.name || initialState?.filename;
+                if (currentDocId && effectiveFileName) {
+                    currentFilePath = `/data/uploads/${kbId}/${currentDocId}_${effectiveFileName}`;
+                }
             }
 
-            if (docId && !filePath && !file) {
-                // Fetch doc to get path?
-                // docApi.get(docId)? No such endpoint easily exposed here.
-                // Let's assume standard path format if possible.
-                // Or just alert user.
-                // "Please re-select the file to continue processing."
-                // But user asked for "Resume".
-                // Let's assume for this turn that file persistence is out of scope for browser-upload, 
-                // and we expect user to re-supply file OR we implemented backend-side path resolution.
-                // Given the "Crash" issue is priority, I will fix syntax first.
-                // I'll keep the logic simple: requires file OR valid storage.
-            }
-
-            // Check if we need to upload/get path
-            if (file && !filePath) {
+            if (file && (!currentDocId || !currentFilePath)) {
                 const uploadRes = await docApi.upload(kbId, file, { ...graphParams, preview_only: true });
-                docId = uploadRes.data.id;
-                filePath = uploadRes.data.file_path;
+                currentDocId = uploadRes.data.id;
+                currentFilePath = uploadRes.data.file_path || `/data/uploads/${kbId}/${currentDocId}_${file.name}`;
             }
 
-            if (!docId) throw new Error("Missing Document ID");
+            if (!currentDocId) {
+                throw new Error("Missing Document ID. Please upload a file first.");
+            }
 
-            // Call Triple Preview
-            console.log("Requesting Triple Extraction Preview...");
+            console.log("Requesting Triple Extraction Preview...", { currentDocId, currentFilePath });
             const res = await extractionApi.preview({
                 kb_id: kbId,
-                doc_id: docId,
-                file_path: filePath || "RESUME_AUTO_LOOKUP", // Hint to backend if implemented, else might fail
+                doc_id: currentDocId,
+                file_path: currentFilePath || "RESUME_AUTO_LOOKUP",
                 chunking: {
                     strategy: 'fixed_size',
-                    chunk_size: 1024,
+                    chunk_size: graphParams.chunk_size,
                     chunk_overlap: 20,
                 },
                 graph: {
@@ -541,19 +444,20 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
 
             setPreviewData({
                 preview_id: res.data.preview_id,
-                doc_id: docId,
+                doc_id: currentDocId,
                 triples: res.data.triples,
                 node_count: res.data.node_count,
+                stats: res.data.stats,
             });
 
-            // [PERSIST] Save state to backend
-            await docApi.updatePipelineStatus(kbId, docId, {
+            await docApi.updatePipelineStatus(kbId, currentDocId, {
                 status: 'TRIPLE_EXTRACTED',
                 metadata: {
                     preview_id: res.data.preview_id,
-                    doc_id: docId,
+                    doc_id: currentDocId,
                     triples: res.data.triples,
-                    node_count: res.data.node_count
+                    node_count: res.data.node_count,
+                    file_path: currentFilePath
                 }
             });
 
@@ -561,9 +465,8 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
 
         } catch (err: any) {
             console.error('Triple Extraction failed:', err);
-            const errorMsg = err.response?.data?.detail || 'Failed to extract triples.';
+            const errorMsg = err.response?.data?.detail || err.message || 'Failed to extract triples.';
 
-            // Check for file not found error to guide user
             if (typeof errorMsg === 'string' && (errorMsg.includes('No such file') || errorMsg.includes('File not found'))) {
                 setMessageDialog({
                     isOpen: true,
@@ -571,7 +474,6 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                     message: 'The original file could not be found on the server. Please click "Select File" to upload it again, then retry extraction.',
                     type: 'error'
                 });
-                // We keep resumedDocId but file state allows user to pick new file
             } else {
                 setMessageDialog({
                     isOpen: true,
@@ -584,7 +486,6 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
             setIsExtracting(false);
         }
     };
-
 
     return (
         <>
@@ -621,8 +522,6 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                                 style={{ display: 'none' }}
                                 onChange={(e) => {
                                     handleFileChange(e);
-                                    // Only reset pipeline if NOT resuming (fresh start)
-                                    // If resuming, we assume user is re-supplying the missing source file
                                     if (!resumedDocId) {
                                         setIsEntityExtracted(false);
                                         setResumedDocId(null);
@@ -654,7 +553,6 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                         </div>
                     </div>
 
-                    {/* Graph Settings Section */}
                     {isGraphEnabled && (
                         <div style={{ marginBottom: '1.5rem', background: '#eff6ff', padding: '1.25rem', borderRadius: '12px', border: '1px solid #bfdbfe' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1.25rem', color: '#3b82f6', fontWeight: 600 }}>
@@ -663,11 +561,8 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                             </div>
 
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem' }}>
-                                {/* Column 1: Config Parameters */}
                                 <div>
                                     <h4 style={{ margin: '0 0 1rem 0', fontSize: '0.9rem', color: '#475569' }}>Configuration</h4>
-
-                                    {/* Entity Sample */}
                                     <div style={{ marginBottom: '1rem' }}>
                                         <LabelWithTooltip label={`Entity Sample: ${graphParams.max_sample_size / 1000}k`} tooltip="Text sample size for entity dictionary building" />
                                         <input
@@ -677,8 +572,15 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                                             style={{ width: '100%', cursor: 'pointer', accentColor: '#3b82f6' }}
                                         />
                                     </div>
-
-                                    {/* Max Paths */}
+                                    <div style={{ marginBottom: '1rem' }}>
+                                        <LabelWithTooltip label={`Chunk Size: ${graphParams.chunk_size}`} tooltip="Relationship extraction unit (Smaller is faster/Doc2Graph style)" />
+                                        <input
+                                            type="range" min="100" max="1024" step="50"
+                                            value={graphParams.chunk_size}
+                                            onChange={(e) => setGraphParams({ ...graphParams, chunk_size: parseInt(e.target.value) })}
+                                            style={{ width: '100%', cursor: 'pointer', accentColor: '#10b981' }}
+                                        />
+                                    </div>
                                     <div style={{ marginBottom: '1rem' }}>
                                         <div style={{ marginBottom: '0.3rem' }}>
                                             <LabelWithTooltip
@@ -712,7 +614,6 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                                             }}
                                         />
                                     </div>
-
                                     <div>
                                         <LabelWithTooltip label={`Workers: ${graphParams.num_workers}`} tooltip="Number of parallel workers" />
                                         <input
@@ -724,10 +625,8 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                                     </div>
                                 </div>
 
-                                {/* Column 2: Checkbox Options */}
                                 <div>
                                     <h4 style={{ margin: '0 0 1rem 0', fontSize: '0.9rem', color: '#475569' }}>Options</h4>
-
                                     <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', marginBottom: '1rem' }}>
                                         <input
                                             type="checkbox"
@@ -740,7 +639,6 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                                             <div style={{ fontSize: '0.75rem', color: '#64748b' }}>Remove bullets, numbers</div>
                                         </div>
                                     </label>
-
                                     <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', marginBottom: '1rem' }}>
                                         <input
                                             type="checkbox"
@@ -755,10 +653,8 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                                     </label>
                                 </div>
 
-                                {/* Column 3: Customization Actions */}
                                 <div>
                                     <h4 style={{ margin: '0 0 1rem 0', fontSize: '0.9rem', color: '#475569' }}>Customization</h4>
-
                                     <button
                                         className="btn"
                                         style={{ width: '100%', marginBottom: '0.75rem', justifyContent: 'center', background: '#fff', border: '1px solid #cbd5e1' }}
@@ -775,7 +671,6 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                                         />
                                         <span style={{ fontSize: '0.75rem', color: '#64748b' }}>Examples Added</span>
                                     </label>
-
                                     <button
                                         className="btn"
                                         style={{ width: '100%', marginBottom: '0.75rem', justifyContent: 'center', background: '#fff', border: '1px solid #cbd5e1' }}
@@ -796,7 +691,6 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                             </div>
                         </div>
                     )}
-
 
                     <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '1rem' }}>
                         <button className="btn" onClick={onClose} disabled={isUploading || isExtracting}>Cancel</button>
@@ -819,6 +713,21 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                                     {isExtracting ? 'Processing...' : (isEntityExtracted ? 'Re-extract Entities' : 'Extract Entities')}
                                 </button>
 
+                                {previewData?.stats && (
+                                    <div style={{ padding: '1rem', background: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0', marginBottom: '1rem', textAlign: 'left', fontSize: '0.85rem' }}>
+                                        <h5 style={{ margin: '0 0 0.5rem 0', fontWeight: 600, color: '#334155' }}>Processing Stats</h5>
+                                        <table style={{ width: '100%' }}>
+                                            <tbody>
+                                                {previewData.stats.map((s, idx) => (
+                                                    <tr key={idx}>
+                                                        <td style={{ color: '#64748b' }}>{s.step}</td>
+                                                        <td style={{ textAlign: 'right', fontWeight: 500, color: s.step.includes('Total') ? '#3b82f6' : '#334155' }}>{s.duration}s</td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                )}
                                 <button
                                     className="btn"
                                     onClick={handleExtractTriples}
@@ -857,7 +766,6 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                 onSave={(yaml) => setGraphParams(prev => ({ ...prev, extraction_examples_yaml: yaml }))}
                 mode="extraction_examples"
             />
-
             <PromptDialog
                 isOpen={showPromptModal}
                 onClose={() => setShowPromptModal(false)}
@@ -865,7 +773,6 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                 onSave={(prompt) => setGraphParams(prev => ({ ...prev, custom_prompt: prompt }))}
                 mode="extraction_prompt"
             />
-
             <MessageDialog
                 isOpen={messageDialog.isOpen}
                 title={messageDialog.title}
@@ -873,34 +780,27 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                 type={messageDialog.type}
                 onClose={() => setMessageDialog({ ...messageDialog, isOpen: false })}
             />
-
-            {
-                previewData && (
-                    <ExtractionPreviewModal
-                        isOpen={showPreviewModal}
-                        onClose={() => setShowPreviewModal(false)}
-                        previewId={previewData.preview_id}
-                        triples={previewData.triples}
-                        nodeCount={previewData.node_count}
-                        isLoading={isExtracting}
-                        onConfirm={handlePreviewConfirm}
-                        onDiscard={handlePreviewDiscard}
-                    />
-                )
-            }
-
-            {
-                dictionaryData && (
-                    <EntityDictionaryModal
-                        isOpen={showDictionaryModal}
-                        onClose={() => setShowDictionaryModal(false)}
-                        dictionary={dictionaryData.dictionary}
-                        entityCount={dictionaryData.entity_count}
-                        isLoading={isExtracting}
-                    />
-                )
-            }
+            {previewData && (
+                <ExtractionPreviewModal
+                    isOpen={showPreviewModal}
+                    onClose={() => setShowPreviewModal(false)}
+                    previewId={previewData.preview_id}
+                    triples={previewData.triples}
+                    nodeCount={previewData.node_count}
+                    isLoading={isExtracting}
+                    onConfirm={handlePreviewConfirm}
+                    onDiscard={handlePreviewDiscard}
+                />
+            )}
+            {dictionaryData && (
+                <EntityDictionaryModal
+                    isOpen={showDictionaryModal}
+                    onClose={() => setShowDictionaryModal(false)}
+                    dictionary={dictionaryData.dictionary}
+                    entityCount={dictionaryData.entity_count}
+                    isLoading={isExtracting}
+                />
+            )}
         </>
-
     );
 }

@@ -79,6 +79,7 @@ class IngestRequest(BaseModel):
     enable_normalization_confirmation: bool = False  # User review before applying
     callback_url: Optional[str] = None
     preview_only: bool = False  # Skip processing, just save file path (for preview flows)
+    sampling_size: Optional[int] = None # For Doc2Graph Dictionary (Phase 1)
     entity_dictionary: Optional[Dict[str, Any]] = None # Pre-computed dictionary
 
 
@@ -110,20 +111,13 @@ async def process_ingest_job(job_id: str, request: IngestRequest):
         jobs[job_id]["updated_at"] = datetime.utcnow().isoformat()
         
         # 1. Read file (PDF or Text)
-        file_path = request.file_path
-        if file_path.lower().endswith('.pdf'):
-            from pypdf import PdfReader
-            import io
-            with open(file_path, "rb") as f:
-                pdf = PdfReader(io.BytesIO(f.read()))
-                text = ""
-                for page in pdf.pages:
-                    text += (page.extract_text() or "") + "\n"
-            print(f"[IngestJob] Read PDF: {len(text)} chars")
-        else:
-            with open(file_path, "r", encoding="utf-8") as f:
-                text = f.read()
-            print(f"[IngestJob] Read text file: {len(text)} chars")
+        from app.utils.file_utils import read_text_file
+        text = await read_text_file(request.file_path)
+        
+        if not text:
+            raise ValueError(f"Could not read content from {request.file_path}")
+        
+        print(f"[IngestJob] Read file: {len(text)} chars")
         
         # 1.5 Subject Restoration (Optional)
         if request.enable_subject_restoration:
@@ -134,7 +128,7 @@ async def process_ingest_job(job_id: str, request: IngestRequest):
         jobs[job_id]["progress"] = 10
 
         
-        # 2. Convert chunking config
+        # 2. Prepare configs
         chunking_config = {
             "chunk_size": request.chunking.chunk_size,
             "chunk_overlap": request.chunking.chunk_overlap,
@@ -144,7 +138,6 @@ async def process_ingest_job(job_id: str, request: IngestRequest):
             "breakpoint_threshold": request.chunking.breakpoint_threshold,
         }
         
-        # 3. Convert graph config
         graph_config = {
             "max_paths_per_chunk": request.graph.max_paths_per_chunk,
             "max_triplets_per_chunk": request.graph.max_triplets_per_chunk,
@@ -153,40 +146,7 @@ async def process_ingest_job(job_id: str, request: IngestRequest):
             "allowed_relation_types": request.graph.allowed_relation_types,
         }
         
-        jobs[job_id]["progress"] = 20
-        
-        # 3.5 [Doc2Graph] Global Entity Dictionary Construction (Pre-pass)
-        entity_dictionary = request.entity_dictionary
-        if request.enable_entity_normalization and not entity_dictionary:
-            try:
-                from app.core.dictionary_builder import DictionaryBuilder
-                print(f"[IngestJob] Building Global Entity Dictionary for Doc2Graph normalization...")
-                
-                # We need to chunk first to build dictionary (without saving)
-                # Note: This chunks the text twice (once here, once inside pipeline.process)
-                # Optimization: Ideally pipeline.process should accept ready-made nodes or return intermediate steps.
-                # For now, let's instantiate DictionaryBuilder and use pipeline's chunker helper if possible
-                # But pipeline.chunk_document is a method.
-                
-                # Let's verify text length. If huge, this might be slow (Double Chunking)
-                # But correct for now.
-                print(f"[IngestJob] Pre-chunking for Dictionary Builder...")
-                temp_nodes = ingest_pipeline.chunk_document(text, request.chunking.strategy, chunking_config)
-                
-                dict_builder = DictionaryBuilder(ingest_pipeline.llm)
-                entity_dictionary = await dict_builder.build(temp_nodes)
-                print(f"[IngestJob] Global Entity Dictionary ready: {len(entity_dictionary)} entities found.")
-                
-            except Exception as e:
-                print(f"[IngestJob] ⚠️ Dictionary Building Failed: {e}")
-                import traceback
-                traceback.print_exc()
-        elif request.enable_entity_normalization and entity_dictionary:
-            print(f"[IngestJob] Using provided Pre-computed Entity Dictionary ({len(entity_dictionary)} items).")
-
-        jobs[job_id]["progress"] = 30 # Progress Update
-
-        # 4. Run pipeline
+        # 3. Process with IngestPipeline (Now handles dictionary + chunks + triples in order)
         result = await ingest_pipeline.process(
             text=text,
             chunking_strategy=request.chunking.strategy,
@@ -199,10 +159,18 @@ async def process_ingest_job(job_id: str, request: IngestRequest):
             enable_entity_normalization=request.enable_entity_normalization,
             normalization_algorithm=request.normalization_algorithm,
             normalization_threshold=request.normalization_threshold,
-            entity_dictionary=entity_dictionary  # Pass the built dictionary
+            entity_dictionary=request.entity_dictionary,
+            sampling_size=request.sampling_size,
+            job_id=job_id
         )
         
+        if not result or jobs.get(job_id, {}).get("status") == JobStatus.CANCELLED:
+            return
+        
         jobs[job_id]["progress"] = 80
+        if jobs[job_id]["status"] == JobStatus.CANCELLED:
+             print(f"[IngestJob] Job {job_id} cancelled before saving.")
+             return
         
         # 5. Save (Milvus, Neo4j/Fuseki)
         print(f"[IngestJob] Saving to databases for doc {request.doc_id}...")
@@ -364,22 +332,32 @@ async def get_job_status(job_id: str):
 
 @router.post("/jobs/{job_id}/cancel")
 async def cancel_job(job_id: str):
-    """Cancel job"""
-    if job_id not in jobs:
+    """Cancel job. Supports both official job_id and doc_id (for cleanup flows)."""
+    target_job_id = None
+    
+    if job_id in jobs:
+        target_job_id = job_id
+    else:
+        # Try to find by doc_id
+        for jid, job in jobs.items():
+            if job.get("doc_id") == job_id:
+                target_job_id = jid
+                break
+    
+    if not target_job_id:
         raise HTTPException(status_code=404, detail="Job not found")
     
-    job = jobs[job_id]
+    job = jobs[target_job_id]
     
     if job["status"] in [JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED]:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Cannot cancel job with status: {job['status']}"
-        )
+         # Already finished, just return ok
+         return {"message": f"Job already in state: {job['status']}", "job_id": target_job_id}
     
-    jobs[job_id]["status"] = JobStatus.CANCELLED
-    jobs[job_id]["updated_at"] = datetime.utcnow().isoformat()
+    jobs[target_job_id]["status"] = JobStatus.CANCELLED
+    jobs[target_job_id]["updated_at"] = datetime.utcnow().isoformat()
+    print(f"[Ingest] Job {target_job_id} (doc {job.get('doc_id')}) marked as CANCELLED")
     
-    return {"message": "Job cancelled", "job_id": job_id}
+    return {"message": "Job cancelled", "job_id": target_job_id}
 
 
 @router.get("/jobs")
@@ -435,6 +413,7 @@ class PreviewResponse(BaseModel):
     doc_id: str
     node_count: int
     triples: List[Dict[str, Any]]
+    stats: Optional[List[Dict[str, Any]]] = None
     message: str
 
 
@@ -455,20 +434,13 @@ async def create_preview(request: PreviewRequest):
         print(f"[Preview] Starting preview {preview_id} for doc {request.doc_id}")
         
         # 1. Read file
-        file_path = request.file_path
-        if file_path.lower().endswith('.pdf'):
-            from pypdf import PdfReader
-            import io
-            with open(file_path, "rb") as f:
-                pdf = PdfReader(io.BytesIO(f.read()))
-                text = ""
-                for page in pdf.pages:
-                    text += (page.extract_text() or "") + "\n"
-            print(f"[Preview] Read PDF: {len(text)} chars")
-        else:
-            with open(file_path, "r", encoding="utf-8") as f:
-                text = f.read()
-            print(f"[Preview] Read text file: {len(text)} chars")
+        from app.utils.file_utils import read_text_file
+        text = await read_text_file(request.file_path)
+        
+        if not text:
+            raise ValueError(f"Original file not found at {request.file_path}")
+        
+        print(f"[Preview] Read file: {len(text)} chars")
         
         # 1.5 Subject Restoration (Optional)
         if request.enable_subject_restoration:
@@ -494,27 +466,7 @@ async def create_preview(request: PreviewRequest):
             "allowed_relation_types": request.graph.allowed_relation_types,
         }
 
-        # 2.5 [Doc2Graph] Global Entity Dictionary Construction (Pre-pass)
-        entity_dictionary = request.entity_dictionary
-        if request.enable_entity_normalization and not entity_dictionary:
-            try:
-                from app.core.dictionary_builder import DictionaryBuilder
-                print(f"[Preview] Building Global Entity Dictionary for Doc2Graph normalization...")
-                print(f"[Preview] Pre-chunking for Dictionary Builder...")
-                temp_nodes = ingest_pipeline.chunk_document(text, request.chunking.strategy, chunking_config)
-                
-                dict_builder = DictionaryBuilder(ingest_pipeline.llm)
-                entity_dictionary = await dict_builder.build(temp_nodes)
-                print(f"[Preview] Global Entity Dictionary ready: {len(entity_dictionary)} entities found.")
-                
-            except Exception as e:
-                print(f"[Preview] ⚠️ Dictionary Building Failed: {e}")
-                import traceback
-                traceback.print_exc()
-        elif request.enable_entity_normalization and entity_dictionary:
-            print(f"[Preview] Using provided Pre-computed Entity Dictionary ({len(entity_dictionary)} items).")
-        
-        # 3. Run pipeline (same as regular ingest)
+        # 3. Process with IngestPipeline (Multi-phase: Dictionary -> Chunks -> Triples)
         result = await ingest_pipeline.process(
             text=text,
             chunking_strategy=request.chunking.strategy,
@@ -527,7 +479,8 @@ async def create_preview(request: PreviewRequest):
             enable_entity_normalization=request.enable_entity_normalization,
             normalization_algorithm=request.normalization_algorithm,
             normalization_threshold=request.normalization_threshold,
-            entity_dictionary=entity_dictionary 
+            entity_dictionary=request.entity_dictionary,
+            sampling_size=request.sampling_size
         )
         
         print(f"[Preview] Extracted {len(result['triples'])} triples, {result['node_count']} nodes")
@@ -548,6 +501,7 @@ async def create_preview(request: PreviewRequest):
             "normalization_suggestions": result.get("normalization_suggestions"),
             "enable_entity_normalization": request.enable_entity_normalization,
             "enable_normalization_confirmation": request.enable_normalization_confirmation,
+            "stats": result.get("stats"),
         }
         
         return PreviewResponse(
@@ -556,6 +510,7 @@ async def create_preview(request: PreviewRequest):
             doc_id=request.doc_id,
             node_count=result["node_count"],
             triples=result["triples"],
+            stats=result.get("stats"),
             message=f"Preview generated. {result['node_count']} nodes, {len(result['triples'])} triples extracted.",
         )
         

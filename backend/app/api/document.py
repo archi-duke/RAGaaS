@@ -48,17 +48,19 @@ async def upload_document(
             kb_id=kb_id,
             filename=file.filename,
             file_type=file.filename.split(".")[-1],
-            status=DocumentStatus.PROCESSING.value 
+            status=DocumentStatus.PROCESSING.value,
+            pipeline_status="UPLOADED"
         )
         await doc.insert()
 
     # 3. Save File to Shared Storage
     content = await file.read()
     shared_path = settings.SHARED_STORAGE_PATH
-    os.makedirs(shared_path, exist_ok=True)
-    # Important: Always overwrite or use unique timestamp if concurrency is high.
-    # Here using doc.id ensures uniqueness per document process call if new, but if overwriting...
-    file_path = os.path.join(shared_path, f"{doc.id}_{doc.filename}")
+    kb_path = os.path.join(shared_path, kb_id)
+    os.makedirs(kb_path, exist_ok=True)
+    
+    # Important: Using doc.id ensures uniqueness.
+    file_path = os.path.join(kb_path, f"{doc.id}_{doc.filename}")
     
     with open(file_path, "wb") as f:
         f.write(content)
@@ -102,6 +104,7 @@ async def upload_document(
     doc.max_sample_size = final_config.get("max_sample_size", 50000)
     doc.enable_normalization_confirmation = enable_normalization_confirmation
     doc.custom_prompt = final_config.get("custom_prompt")
+    doc.file_path = file_path
     await doc.save()
 
     # 5. Load Default Prompt/Examples if missing
@@ -203,7 +206,7 @@ async def ingest_callback(payload: IngestCallback):
             else:
                 # Fallback check if file_path is empty but file exists in shared storage
                 shared_path = settings.SHARED_STORAGE_PATH
-                potential_path = os.path.join(shared_path, f"{doc.id}_{doc.filename}")
+                potential_path = os.path.join(shared_path, doc.kb_id, f"{doc.id}_{doc.filename}")
                 if os.path.exists(potential_path):
                     os.remove(potential_path)
                     logger.info(f"Deleted source file (fallback path): {potential_path}")

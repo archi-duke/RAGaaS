@@ -20,6 +20,7 @@ class Document(Document):
     status: str = DocumentStatus.PENDING.value
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
+    file_path: Optional[str] = None
     
     # Extraction Settings
     extractor_type: Optional[str] = None

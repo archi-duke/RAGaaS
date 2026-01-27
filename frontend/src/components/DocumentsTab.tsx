@@ -41,6 +41,7 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
     const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
     const [resumeState, setResumeState] = useState<{
         docId?: string;
+        filename?: string;
         filePath?: string;
         step?: 'ENTITY_EXTRACTED' | 'TRIPLE_EXTRACTED';
         data?: any;
@@ -140,11 +141,12 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
                                     <tr
                                         key={doc.id}
                                         onClick={() => {
-                                            // [RESUME LOGIC] Check if document has intermediate state
-                                            if (doc.status === 'processing' && doc.pipeline_status && doc.pipeline_metadata) {
+                                            // [RESUME LOGIC] If processing, always show the upload/pipeline modal
+                                            if (doc.status === 'processing') {
                                                 console.log("Resuming document:", doc.id, doc.pipeline_status);
                                                 setResumeState({
                                                     docId: doc.id,
+                                                    filename: doc.filename,
                                                     filePath: doc.file_path,
                                                     step: doc.pipeline_status as any,
                                                     data: doc.pipeline_metadata
