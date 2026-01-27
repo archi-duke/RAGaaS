@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-import { Upload, FileText, Trash2, Code, ScrollText, Check, X as XIcon } from 'lucide-react';
+import { Upload, FileText, Trash2, Database, Book, Check, X as XIcon } from 'lucide-react';
 import UploadDocumentModal from './UploadDocumentModal';
-import PromptDialog from './PromptDialog';
-import { docApi } from '../services/api';
+import EntityDictionaryModal from './EntityDictionaryModal';
+import ExtractionPreviewModal from './ExtractionPreviewModal';
+import { docApi, extractionApi } from '../services/api';
 
 interface Document {
     id: string;
@@ -47,27 +48,66 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
         data?: any;
     } | undefined>(undefined);
 
-    // Prompt/Example Management
-    const [promptDialog, setPromptDialog] = useState<{
-        isOpen: boolean;
-        docId: string;
-        mode: 'extraction_examples' | 'extraction_prompt';
-        initialContent: string;
-        title: string;
-    } | null>(null);
+    // Result Modals State
+    const [showPreviewModal, setShowPreviewModal] = useState(false);
+    const [previewData, setPreviewData] = useState<any>(null);
+    const [showDictionaryModal, setShowDictionaryModal] = useState(false);
+    const [dictionaryData, setDictionaryData] = useState<any>(null);
+    const [isLoadingResults, setIsLoadingResults] = useState(false);
 
-    const handleUpdate = async (content: string) => {
-        if (!promptDialog) return;
-
+    const handleViewEntities = async (docId: string, filename: string) => {
+        setIsLoadingResults(true);
         try {
-            await docApi.update(kbId, promptDialog.docId, {
-                [promptDialog.mode === 'extraction_examples' ? 'extraction_examples' : 'custom_prompt']: content
-            });
-            onRefresh(); // Refresh to update local state
+            const res = await docApi.getPipelineData(kbId, docId);
+            if (res.data.dictionary) {
+                setDictionaryData({
+                    dictionary: res.data.dictionary,
+                    entity_count: Object.keys(res.data.dictionary).length,
+                    doc_id: docId
+                });
+                setShowDictionaryModal(true);
+            } else {
+                alert("No entity extraction data found.");
+            }
         } catch (error) {
-            console.error("Failed to update document:", error);
-            alert("Failed to update settings");
+            console.error("Failed to fetch dictionary data:", error);
+            alert("Failed to fetch data.");
+        } finally {
+            setIsLoadingResults(false);
         }
+    };
+
+    const handleViewTriples = async (docId: string, filename: string) => {
+        setIsLoadingResults(true);
+        try {
+            const res = await docApi.getPipelineData(kbId, docId);
+            if (res.data.triples) {
+                setPreviewData({
+                    preview_id: res.data.preview_id || 'saved',
+                    doc_id: docId,
+                    triples: res.data.triples,
+                    node_count: res.data.node_count || 0
+                });
+                setShowPreviewModal(true);
+            } else {
+                alert("No triple extraction data found.");
+            }
+        } catch (error) {
+            console.error("Failed to fetch triples data:", error);
+            alert("Failed to fetch data.");
+        } finally {
+            setIsLoadingResults(false);
+        }
+    };
+
+    const handlePreviewConfirm = async () => {
+        if (!previewData || previewData.preview_id === 'saved') {
+            setShowPreviewModal(false);
+            return;
+        }
+        // If it's a re-confirm of a preview, we can handle it here, 
+        // but usually for already saved docs, we just close.
+        setShowPreviewModal(false);
     };
 
 
@@ -208,35 +248,25 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
                                                     className="btn btn-icon"
                                                     onClick={(e) => {
                                                         e.stopPropagation();
-                                                        setPromptDialog({
-                                                            isOpen: true,
-                                                            docId: doc.id,
-                                                            mode: 'extraction_examples',
-                                                            initialContent: doc.extraction_examples || '',
-                                                            title: `Extraction Examples - ${doc.filename}`
-                                                        });
+                                                        handleViewEntities(doc.id, doc.filename);
                                                     }}
-                                                    title="Manage Examples"
-                                                    style={{ color: doc.extraction_examples ? '#3b82f6' : 'var(--text-tertiary)' }}
+                                                    title="View Entity List"
+                                                    disabled={isLoadingResults}
+                                                    style={{ color: '#3b82f6' }}
                                                 >
-                                                    <ScrollText size={18} />
+                                                    <Book size={18} />
                                                 </button>
                                                 <button
                                                     className="btn btn-icon"
                                                     onClick={(e) => {
                                                         e.stopPropagation();
-                                                        setPromptDialog({
-                                                            isOpen: true,
-                                                            docId: doc.id,
-                                                            mode: 'extraction_prompt',
-                                                            initialContent: doc.custom_prompt || '',
-                                                            title: `Extraction Prompt - ${doc.filename}`
-                                                        });
+                                                        handleViewTriples(doc.id, doc.filename);
                                                     }}
-                                                    title="Manage Prompt"
-                                                    style={{ color: doc.custom_prompt ? '#3b82f6' : 'var(--text-tertiary)' }}
+                                                    title="View Triple List"
+                                                    disabled={isLoadingResults}
+                                                    style={{ color: '#3b82f6' }}
                                                 >
-                                                    <Code size={18} />
+                                                    <Database size={18} />
                                                 </button>
                                                 <button
                                                     className="btn btn-icon danger"
@@ -273,14 +303,25 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
                 initialState={resumeState}
             />
 
-            {promptDialog && (
-                <PromptDialog
-                    isOpen={promptDialog.isOpen}
-                    onClose={() => setPromptDialog(null)}
-                    initialPrompt={promptDialog.initialContent}
-                    onSave={handleUpdate}
-                    mode={promptDialog.mode}
-                    title={promptDialog.title}
+            {dictionaryData && (
+                <EntityDictionaryModal
+                    isOpen={showDictionaryModal}
+                    onClose={() => setShowDictionaryModal(false)}
+                    dictionary={dictionaryData.dictionary}
+                    entityCount={dictionaryData.entity_count}
+                />
+            )}
+
+            {previewData && (
+                <ExtractionPreviewModal
+                    isOpen={showPreviewModal}
+                    onClose={() => setShowPreviewModal(false)}
+                    previewId={previewData.preview_id}
+                    triples={previewData.triples}
+                    nodeCount={previewData.node_count}
+                    onConfirm={handlePreviewConfirm}
+                    onDiscard={() => setShowPreviewModal(false)}
+                    viewOnly={true}
                 />
             )}
         </>

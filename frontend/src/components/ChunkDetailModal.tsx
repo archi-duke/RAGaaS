@@ -208,7 +208,7 @@ export default function ChunkDetailModal({ isOpen, onClose, chunk, title = 'Chun
             setSelectedTriples(new Set()); // Reset selection
         } catch (error: any) {
             console.error('Extract failed:', error);
-            alert(error.response?.data?.detail || '트리플 추출 중 오류가 발생했습니다.');
+            alert(error.response?.data?.detail || 'An error occurred during triple extraction.');
         } finally {
             setIsExtracting(false);
         }
@@ -235,7 +235,7 @@ export default function ChunkDetailModal({ isOpen, onClose, chunk, title = 'Chun
     const handleApplyTriples = async () => {
         if (selectedTriples.size === 0) return;
         if (!kbId) {
-            alert('Knowledge Base ID가 없습니다.');
+            alert('Knowledge Base ID is missing.');
             return;
         }
 
@@ -250,12 +250,12 @@ export default function ChunkDetailModal({ isOpen, onClose, chunk, title = 'Chun
                 triples: triplesToSave,
             });
 
-            alert(`${selectedTriples.size}개의 트리플이 성공적으로 저장되었습니다.`);
+            alert(`${selectedTriples.size} triples have been successfully saved.`);
             setSelectedTriples(new Set());
             setShowResults(false);
         } catch (error: any) {
             console.error('Save triples failed:', error);
-            alert(error.response?.data?.detail || '트리플 저장 중 오류가 발생했습니다.');
+            alert(error.response?.data?.detail || 'An error occurred while saving triples.');
         } finally {
             setIsSavingTriples(false);
         }
@@ -533,7 +533,7 @@ export default function ChunkDetailModal({ isOpen, onClose, chunk, title = 'Chun
                                         minWidth: '80px'
                                     }}
                                 >
-                                    {isSavingTriples ? '저장 중...' : `Apply (${selectedTriples.size})`}
+                                    {isSavingTriples ? 'Saving...' : `Apply (${selectedTriples.size})`}
                                 </button>
                                 <button
                                     className="btn"
@@ -592,7 +592,7 @@ export default function ChunkDetailModal({ isOpen, onClose, chunk, title = 'Chun
 
                 {showResults && extractedTriples.length === 0 && (
                     <div style={{ marginBottom: '1.25rem', background: '#fef3c7', padding: '1rem', borderRadius: '12px', border: '1px solid #f59e0b', textAlign: 'center', color: '#92400e' }}>
-                        ⚠️ 추출된 트리플이 없습니다. 다른 설정으로 다시 시도해보세요.
+                        ⚠️ No triples extracted. Try different settings or text.
                     </div>
                 )}
 

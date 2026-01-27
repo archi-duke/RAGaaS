@@ -205,7 +205,7 @@ export default function KnowledgeBaseDetail() {
 
     const loadSettings = () => {
         try {
-            // KB별 설정 저장을 위해 KB ID를 키에 포함
+            // Include KB ID in key to save settings per KB
             const settingsKey = `retrievalSettings_${id}`;
             const saved = localStorage.getItem(settingsKey);
             if (saved) {
@@ -269,7 +269,7 @@ export default function KnowledgeBaseDetail() {
             useSchemaMode,
             useDynamicSchema
         };
-        // KB별 설정 저장
+        // Save settings per KB
         const settingsKey = `retrievalSettings_${id}`;
         localStorage.setItem(settingsKey, JSON.stringify(settings));
         console.log(`[KB ${id}] Settings saved:`, { enableInverseSearch, inverseExtractionMode });
@@ -1006,20 +1006,19 @@ export default function KnowledgeBaseDetail() {
                                                         <button
                                                             onClick={() => {
                                                                 const newState = !info.expanded;
-                                                                // 상태 관리가 로컬 데이터 구조 안에 없으므로, 간단하게 alert나 별도 state를 써야 하나
-                                                                // 여기서는 간단히 title로 전체 목록을 보여주거나, 별도 선택된 클래스 State를 두는 게 좋음.
-                                                                // 하지만 편의상 즉시 확인을 위해 Alert 또는 콘솔을 사용하거나, 
-                                                                // 본문의 요구사항(클릭하면 목록 보여줘)을 만족하기 위해 selectedClass State를 추가해야 함.
-                                                                // 임시로 이 컴포넌트 상단에 state 추가가 불가능하므로(tool limit), 
-                                                                // 간단한 토글 UI를 인라인으로 구현하기 어려움.
-                                                                // -> selectedSchemaClass 상태를 추가하는 별도 tool call이 필요함.
-                                                                // 일단 여기서는 클릭 시 해당 버튼 아래에 목록이 펼쳐지도록 CSS/State 없이 처리하기 어려우므로,
-                                                                // 가장 쉬운 방법: 브라우저 기본 동작(title)은 이미 있고,
-                                                                // 'selectedClass' state를 사용하는 방식으로 변경해야 함.
+                                                                // Since state management isn't in the local data structure, we should use alert or separate state.
+                                                                // Here, it's better to show the full list via title or have a separate selected class state.
+                                                                // To satisfy requirements (show list on click), a selectedClass state should be added.
+                                                                // Adding state at the top isn't possible here (tool limit), 
+                                                                // and implementing a toggle UI inline is difficult.
+                                                                // -> Need a separate tool call to add selectedSchemaClass state.
+                                                                // For now, it's hard to expand the list below the button without CSS/State.
+                                                                // Easiest way: Browser default behavior (title) exists, 
+                                                                // and we should switch to using 'selectedClass' state.
                                                             }}
-                                                            // 임시: 클릭하면 상세 모달을 띄우는 로직 대신, 간단히 콘솔 로그나 커스텀 툴팁을 띄울 수 없으니
-                                                            // 일단 태그 자체에 title로 맛보기 보여줌.
-                                                            // 하지만 사용자가 '클릭하면 보여줘'라고 했으므로 interaction이 필요함.
+                                                            // Temporary: Instead of opening a detail modal on click, we show a preview in the title tag 
+                                                            // since we can't easily pop up custom tooltips.
+                                                            // However, since the user asked for 'show on click', interaction is needed.
                                                             style={{
                                                                 fontSize: '0.8rem',
                                                                 padding: '2px 8px',

@@ -330,7 +330,7 @@ export default function ChatInterface({
                                     <button
                                         onClick={() => handleResend(msg.content)}
                                         disabled={isLoading}
-                                        title="이 질문 다시 보내기"
+                                        title="Resend this question"
                                         style={{
                                             background: 'rgba(255, 255, 255, 0.1)',
                                             border: 'none',

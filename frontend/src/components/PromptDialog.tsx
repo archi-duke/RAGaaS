@@ -126,7 +126,7 @@ export default function PromptDialog({
                             lineHeight: '1.6'
                         }}
                         spellCheck={false}
-                        placeholder={`Enter custom ${mode === 'extraction_examples' ? 'examples' : 'instructions'}...`}
+                        placeholder={mode === 'extraction_examples' ? 'Enter custom examples...' : 'Enter custom instructions...'}
                     />
                 </div>
 

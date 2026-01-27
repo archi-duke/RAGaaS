@@ -8,28 +8,28 @@ interface SearchResultsProps {
     pipeline?: any;
 }
 
-// 청크 팝업 모달 컴포넌트
+// Chunk popup modal component
 function ChunkPopup({ triple, chunks, onClose }: { triple: any; chunks: any[]; onClose: () => void }) {
     const sourceStart = triple.source_start;
     const sourceEnd = triple.source_end;
 
-    // 1. 우선: chunk_id가 있으면 직접 매칭
-    // 2. 폴백: 텍스트 기반 매칭 (subject OR object 포함 - AND 대신 OR 사용)
+    // 1. Priority: Direct match if chunk_id exists
+    // 2. Fallback: Text-based match (subject OR object - OR instead of AND)
     let relatedChunks = [];
 
-    // chunk_id가 트리플에 있는 경우 (백엔드에서 저장한 매핑)
+    // If chunk_id exists in triple (mapping stored by backend)
     if (triple.chunk_ids && triple.chunk_ids.length > 0) {
         relatedChunks = chunks.filter(c => triple.chunk_ids.includes(c.chunk_id));
     }
 
-    // chunk_id 매칭이 없으면 텍스트 기반 폴백 (더 관대한 매칭)
+    // Text-based fallback if no chunk_id match (more permissive)
     if (relatedChunks.length === 0) {
         const subj = (triple.subject || '').toLowerCase();
         const obj = (triple.object || '').toLowerCase();
 
         relatedChunks = chunks.filter(c => {
             const content = (c.content || '').toLowerCase();
-            // OR 조건: subject 또는 object 중 하나라도 포함되면 매칭
+            // OR condition: Matches if either subject or object is included
             return content.includes(subj) || content.includes(obj);
         });
     }

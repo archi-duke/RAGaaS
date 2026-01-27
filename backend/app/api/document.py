@@ -345,26 +345,34 @@ async def get_pipeline_data(kb_id: str, doc_id: str):
     shared_path = settings.SHARED_STORAGE_PATH
     doc_dir = os.path.join(shared_path, kb_id)
     
-    # 1. Load Dictionary if referenced
-    if "dictionary_file" in metadata:
-        file_path = os.path.join(doc_dir, metadata["dictionary_file"])
-        if os.path.exists(file_path):
-            try:
-                with open(file_path, "r", encoding="utf-8") as f:
-                    metadata["dictionary"] = json.load(f)
-            except Exception as e:
-                logger.error(f"Failed to load dictionary file: {e}")
-                metadata["dictionary_error"] = str(e)
+    # Load Dictionary if referenced or exists in folder
+    dict_file = metadata.get("dictionary_file") or f"{doc_id}_dictionary.json"
+    file_path = os.path.join(doc_dir, dict_file)
+    if os.path.exists(file_path):
+        logger.info(f"Loading dictionary from: {file_path}")
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                metadata["dictionary"] = json.load(f)
+            logger.info(f"Successfully loaded dictionary ({len(metadata['dictionary'])} items)")
+        except Exception as e:
+            logger.error(f"Failed to load dictionary file: {e}")
+            metadata["dictionary_error"] = str(e)
+    else:
+        logger.info(f"Dictionary file not found (searched: {dict_file})")
     
-    # 2. Load Triples if referenced
-    if "triples_file" in metadata:
-        file_path = os.path.join(doc_dir, metadata["triples_file"])
-        if os.path.exists(file_path):
-            try:
-                with open(file_path, "r", encoding="utf-8") as f:
-                    metadata["triples"] = json.load(f)
-            except Exception as e:
-                logger.error(f"Failed to load triples file: {e}")
-                metadata["triples_error"] = str(e)
+    # Load Triples if referenced or exists in folder
+    triples_file = metadata.get("triples_file") or f"{doc_id}_triples.json"
+    file_path = os.path.join(doc_dir, triples_file)
+    if os.path.exists(file_path):
+        logger.info(f"Loading triples from: {file_path}")
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                metadata["triples"] = json.load(f)
+            logger.info(f"Successfully loaded triples ({len(metadata['triples'])} items)")
+        except Exception as e:
+            logger.error(f"Failed to load triples file: {e}")
+            metadata["triples_error"] = str(e)
+    else:
+        logger.info(f"Triples file not found (searched: {triples_file})")
                 
     return metadata

@@ -777,7 +777,7 @@ export default function PipelineBuilder({
                 </h3>
                 <button
                     onClick={handleCopyPipeline}
-                    title="파이프라인 구성 JSON 복사"
+                    title="Copy Pipeline JSON"
                     style={{
                         background: 'none',
                         border: 'none',
@@ -1176,7 +1176,7 @@ function ParamSelect({
         if (containerRef.current) {
             const rect = containerRef.current.getBoundingClientRect();
             const spaceBelow = window.innerHeight - rect.bottom;
-            // 리스트 예상 높이(약 160px) 고려
+            // Consider estimated list height (approx 160px)
             setIsUpward(spaceBelow < 180);
 
             setCoords({
@@ -1199,12 +1199,12 @@ function ParamSelect({
         };
     }, [isOpen]);
 
-    // 외부 클릭 시 닫기
+    // Close on outside click
     React.useEffect(() => {
         const handleClickOutside = (event: MouseEvent) => {
             if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
-                // Portal 내부 클릭인지도 확인해야 함 (body 직속이므로 별도 처리 불필요, 
-                // 단, portal 내부 div에 stopPropagation 등을 안 썼을 때 기준)
+                // Check if the click is inside the portal (since it's a direct child of body, 
+                // no special handling is needed unless stopPropagation is used in the portal div)
                 setIsOpen(false);
             }
         };
@@ -1268,7 +1268,7 @@ function ParamSelect({
                     style={{
                         position: 'fixed',
                         left: coords.left,
-                        top: isUpward ? 'auto' : coords.top + 45, // 트리거 높이 고려
+                        top: isUpward ? 'auto' : coords.top + 45, // Consider trigger height
                         bottom: isUpward ? (window.innerHeight - coords.top) + 4 : 'auto',
                         width: Math.max(coords.width, parseInt(minWidth)),
                         minWidth: minWidth,

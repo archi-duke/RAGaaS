@@ -339,8 +339,8 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
             console.error('Confirm failed:', err);
             setMessageDialog({
                 isOpen: true,
-                title: '저장 실패',
-                message: err.response?.data?.detail || '데이터 저장 중 오류가 발생했습니다.',
+                title: 'Save Failed',
+                message: err.response?.data?.detail || 'An error occurred while saving data.',
                 type: 'error'
             });
         } finally {
