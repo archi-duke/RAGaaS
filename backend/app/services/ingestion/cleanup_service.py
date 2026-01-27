@@ -170,13 +170,23 @@ class CleanupService:
                         """
                         neo4j_client.execute_query(chunk_query, {"batch": batch})
     
-                # Delete isolated nodes
+                # Delete isolated Entity nodes
                 orphan_query = """
                 MATCH (n:Entity {kb_id: $kb_id})
                 WHERE NOT (n)--()
                 DELETE n
                 """
                 neo4j_client.execute_query(orphan_query, {"kb_id": kb_id})
+                
+                # Delete Chunk nodes for this document
+                chunk_delete_query = """
+                MATCH (c:Chunk {doc_id: $doc_id})
+                DELETE c
+                RETURN count(c) as deleted_chunks
+                """
+                result = neo4j_client.execute_query(chunk_delete_query, {"doc_id": doc_id})
+                deleted_chunks = result[0]["deleted_chunks"] if result else 0
+                print(f"[Cleanup] Deleted {deleted_chunks} Chunk nodes for doc {doc_id}")
                 
                 print(f"[Cleanup] ✅ Neo4j deletion executed for {doc_id}")
             except Exception as e:

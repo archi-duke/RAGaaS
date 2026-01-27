@@ -4,6 +4,7 @@ import UploadDocumentModal from './UploadDocumentModal';
 import EntityDictionaryModal from './EntityDictionaryModal';
 import ExtractionPreviewModal from './ExtractionPreviewModal';
 import { docApi, extractionApi } from '../services/api';
+import ConfirmDialog from './ConfirmDialog';
 
 interface Document {
     id: string;
@@ -54,6 +55,12 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
     const [showDictionaryModal, setShowDictionaryModal] = useState(false);
     const [dictionaryData, setDictionaryData] = useState<any>(null);
     const [isLoadingResults, setIsLoadingResults] = useState(false);
+
+    // Delete Confirmation State
+    const [deleteConfirmState, setDeleteConfirmState] = useState<{ isOpen: boolean; docId: string | null }>({
+        isOpen: false,
+        docId: null
+    });
 
     const handleViewEntities = async (docId: string, filename: string) => {
         setIsLoadingResults(true);
@@ -153,6 +160,17 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
 
         const config = statusMap[status] || { class: 'badge-secondary', label: status };
         return <span className={`badge ${config.class}`}>{config.label}</span>;
+    };
+
+    // Helper to get delete message
+    const getDeleteMessage = () => {
+        if (!deleteConfirmState.docId) return "";
+        const doc = documents.find(d => d.id === deleteConfirmState.docId);
+        if (!doc) return "";
+
+        return doc.status === 'processing'
+            ? "This document is currently being processed. Deleting it will stop the process. Are you sure you want to delete it?"
+            : "Are you sure you want to delete this document?";
     };
 
     return (
@@ -270,14 +288,7 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
                                                     className="btn btn-icon danger"
                                                     onClick={(e) => {
                                                         e.stopPropagation();
-                                                        const isProcessing = doc.status === 'processing';
-                                                        const message = isProcessing
-                                                            ? "현재 진행 중인 작업을 중단하고 문서를 삭제하시겠습니까?"
-                                                            : "정말 이 문서를 삭제하시겠습니까?";
-
-                                                        if (window.confirm(message)) {
-                                                            onDeleteDocument(doc.id);
-                                                        }
+                                                        setDeleteConfirmState({ isOpen: true, docId: doc.id });
                                                     }}
                                                     title="Delete Document"
                                                     style={{
@@ -306,6 +317,22 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
                 kbId={kbId}
                 onUploadComplete={onRefresh}
                 initialState={resumeState}
+            />
+
+            <ConfirmDialog
+                isOpen={deleteConfirmState.isOpen}
+                title="Delete Document"
+                message={getDeleteMessage()}
+                onConfirm={() => {
+                    if (deleteConfirmState.docId) {
+                        onDeleteDocument(deleteConfirmState.docId);
+                    }
+                    setDeleteConfirmState({ isOpen: false, docId: null });
+                }}
+                onCancel={() => setDeleteConfirmState({ isOpen: false, docId: null })}
+                confirmText="Delete"
+                cancelText="Cancel"
+                isDestructive={true}
             />
 
             {dictionaryData && (
