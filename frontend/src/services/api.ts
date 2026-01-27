@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 const api = axios.create({
-    baseURL: 'http://localhost:8000/api',
+    baseURL: 'http://127.0.0.1:8000/api',
     headers: {
         'Content-Type': 'application/json',
     },
@@ -101,6 +101,10 @@ export const docApi = {
     // [NEW] Update Pipeline Status (for Resume)
     updatePipelineStatus: (kbId: string, docId: string, data: { status: string; metadata: any }) =>
         api.put(`/knowledge-bases/${kbId}/documents/${docId}/pipeline`, data),
+
+    // [New] Fetch Pipeline Data (Large JSONs) on demand
+    getPipelineData: (kbId: string, docId: string) =>
+        api.get(`/knowledge-bases/${kbId}/documents/${docId}/pipeline/data`),
 };
 
 export const retrievalApi = {
@@ -168,7 +172,7 @@ export const retrievalApi = {
 
 // Ingest Service API (runs on port 8001)
 const ingestApi = axios.create({
-    baseURL: 'http://localhost:8001/api',
+    baseURL: 'http://127.0.0.1:8001/api',
     headers: {
         'Content-Type': 'application/json',
     },

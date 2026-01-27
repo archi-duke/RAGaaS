@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, X, FileText, Database, Eye } from 'lucide-react';
+import { Upload, X, FileText, Database, Eye, Check, Settings } from 'lucide-react';
 import { docApi, kbApi, extractionApi } from '../services/api';
 import MessageDialog from './MessageDialog';
 import PromptDialog from './PromptDialog';
@@ -142,6 +142,22 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
     const [resumedDocId, setResumedDocId] = useState<string | null>(null);
     const [isEntityExtracted, setIsEntityExtracted] = useState(false);
 
+    // Chunking Strategy State (Moved from CreateKnowledgeBaseModal)
+    const [strategy, setStrategy] = useState('fixed_size');
+    const [chunkingConfig, setChunkingConfig] = useState({
+        chunk_size: 300,
+        chunk_overlap: 20,
+        window_size: 3,
+        chunk_sizes: [2048, 512, 128],
+        buffer_size: 1,
+        breakpoint_threshold: 95,
+        // Legacy/Other
+        parent_size: 2000,
+        child_size: 500,
+        parent_overlap: 0,
+        child_overlap: 100,
+    });
+
     useEffect(() => {
         if (isOpen) {
             // Reset state on open
@@ -158,21 +174,56 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                 loadKbConfig();
             }
 
-            // Restore from initialState if provided (Resume Mode)
             if (initialState) {
                 console.log("Resuming from state:", initialState);
                 if (initialState.docId) {
                     setResumedDocId(initialState.docId);
-                }
 
-                if (initialState.step === 'ENTITY_EXTRACTED' && initialState.data) {
-                    setDictionaryData(initialState.data);
-                    setIsEntityExtracted(true);
-                    setShowDictionaryModal(true);
-                } else if (initialState.step === 'TRIPLE_EXTRACTED' && initialState.data) {
-                    setPreviewData(initialState.data);
-                    setIsEntityExtracted(true); // Implicitly done
-                    setShowPreviewModal(true);
+                    // Fetch full document details to ensure we have the file_path
+                    docApi.list(kbId).then(res => {
+                        const foundDoc = res.data.find((d: any) => d.id === initialState.docId);
+                        if (foundDoc && foundDoc.file_path) {
+                            console.log("Found resumed document:", foundDoc);
+                            // Pre-fill path if not already in initialState
+                            if (!initialState.filePath) {
+                                initialState.filePath = foundDoc.file_path;
+                            }
+                        }
+                    }).catch(err => console.error("Failed to fetch document details:", err));
+
+
+                    // [Optimization] If data is missing (checking dictionary or triples), fetch it
+                    const needsData = (initialState.step === 'ENTITY_EXTRACTED' && !initialState.data?.dictionary) ||
+                        (initialState.step === 'TRIPLE_EXTRACTED' && !initialState.data?.triples);
+
+                    if (needsData) {
+                        console.log("Fetching heavy pipeline data on demand...");
+                        docApi.getPipelineData(kbId, initialState.docId)
+                            .then(res => {
+                                const enrichedData = { ...initialState.data, ...res.data };
+                                if (initialState.step === 'ENTITY_EXTRACTED') {
+                                    setDictionaryData(enrichedData);
+                                    setIsEntityExtracted(true);
+                                    setShowDictionaryModal(true);
+                                } else if (initialState.step === 'TRIPLE_EXTRACTED') {
+                                    setPreviewData(enrichedData);
+                                    setIsEntityExtracted(true);
+                                    setShowPreviewModal(true);
+                                }
+                            })
+                            .catch(err => console.error("Failed to fetch pipeline data:", err));
+                    } else {
+                        // Data already present (legacy or pre-loaded)
+                        if (initialState.step === 'ENTITY_EXTRACTED' && initialState.data) {
+                            setDictionaryData(initialState.data);
+                            setIsEntityExtracted(true);
+                            setShowDictionaryModal(true);
+                        } else if (initialState.step === 'TRIPLE_EXTRACTED' && initialState.data) {
+                            setPreviewData(initialState.data);
+                            setIsEntityExtracted(true);
+                            setShowPreviewModal(true);
+                        }
+                    }
                 }
             }
         }
@@ -245,8 +296,11 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
         setIsUploading(true);
         try {
             // [Resume Logic] If Entity Dictionary is done, pass it to skip building
+            // [Resume Logic] If Entity Dictionary is done, pass it to skip building
             const config = {
                 ...graphParams,
+                chunking_strategy: strategy,
+                chunking_config: chunkingConfig,
                 entity_dictionary: dictionaryData?.dictionary
             };
 
@@ -321,12 +375,22 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
             let currentFilePath = "";
 
             if (!currentDocId && file) {
-                const uploadRes = await docApi.upload(kbId, file, { ...graphParams, preview_only: true });
+                const uploadRes = await docApi.upload(kbId, file, {
+                    ...graphParams,
+                    chunking_strategy: strategy,
+                    chunking_config: chunkingConfig,
+                    preview_only: true
+                });
                 currentDocId = uploadRes.data.id;
                 currentFilePath = uploadRes.data.file_path || `/data/uploads/${kbId}/${currentDocId}_${file.name}`;
             } else if (resumedDocId) {
                 if (file) {
-                    const uploadRes = await docApi.upload(kbId, file, { ...graphParams, preview_only: true });
+                    const uploadRes = await docApi.upload(kbId, file, {
+                        ...graphParams,
+                        chunking_strategy: strategy,
+                        chunking_config: chunkingConfig,
+                        preview_only: true
+                    });
                     currentDocId = uploadRes.data.id;
                     currentFilePath = uploadRes.data.file_path;
                 } else {
@@ -346,9 +410,8 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                 doc_id: currentDocId,
                 file_path: currentFilePath,
                 chunking: {
-                    strategy: 'fixed_size',
-                    chunk_size: 1024,
-                    chunk_overlap: 20,
+                    strategy: strategy,
+                    ...chunkingConfig
                 },
                 sampling_size: graphParams.max_sample_size,
             });
@@ -405,7 +468,12 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
             }
 
             if (file && (!currentDocId || !currentFilePath)) {
-                const uploadRes = await docApi.upload(kbId, file, { ...graphParams, preview_only: true });
+                const uploadRes = await docApi.upload(kbId, file, {
+                    ...graphParams,
+                    chunking_strategy: strategy,
+                    chunking_config: chunkingConfig,
+                    preview_only: true
+                });
                 currentDocId = uploadRes.data.id;
                 currentFilePath = uploadRes.data.file_path || `/data/uploads/${kbId}/${currentDocId}_${file.name}`;
             }
@@ -420,9 +488,8 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                 doc_id: currentDocId,
                 file_path: currentFilePath || "RESUME_AUTO_LOOKUP",
                 chunking: {
-                    strategy: 'fixed_size',
-                    chunk_size: graphParams.chunk_size,
-                    chunk_overlap: 20,
+                    strategy: strategy,
+                    ...chunkingConfig
                 },
                 graph: {
                     extractor_type: graphParams.extractor_type,
@@ -553,6 +620,104 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                         </div>
                     </div>
 
+                    {/* Chunking Strategy Section */}
+                    <div style={{ marginBottom: '2rem' }}>
+                        <label style={{ display: 'block', marginBottom: '0.8rem', fontWeight: 600, color: '#334155' }}>Chunking Strategy</label>
+
+                        <div style={{ marginBottom: '1rem' }}>
+                            <select
+                                className="input"
+                                value={strategy}
+                                onChange={(e) => setStrategy(e.target.value)}
+                                style={{
+                                    width: '100%',
+                                    padding: '0.75rem',
+                                    borderRadius: '8px',
+                                    border: '1px solid #e2e8f0',
+                                    backgroundColor: '#fff',
+                                    fontSize: '0.95rem',
+                                    color: '#1e293b',
+                                    cursor: 'pointer'
+                                }}
+                            >
+                                {[
+                                    { id: 'fixed_size', name: 'Fixed Size (Standard)' },
+                                    { id: 'sliding_window', name: 'Sliding Window (Contextual)' },
+                                    { id: 'hierarchical', name: 'Hierarchical (Parent-Child)' },
+                                    { id: 'semantic', name: 'Semantic (Meaning-based)' },
+                                    { id: 'markdown', name: 'Markdown (Structure-based)' },
+                                    { id: 'hybrid', name: 'Hybrid (Markdown + Fixed)' }
+                                ]
+                                    .filter(s => !(isGraphEnabled && s.id === 'semantic'))
+                                    .map(s => (
+                                        <option key={s.id} value={s.id}>{s.name}</option>
+                                    ))}
+                            </select>
+                            <div style={{ fontSize: '0.8rem', color: '#64748b', marginTop: '0.5rem', paddingLeft: '0.2rem' }}>
+                                {strategy === 'fixed_size' && "Standard fixed-length chunks. Best for general use."}
+                                {strategy === 'sliding_window' && "Captures surrounding context for each chunk."}
+                                {strategy === 'hierarchical' && "Creates parent-child structure for detailed retrieval."}
+                                {strategy === 'semantic' && "Splits text based on semantic meaning changes."}
+                                {strategy === 'markdown' && "Splits based on document headers (#, ##)."}
+                                {strategy === 'hybrid' && "Combines structural splitting with size limits."}
+                            </div>
+                        </div>
+
+                        {/* Configuration Panel for Selected Strategy */}
+                        <div style={{ padding: '1.25rem', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px' }}>
+                            {strategy === 'fixed_size' && (
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                                    <div>
+                                        <LabelWithTooltip label="Chunk Size" tooltip="Characters per chunk" />
+                                        <input type="number" className="input" value={chunkingConfig.chunk_size} onChange={(e) => setChunkingConfig({ ...chunkingConfig, chunk_size: parseInt(e.target.value) })} />
+                                    </div>
+                                    <div>
+                                        <LabelWithTooltip label="Overlap" tooltip="Character overlap" />
+                                        <input type="number" className="input" value={chunkingConfig.chunk_overlap} onChange={(e) => setChunkingConfig({ ...chunkingConfig, chunk_overlap: parseInt(e.target.value) })} />
+                                    </div>
+                                </div>
+                            )}
+                            {strategy === 'sliding_window' && (
+                                <div>
+                                    <LabelWithTooltip label="Window Size" tooltip="Number of sentences around" />
+                                    <input type="number" className="input" value={chunkingConfig.window_size} onChange={(e) => setChunkingConfig({ ...chunkingConfig, window_size: parseInt(e.target.value) })} />
+                                </div>
+                            )}
+                            {strategy === 'hierarchical' && (
+                                <div>
+                                    <LabelWithTooltip label="Levels (Large->Small)" tooltip="e.g., 2048, 512, 128" />
+                                    <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                        {chunkingConfig.chunk_sizes.map((size, idx) => (
+                                            <input key={idx} type="number" className="input" value={size}
+                                                onChange={(e) => {
+                                                    const newSizes = [...chunkingConfig.chunk_sizes];
+                                                    newSizes[idx] = parseInt(e.target.value);
+                                                    setChunkingConfig({ ...chunkingConfig, chunk_sizes: newSizes });
+                                                }} />
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+                            {strategy === 'semantic' && (
+                                <div>
+                                    <LabelWithTooltip label="Breakpoint Percentile" tooltip="Threshold for splitting (50-99)" />
+                                    <input
+                                        type="number" className="input"
+                                        value={chunkingConfig.breakpoint_threshold}
+                                        onChange={(e) => setChunkingConfig({ ...chunkingConfig, breakpoint_threshold: parseInt(e.target.value) })}
+                                        min={50} max={99}
+                                    />
+                                </div>
+                            )}
+                            {(strategy === 'markdown' || strategy === 'hybrid') && (
+                                <div style={{ fontSize: '0.85rem', color: '#64748b' }}>
+                                    Automatically splits by document headers (#, ##).
+                                    {strategy === 'hybrid' && " Fallback to fixed size for large sections."}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+
                     {isGraphEnabled && (
                         <div style={{ marginBottom: '1.5rem', background: '#eff6ff', padding: '1.25rem', borderRadius: '12px', border: '1px solid #bfdbfe' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1.25rem', color: '#3b82f6', fontWeight: 600 }}>
@@ -570,15 +735,6 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                                             value={graphParams.max_sample_size}
                                             onChange={(e) => setGraphParams({ ...graphParams, max_sample_size: parseInt(e.target.value) })}
                                             style={{ width: '100%', cursor: 'pointer', accentColor: '#3b82f6' }}
-                                        />
-                                    </div>
-                                    <div style={{ marginBottom: '1rem' }}>
-                                        <LabelWithTooltip label={`Chunk Size: ${graphParams.chunk_size}`} tooltip="Relationship extraction unit (Smaller is faster/Doc2Graph style)" />
-                                        <input
-                                            type="range" min="100" max="1024" step="50"
-                                            value={graphParams.chunk_size}
-                                            onChange={(e) => setGraphParams({ ...graphParams, chunk_size: parseInt(e.target.value) })}
-                                            style={{ width: '100%', cursor: 'pointer', accentColor: '#10b981' }}
                                         />
                                     </div>
                                     <div style={{ marginBottom: '1rem' }}>

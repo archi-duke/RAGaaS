@@ -75,12 +75,13 @@ async def upload_document(
 
     # Build Pipeline Configs
     chunking_cfg = {
-        "strategy": kb.chunking_strategy or "fixed_size",
-        "chunk_size": final_config.get("chunk_size", 500),
-        "chunk_overlap": final_config.get("chunk_overlap", 100),
+        "strategy": final_config.get("chunking_strategy") or final_config.get("strategy") or kb.chunking_strategy or "fixed_size",
+        "chunk_size": final_config.get("chunk_size", 300), # Default 300 per optimization
+        "chunk_overlap": final_config.get("chunk_overlap", 20),
         "window_size": final_config.get("window_size", 3),
         "chunk_sizes": final_config.get("chunk_sizes", [2048, 512, 128]),
-        "breakpoint_threshold": final_config.get("breakpoint_threshold", 0.5),
+        "buffer_size": final_config.get("buffer_size", 1),
+        "breakpoint_threshold": final_config.get("breakpoint_threshold", 95),
     }
     
     graph_config = {
@@ -221,13 +222,106 @@ class UpdatePipelineStatusRequest(BaseModel):
 
 @router.put("/{kb_id}/documents/{doc_id}/pipeline")
 async def update_pipeline_status(kb_id: str, doc_id: str, payload: UpdatePipelineStatusRequest):
-    """Update pipeline intermediate status (for resuming)"""
+    """Update pipeline intermediate status (for resuming). Saves large data to file system."""
+    logger.info(f"update_pipeline_status called for doc {doc_id} with status {payload.status}")
+    
     doc = await DocModel.find_one(DocModel.id == doc_id, DocModel.kb_id == kb_id)
     if not doc:
+        logger.error(f"Document {doc_id} not found in KB {kb_id}")
         raise HTTPException(status_code=404, detail="Document not found")
     
-    doc.pipeline_status = payload.status
-    doc.pipeline_metadata = payload.metadata
+    metadata = payload.metadata
+    status = payload.status
+    
+    # Check for large payloads and offload to file
+    shared_path = settings.SHARED_STORAGE_PATH
+    doc_dir = os.path.join(shared_path, kb_id)
+    os.makedirs(doc_dir, exist_ok=True)
+    
+    logger.info(f"Saving pipeline data to directory: {doc_dir}")
+    
+    # 1. Entity Dictionary
+    if "dictionary" in metadata:
+        if isinstance(metadata["dictionary"], dict):
+            dict_file_name = f"{doc_id}_dictionary.json"
+            dict_path = os.path.join(doc_dir, dict_file_name)
+            try:
+                dict_len = len(metadata["dictionary"])
+                logger.info(f"Found dictionary with {dict_len} items. Saving to {dict_path}")
+                
+                with open(dict_path, "w", encoding="utf-8") as f:
+                    json.dump(metadata["dictionary"], f, ensure_ascii=False, indent=2)
+                logger.info(f"Successfully saved dictionary to {dict_path}")
+                
+                # Replace data with file reference
+                del metadata["dictionary"]
+                metadata["dictionary_file"] = dict_file_name
+            except Exception as e:
+                logger.error(f"Failed to save dictionary to file: {e}")
+        else:
+             logger.warning(f"Metadata 'dictionary' field exists but is not a dict: {type(metadata['dictionary'])}")
+    else:
+        logger.info("No 'dictionary' field found in metadata")
+
+    # 2. Extracted Triples
+    if "triples" in metadata:
+        if isinstance(metadata["triples"], list):
+            triples_file_name = f"{doc_id}_triples.json"
+            triples_path = os.path.join(doc_dir, triples_file_name)
+            try:
+                triples_len = len(metadata["triples"])
+                logger.info(f"Found triples with {triples_len} items. Saving to {triples_path}")
+
+                with open(triples_path, "w", encoding="utf-8") as f:
+                    json.dump(metadata["triples"], f, ensure_ascii=False, indent=2)
+                logger.info(f"Successfully saved triples to {triples_path}")
+                
+                # Replace data with file reference
+                del metadata["triples"]
+                metadata["triples_file"] = triples_file_name
+            except Exception as e:
+                logger.error(f"Failed to save triples to file: {e}")
+        else:
+             logger.warning(f"Metadata 'triples' field exists but is not a list: {type(metadata['triples'])}")
+
+    doc.pipeline_status = status
+    doc.pipeline_metadata = metadata
     await doc.save()
     
     return {"ok": True, "pipeline_status": doc.pipeline_status}
+
+
+@router.get("/{kb_id}/documents/{doc_id}/pipeline/data")
+async def get_pipeline_data(kb_id: str, doc_id: str):
+    """Fetch offloaded pipeline data (dictionary, triples) from file system."""
+    doc = await DocModel.find_one(DocModel.id == doc_id, DocModel.kb_id == kb_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+        
+    metadata = doc.pipeline_metadata or {}
+    shared_path = settings.SHARED_STORAGE_PATH
+    doc_dir = os.path.join(shared_path, kb_id)
+    
+    # 1. Load Dictionary if referenced
+    if "dictionary_file" in metadata:
+        file_path = os.path.join(doc_dir, metadata["dictionary_file"])
+        if os.path.exists(file_path):
+            try:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    metadata["dictionary"] = json.load(f)
+            except Exception as e:
+                logger.error(f"Failed to load dictionary file: {e}")
+                metadata["dictionary_error"] = str(e)
+    
+    # 2. Load Triples if referenced
+    if "triples_file" in metadata:
+        file_path = os.path.join(doc_dir, metadata["triples_file"])
+        if os.path.exists(file_path):
+            try:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    metadata["triples"] = json.load(f)
+            except Exception as e:
+                logger.error(f"Failed to load triples file: {e}")
+                metadata["triples_error"] = str(e)
+                
+    return metadata
