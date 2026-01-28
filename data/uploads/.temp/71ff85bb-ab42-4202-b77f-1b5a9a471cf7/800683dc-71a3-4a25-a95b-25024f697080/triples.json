@@ -1,0 +1,146 @@
+{
+  "created_at": "2026-01-28T02:07:56.773362",
+  "triple_count": 20,
+  "triples": [
+    {
+      "subject": "1. 오징어 게임",
+      "predicate": "제작",
+      "object": "황동혁",
+      "source_node_id": "dcdfae27-8823-4d0e-ad11-d179ffeb889a",
+      "confidence": 0.7
+    },
+    {
+      "subject": "2. 오징어 게임",
+      "predicate": "장르",
+      "object": "서바이벌 드라마",
+      "source_node_id": "dcdfae27-8823-4d0e-ad11-d179ffeb889a",
+      "confidence": 0.7
+    },
+    {
+      "subject": "3. 플레이어",
+      "predicate": "목표",
+      "object": "상금",
+      "source_node_id": "dcdfae27-8823-4d0e-ad11-d179ffeb889a",
+      "confidence": 0.7
+    },
+    {
+      "subject": "4. 오징어 게임",
+      "predicate": "방송 국가",
+      "object": "대한민국",
+      "source_node_id": "dcdfae27-8823-4d0e-ad11-d179ffeb889a",
+      "confidence": 0.7
+    },
+    {
+      "subject": "5. 오징어 게임",
+      "predicate": "방송 채널",
+      "object": "넷플릭스",
+      "source_node_id": "dcdfae27-8823-4d0e-ad11-d179ffeb889a",
+      "confidence": 0.7
+    },
+    {
+      "subject": "1. 성기훈",
+      "predicate": "참여",
+      "object": "오징어 게임",
+      "source_node_id": "30a5850e-d34b-4f8f-8f67-f5734f18839e",
+      "confidence": 0.7
+    },
+    {
+      "subject": "2. 성기훈",
+      "predicate": "상금",
+      "object": "1억 원",
+      "source_node_id": "30a5850e-d34b-4f8f-8f67-f5734f18839e",
+      "confidence": 0.7
+    },
+    {
+      "subject": "3. 플레이어",
+      "predicate": "감시",
+      "object": "경비원",
+      "source_node_id": "30a5850e-d34b-4f8f-8f67-f5734f18839e",
+      "confidence": 0.7
+    },
+    {
+      "subject": "4. 프론트맨",
+      "predicate": "감독",
+      "object": "게임",
+      "source_node_id": "30a5850e-d34b-4f8f-8f67-f5734f18839e",
+      "confidence": 0.7
+    },
+    {
+      "subject": "5. 성기훈",
+      "predicate": "동맹",
+      "object": "조상우",
+      "source_node_id": "30a5850e-d34b-4f8f-8f67-f5734f18839e",
+      "confidence": 0.7
+    },
+    {
+      "subject": "1. 박해수",
+      "predicate": "역",
+      "object": "조상우",
+      "source_node_id": "c3e68350-ddc1-4b0f-92f8-6f069be2a3bc",
+      "confidence": 0.7
+    },
+    {
+      "subject": "2. 위하준",
+      "predicate": "역",
+      "object": "황준호",
+      "source_node_id": "c3e68350-ddc1-4b0f-92f8-6f069be2a3bc",
+      "confidence": 0.7
+    },
+    {
+      "subject": "3. 정호연",
+      "predicate": "역",
+      "object": "강새벽",
+      "source_node_id": "c3e68350-ddc1-4b0f-92f8-6f069be2a3bc",
+      "confidence": 0.7
+    },
+    {
+      "subject": "4. 오영수",
+      "predicate": "역",
+      "object": "오일남",
+      "source_node_id": "c3e68350-ddc1-4b0f-92f8-6f069be2a3bc",
+      "confidence": 0.7
+    },
+    {
+      "subject": "5. 이병헌",
+      "predicate": "역",
+      "object": "황인호",
+      "source_node_id": "c3e68350-ddc1-4b0f-92f8-6f069be2a3bc",
+      "confidence": 0.7
+    },
+    {
+      "subject": "1. 오징어 게임",
+      "predicate": "방송 날짜",
+      "object": "2021년 9월 17일",
+      "source_node_id": "e8859a29-883b-46cb-87e5-4bd8e37e01aa",
+      "confidence": 0.7
+    },
+    {
+      "subject": "2. 오징어 게임",
+      "predicate": "시즌",
+      "object": "시즌 1",
+      "source_node_id": "e8859a29-883b-46cb-87e5-4bd8e37e01aa",
+      "confidence": 0.7
+    },
+    {
+      "subject": "3. 이서환",
+      "predicate": "역",
+      "object": "박정배",
+      "source_node_id": "e8859a29-883b-46cb-87e5-4bd8e37e01aa",
+      "confidence": 0.7
+    },
+    {
+      "subject": "4. 박정배",
+      "predicate": "직업",
+      "object": "술집을 운영하다",
+      "source_node_id": "e8859a29-883b-46cb-87e5-4bd8e37e01aa",
+      "confidence": 0.7
+    },
+    {
+      "subject": "5. 오징어 게임",
+      "predicate": "제작사",
+      "object": "(주)싸이런픽쳐스",
+      "source_node_id": "e8859a29-883b-46cb-87e5-4bd8e37e01aa",
+      "confidence": 0.7
+    }
+  ]
+}

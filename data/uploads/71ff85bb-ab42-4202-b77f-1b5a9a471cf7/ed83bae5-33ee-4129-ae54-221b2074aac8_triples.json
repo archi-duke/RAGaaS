@@ -1,0 +1,142 @@
+[
+  {
+    "subject": "1. 오징어 게임",
+    "predicate": "제작",
+    "object": "황동혁",
+    "source_node_id": "916d424e-e7ca-420c-85c1-dee8767782ff",
+    "confidence": 0.7
+  },
+  {
+    "subject": "1. 오징어 게임",
+    "predicate": "방송 국가",
+    "object": "대한민국",
+    "source_node_id": "916d424e-e7ca-420c-85c1-dee8767782ff",
+    "confidence": 0.7
+  },
+  {
+    "subject": "1. 오징어 게임",
+    "predicate": "장르",
+    "object": "서바이벌 드라마",
+    "source_node_id": "916d424e-e7ca-420c-85c1-dee8767782ff",
+    "confidence": 0.7
+  },
+  {
+    "subject": "1. 오징어 게임",
+    "predicate": "방송 채널",
+    "object": "넷플릭스",
+    "source_node_id": "916d424e-e7ca-420c-85c1-dee8767782ff",
+    "confidence": 0.7
+  },
+  {
+    "subject": "5. 황동혁",
+    "predicate": "구상",
+    "object": "자본주의의 계급 격차",
+    "source_node_id": "916d424e-e7ca-420c-85c1-dee8767782ff",
+    "confidence": 0.7
+  },
+  {
+    "subject": "1. 성기훈",
+    "predicate": "참여",
+    "object": "오징어 게임",
+    "source_node_id": "410e6378-4bd2-46f5-9004-2f25a7f7ad71",
+    "confidence": 0.7
+  },
+  {
+    "subject": "2. 플레이어",
+    "predicate": "경기",
+    "object": "어린이 게임",
+    "source_node_id": "410e6378-4bd2-46f5-9004-2f25a7f7ad71",
+    "confidence": 0.7
+  },
+  {
+    "subject": "1. 성기훈",
+    "predicate": "동맹",
+    "object": "조상우",
+    "source_node_id": "410e6378-4bd2-46f5-9004-2f25a7f7ad71",
+    "confidence": 0.7
+  },
+  {
+    "subject": "4. 프론트맨",
+    "predicate": "감독",
+    "object": "게임",
+    "source_node_id": "410e6378-4bd2-46f5-9004-2f25a7f7ad71",
+    "confidence": 0.7
+  },
+  {
+    "subject": "1. 성기훈",
+    "predicate": "목표",
+    "object": "상금",
+    "source_node_id": "410e6378-4bd2-46f5-9004-2f25a7f7ad71",
+    "confidence": 0.7
+  },
+  {
+    "subject": "1. 박해수",
+    "predicate": "역",
+    "object": "조상우",
+    "source_node_id": "14aa61a8-56d2-491a-995f-dc8461cd6919",
+    "confidence": 0.7
+  },
+  {
+    "subject": "2. 위하준",
+    "predicate": "역",
+    "object": "황준호",
+    "source_node_id": "14aa61a8-56d2-491a-995f-dc8461cd6919",
+    "confidence": 0.7
+  },
+  {
+    "subject": "3. 정호연",
+    "predicate": "역",
+    "object": "강새벽",
+    "source_node_id": "14aa61a8-56d2-491a-995f-dc8461cd6919",
+    "confidence": 0.7
+  },
+  {
+    "subject": "4. 오영수",
+    "predicate": "역",
+    "object": "오일남",
+    "source_node_id": "14aa61a8-56d2-491a-995f-dc8461cd6919",
+    "confidence": 0.7
+  },
+  {
+    "subject": "5. 이병헌",
+    "predicate": "역",
+    "object": "황인호",
+    "source_node_id": "14aa61a8-56d2-491a-995f-dc8461cd6919",
+    "confidence": 0.7
+  },
+  {
+    "subject": "1. 오징어 게임",
+    "predicate": "방송 날짜",
+    "object": "2021년 9월 17일",
+    "source_node_id": "0b541e92-a35f-46b1-aee5-f5192ec45623",
+    "confidence": 0.7
+  },
+  {
+    "subject": "1. 오징어 게임",
+    "predicate": "시즌",
+    "object": "1",
+    "source_node_id": "0b541e92-a35f-46b1-aee5-f5192ec45623",
+    "confidence": 0.7
+  },
+  {
+    "subject": "1. 오징어 게임",
+    "predicate": "제작",
+    "object": "넷플릭스",
+    "source_node_id": "0b541e92-a35f-46b1-aee5-f5192ec45623",
+    "confidence": 0.7
+  },
+  {
+    "subject": "4. 이서환",
+    "predicate": "역",
+    "object": "박정배",
+    "source_node_id": "0b541e92-a35f-46b1-aee5-f5192ec45623",
+    "confidence": 0.7
+  },
+  {
+    "subject": "5. 박정배",
+    "predicate": "참여",
+    "object": "오징어 게임",
+    "source_node_id": "0b541e92-a35f-46b1-aee5-f5192ec45623",
+    "confidence": 0.7
+  }
+]

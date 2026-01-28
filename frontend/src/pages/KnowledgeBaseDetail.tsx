@@ -337,28 +337,36 @@ export default function KnowledgeBaseDetail() {
     const loadDocs = async () => {
         try {
             const response = await docApi.list(id!);
-            setDocuments(response.data);
+            // Defensive: Ensure response.data is an array
+            const docList = Array.isArray(response.data) ? response.data : [];
+            setDocuments(docList);
         } catch (error) {
             console.error('Failed to load documents:', error);
+            // Set empty array on error to prevent crashes
+            setDocuments([]);
         }
     };
 
     // Auto-refresh documents if any are processing or deleting
     // This acts as a fallback in case WebSocket messages are missed
     useEffect(() => {
-        const hasProcessing = documents.some(doc => doc.status === 'processing');
-        const hasDeleting = documents.some(doc => doc.status === 'deleting');
+        // Defensive: Ensure documents is an array before calling .some()
+        const safeDocList = Array.isArray(documents) ? documents : [];
+        const hasProcessing = safeDocList.some(doc => doc.status === 'processing');
+        const hasDeleting = safeDocList.some(doc => doc.status === 'deleting');
 
         if (hasProcessing || hasDeleting) {
             const timer = setTimeout(async () => {
                 try {
                     const response = await docApi.list(id!);
-                    const serverDocs = response.data;
+                    // Defensive: Ensure response.data is an array
+                    const serverDocs = Array.isArray(response.data) ? response.data : [];
                     const serverDocIds = new Set(serverDocs.map((d: any) => d.id));
 
                     // Remove documents that no longer exist on server (deleted)
                     setDocuments(prev => {
-                        const filtered = prev.filter(doc => {
+                        const safePrev = Array.isArray(prev) ? prev : [];
+                        const filtered = safePrev.filter(doc => {
                             // Keep doc if it exists on server, or if it's not in deleting state
                             if (serverDocIds.has(doc.id)) {
                                 // Update status from server
@@ -375,6 +383,8 @@ export default function KnowledgeBaseDetail() {
                     });
                 } catch (error) {
                     console.error('Auto-refresh failed:', error);
+                    // Set empty array on error
+                    setDocuments([]);
                 }
             }, hasDeleting ? 1500 : 3000); // Faster refresh for deleting status
             return () => clearTimeout(timer);

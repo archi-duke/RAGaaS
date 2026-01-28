@@ -554,6 +554,31 @@ async def create_preview(request: PreviewRequest):
             "stats": result.get("stats"),
         }
         
+        # ✅ Save to Temp Storage (Persistence for Recovery)
+        from app.utils.temp_storage import temp_storage
+        
+        # Convert nodes to dicts for saving
+        chunks_dict = [
+            {
+                "content": node.get_content(),
+                "metadata": node.metadata, 
+                "node_id": node.node_id
+            } 
+            for node in result["nodes"]
+        ]
+        
+        await temp_storage.save_chunks(request.kb_id, request.doc_id, chunks_dict)
+        await temp_storage.save_triples(request.kb_id, request.doc_id, result["triples"])
+        await temp_storage.save_embeddings(request.kb_id, request.doc_id, result["embeddings"])
+        # Save metadata including preview_id and graph_store settings for recovery
+        await temp_storage.save_metadata(request.kb_id, request.doc_id, {
+             "preview_id": preview_id,
+             "node_count": result["node_count"],
+             "triple_count": result["triple_count"],
+             "graph_store": request.graph_store,
+             "generate_inverse_relations": request.graph.generate_inverse_relations
+        })
+        
         return PreviewResponse(
             preview_id=preview_id,
             kb_id=request.kb_id,
@@ -585,49 +610,50 @@ async def confirm_preview(
             print(f"[Confirm] Cache miss for {preview_id}. Attempting recovery from disk for doc {request.doc_id}...")
             try:
                 from app.utils.temp_storage import temp_storage
+                from llama_index.core.schema import TextNode
                 
                 # Check if files exist
                 triples_path = temp_storage.get_file_path(request.kb_id, request.doc_id, "triples.json")
                 chunks_path = temp_storage.get_file_path(request.kb_id, request.doc_id, "chunks.json")
+                embeddings_path = temp_storage.get_file_path(request.kb_id, request.doc_id, "embeddings.json")
                 
                 if triples_path.exists() and chunks_path.exists():
-                    import json
-                    from llama_index.core.schema import TextNode
+                    # Load all data using new methods
+                    triples_data = await temp_storage.load_triples(request.kb_id, request.doc_id)
+                    chunks_raw = await temp_storage.load_chunks(request.kb_id, request.doc_id)
+                    embeddings_data = await temp_storage.load_embeddings(request.kb_id, request.doc_id)
+                    metadata = await temp_storage.load_metadata(request.kb_id, request.doc_id)
                     
-                    # Load Triples
-                    with open(triples_path, "r", encoding="utf-8") as f:
-                        triples_data = json.load(f)
-                        
-                    # Load Chunks (Nodes)
-                    with open(chunks_path, "r", encoding="utf-8") as f:
-                        chunks_raw = json.load(f)
-                        nodes = []
-                        embeddings = {} # Embeddings might be lost if not saved? 
-                        # Wait, embeddings are usually in a separate file or large.
-                        # For now, let's assume embeddings need re-generation or are in chunks?
-                        # If chunks_json contains embedding field?
-                        # Usually chunks_json is list of dicts.
-                        
-                        for c in chunks_raw:
-                            # Reconstruct TextNode
-                            node = TextNode(
-                                text=c.get("content", ""),
-                                id_=c.get("node_id") or c.get("id"),
-                                metadata=c.get("metadata", {})
-                            )
-                            # Embedding?
-                            if "embedding" in c and c["embedding"]:
-                                node.embedding = c["embedding"]
-                                embeddings[node.node_id] = c["embedding"]
-                            nodes.append(node)
+                    if not triples_data or not chunks_raw:
+                        raise ValueError("Failed to load triples or chunks")
+                    
+                    # Reconstruct nodes
+                    nodes = []
+                    embeddings = embeddings_data or {}
+                    
+                    for c in chunks_raw:
+                        # Reconstruct TextNode
+                        node = TextNode(
+                            text=c.get("content", ""),
+                            id_=c.get("node_id") or c.get("id"),
+                            metadata=c.get("metadata", {})
+                        )
+                        # Attach embedding if available
+                        if node.node_id in embeddings:
+                            node.embedding = embeddings[node.node_id]
+                        nodes.append(node)
+                    
+                    # Get graph_store settings from metadata (with fallback)
+                    graph_store = metadata.get("graph_store", "neo4j") if metadata else "neo4j"
+                    generate_inverse = metadata.get("generate_inverse_relations", True) if metadata else True
                             
                     # Reconstruct Cache
                     preview_cache[preview_id] = {
                         "preview_id": preview_id,
                         "kb_id": request.kb_id,
                         "doc_id": request.doc_id,
-                        "graph_store": "neo4j", # Defaulting to neo4j if lost
-                        "generate_inverse_relations": True, # Default
+                        "graph_store": graph_store,
+                        "generate_inverse_relations": generate_inverse,
                         "nodes": nodes,
                         "embeddings": embeddings, 
                         "triples": triples_data,
@@ -639,11 +665,13 @@ async def confirm_preview(
                         "enable_normalization_confirmation": False,
                         "stats": None
                     }
-                    print(f"[Confirm] ✅ Successfully recovered preview data from disk.")
+                    print(f"[Confirm] ✅ Successfully recovered preview data from disk ({len(nodes)} nodes, {len(triples_data)} triples, {len(embeddings)} embeddings).")
                 else:
-                    print(f"[Confirm] ❌ Recovery failed: Temp files not found.")
+                    print(f"[Confirm] ❌ Recovery failed: Temp files not found (triples: {triples_path.exists()}, chunks: {chunks_path.exists()}).")
             except Exception as e:
+                import traceback
                 print(f"[Confirm] ❌ Recovery error: {e}")
+                traceback.print_exc()
         
     if preview_id not in preview_cache:
         raise HTTPException(status_code=404, detail="Preview not found or expired (Logic: Server Restarted?)")

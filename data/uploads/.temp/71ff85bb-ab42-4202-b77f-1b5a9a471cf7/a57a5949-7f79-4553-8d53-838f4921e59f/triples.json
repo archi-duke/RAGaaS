@@ -1,0 +1,111 @@
+{
+  "created_at": "2026-01-28T01:08:33.065577",
+  "triple_count": 15,
+  "triples": [
+    {
+      "subject": "1. 오징어 게임",
+      "predicate": "제작",
+      "object": "황동혁",
+      "source_node_id": "03f3510a-3b79-49ae-af10-e27de1df9b40",
+      "confidence": 0.7
+    },
+    {
+      "subject": "2. 오징어 게임",
+      "predicate": "방송 채널",
+      "object": "넷플릭스",
+      "source_node_id": "03f3510a-3b79-49ae-af10-e27de1df9b40",
+      "confidence": 0.7
+    },
+    {
+      "subject": "3. 오징어 게임",
+      "predicate": "장르",
+      "object": "서바이벌 드라마",
+      "source_node_id": "03f3510a-3b79-49ae-af10-e27de1df9b40",
+      "confidence": 0.7
+    },
+    {
+      "subject": "4. 플레이어",
+      "predicate": "목표",
+      "object": "상금",
+      "source_node_id": "03f3510a-3b79-49ae-af10-e27de1df9b40",
+      "confidence": 0.7
+    },
+    {
+      "subject": "5. 황동혁",
+      "predicate": "구상",
+      "object": "경제적 어려움",
+      "source_node_id": "03f3510a-3b79-49ae-af10-e27de1df9b40",
+      "confidence": 0.7
+    },
+    {
+      "subject": "1. 성기훈",
+      "predicate": "참여",
+      "object": "어린이 게임",
+      "source_node_id": "3012ed4f-4d45-4f04-a597-5c5de631b698",
+      "confidence": 0.7
+    },
+    {
+      "subject": "2. 성기훈",
+      "predicate": "상금",
+      "object": "1억 원",
+      "source_node_id": "3012ed4f-4d45-4f04-a597-5c5de631b698",
+      "confidence": 0.7
+    },
+    {
+      "subject": "3. 성기훈",
+      "predicate": "동맹",
+      "object": "조상우",
+      "source_node_id": "3012ed4f-4d45-4f04-a597-5c5de631b698",
+      "confidence": 0.7
+    },
+    {
+      "subject": "4. 프론트맨",
+      "predicate": "감독",
+      "object": "게임",
+      "source_node_id": "3012ed4f-4d45-4f04-a597-5c5de631b698",
+      "confidence": 0.7
+    },
+    {
+      "subject": "5. 황준호",
+      "predicate": "잠입",
+      "object": "경호원",
+      "source_node_id": "3012ed4f-4d45-4f04-a597-5c5de631b698",
+      "confidence": 0.7
+    },
+    {
+      "subject": "1. 조상우",
+      "predicate": "역",
+      "object": "218번 조상우",
+      "source_node_id": "2f7c889a-76bd-48ee-8376-50425ff09073",
+      "confidence": 0.7
+    },
+    {
+      "subject": "2. 황준호",
+      "predicate": "역",
+      "object": "위하준",
+      "source_node_id": "2f7c889a-76bd-48ee-8376-50425ff09073",
+      "confidence": 0.7
+    },
+    {
+      "subject": "3. 강새벽",
+      "predicate": "역",
+      "object": "067번 강새벽",
+      "source_node_id": "2f7c889a-76bd-48ee-8376-50425ff09073",
+      "confidence": 0.7
+    },
+    {
+      "subject": "4. 오일남",
+      "predicate": "역",
+      "object": "001번 오일남",
+      "source_node_id": "2f7c889a-76bd-48ee-8376-50425ff09073",
+      "confidence": 0.7
+    },
+    {
+      "subject": "5. 황인호",
+      "predicate": "역",
+      "object": "황인호",
+      "source_node_id": "2f7c889a-76bd-48ee-8376-50425ff09073",
+      "confidence": 0.7
+    }
+  ]
+}

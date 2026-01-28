@@ -74,8 +74,7 @@ class TempStorage:
             for i, chunk in enumerate(chunks):
                 simplified_chunks.append({
                     "index": i,
-                    "content_length": len(chunk.get("content", "")),
-                    "content_preview": chunk.get("content", "")[:200],  # 처음 200자만
+                    "content": chunk.get("content", ""),
                     "metadata": chunk.get("metadata", {}),
                     "node_id": chunk.get("node_id", "")
                 })
@@ -181,6 +180,92 @@ class TempStorage:
         except Exception as e:
             print(f"[TempStorage] ⚠️ Failed to load triples: {e}")
             return None
+    
+    async def save_embeddings(
+        self,
+        kb_id: str,
+        doc_id: str,
+        embeddings: Dict[str, List[float]]
+    ) -> str:
+        """임베딩 데이터 저장 (node_id -> embedding vector)"""
+        try:
+            path = self.get_doc_path(kb_id, doc_id)
+            file_path = os.path.join(path, "embeddings.json")
+            
+            data = {
+                "created_at": datetime.utcnow().isoformat(),
+                "embedding_count": len(embeddings),
+                "embeddings": embeddings
+            }
+            
+            with open(file_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            
+            print(f"[TempStorage] ✅ Saved embeddings: {file_path} ({len(embeddings)} embeddings)")
+            return file_path
+        except Exception as e:
+            print(f"[TempStorage] ⚠️ Failed to save embeddings: {e}")
+            return ""
+    
+    async def load_embeddings(self, kb_id: str, doc_id: str) -> Optional[Dict[str, List[float]]]:
+        """임베딩 데이터 로드"""
+        try:
+            path = self.get_doc_path(kb_id, doc_id)
+            file_path = os.path.join(path, "embeddings.json")
+            
+            if not os.path.exists(file_path):
+                return None
+            
+            with open(file_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            
+            print(f"[TempStorage] ✅ Loaded embeddings: {file_path}")
+            return data.get("embeddings")
+        except Exception as e:
+            print(f"[TempStorage] ⚠️ Failed to load embeddings: {e}")
+            return None
+    
+    async def load_chunks(self, kb_id: str, doc_id: str) -> Optional[List[Dict[str, Any]]]:
+        """청크 목록 로드"""
+        try:
+            path = self.get_doc_path(kb_id, doc_id)
+            file_path = os.path.join(path, "chunks.json")
+            
+            if not os.path.exists(file_path):
+                return None
+            
+            with open(file_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            
+            print(f"[TempStorage] ✅ Loaded chunks: {file_path}")
+            return data.get("chunks")
+        except Exception as e:
+            print(f"[TempStorage] ⚠️ Failed to load chunks: {e}")
+            return None
+    
+    async def load_metadata(self, kb_id: str, doc_id: str) -> Optional[Dict[str, Any]]:
+        """메타데이터 로드"""
+        try:
+            path = self.get_doc_path(kb_id, doc_id)
+            file_path = os.path.join(path, "metadata.json")
+            
+            if not os.path.exists(file_path):
+                return None
+            
+            with open(file_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            
+            print(f"[TempStorage] ✅ Loaded metadata: {file_path}")
+            return data
+        except Exception as e:
+            print(f"[TempStorage] ⚠️ Failed to load metadata: {e}")
+            return None
+    
+    def get_file_path(self, kb_id: str, doc_id: str, filename: str):
+        """특정 파일의 전체 경로 반환 (Path 객체)"""
+        from pathlib import Path
+        path = self.get_doc_path(kb_id, doc_id)
+        return Path(os.path.join(path, filename))
     
     async def cleanup(self, kb_id: str, doc_id: str):
         """임시 파일 정리"""

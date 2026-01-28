@@ -1,8 +1,5 @@
 import React, { useState } from 'react';
-import { Upload, FileText, Trash2, Database, Book, Check, X as XIcon } from 'lucide-react';
-import { SvgIcon } from '@progress/kendo-react-common';
-import { chevronDoubleRightIcon } from '@progress/kendo-svg-icons';
-import '@progress/kendo-theme-bootstrap/dist/all.css';
+import { Upload, FileText, Trash2, Database, Book, Check, X as XIcon, ChevronsRight } from 'lucide-react';
 
 import UploadDocumentModal from './UploadDocumentModal';
 import EntityDictionaryModal from './EntityDictionaryModal';
@@ -49,6 +46,9 @@ interface DocumentsTabProps {
 }
 
 export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocument, onViewChunks }: DocumentsTabProps) {
+    // Defensive: Ensure documents is always an array
+    const safeDocuments = Array.isArray(documents) ? documents : [];
+    
     const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
     const [processingDocId, setProcessingDocId] = useState<string | null>(null);
     const [resumeState, setResumeState] = useState<{
@@ -153,6 +153,16 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
                     throw new Error(`Missing Preview ID for confirmation. Doc ID: ${doc.id}`);
                 }
 
+                // Update status to STORING before confirm (for immediate UI feedback)
+                await docApi.updatePipelineStatus(kbId, doc.id, {
+                    status: 'STORING',
+                    metadata: pipelineData
+                });
+                onRefresh();
+                
+                // Clear spinner immediately - button will show as disabled instead
+                setProcessingDocId(null);
+
                 await extractionApi.confirm(previewId, {
                     enable_inference: doc.enable_inference ?? false,
                     callback_url: "http://127.0.0.1:8000/api/knowledge-bases/ingest/callback",
@@ -176,6 +186,9 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
                     metadata: pipelineData
                 });
                 onRefresh();
+
+                // Clear spinner immediately - button will show as disabled instead
+                setProcessingDocId(null);
 
                 currentStep = "PREVIEW_REQUEST";
                 // Robust File Path Lookup
@@ -206,7 +219,6 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
                     enable_entity_normalization: doc.enable_entity_normalization ?? true,
                     normalization_algorithm: 'embedding',
                     normalization_threshold: 0.85,
-                    max_sample_size: doc.max_sample_size || 50000,
 
                     entity_dictionary: pipelineData.dictionary,
                     callback_url: "http://127.0.0.1:8000/api/knowledge-bases/ingest/callback"
@@ -239,6 +251,27 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
         } catch (error: any) {
             console.error(`Continue processing failed at step: ${currentStep}`, error);
             const msg = error.response?.data?.detail || error.message || "Operation failed";
+
+            // [Auto-Recovery] If Preview is lost (404 during CONFIRMING), revert to ENTITY_EXTRACTED
+            if (currentStep === "CONFIRMING" && (msg.includes("Preview not found") || error.response?.status === 404)) {
+                try {
+                    console.log("[Recovery] Preview lost. Reverting to ENTITY_EXTRACTED...");
+                    await docApi.updatePipelineStatus(kbId, doc.id, {
+                        status: 'ENTITY_EXTRACTED',
+                        metadata: doc.pipeline_metadata // Keep existing metadata (dictionary etc)
+                    });
+                    onRefresh();
+                    setErrorDialog({
+                        isOpen: true,
+                        title: "Session Expired",
+                        message: "The preview session expired (likely due to server restart). The document status has been reset to 'Entity Extracted'. Please click 'Continue' again to re-generate the triples."
+                    });
+                    return;
+                } catch (recoveryErr) {
+                    console.error("Failed to recover:", recoveryErr);
+                }
+            }
+
             setErrorDialog({
                 isOpen: true,
                 title: `Error at step: ${currentStep}`,
@@ -331,7 +364,7 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
                     alignItems: 'center',
                     borderBottom: '1px solid var(--border)'
                 }}>
-                    <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 600 }}>Documents ({documents.length})</h3>
+                    <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 600 }}>Documents ({safeDocuments.length})</h3>
                     <button
                         className="btn btn-primary"
                         onClick={() => {
@@ -362,7 +395,7 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
                             </tr>
                         </thead>
                         <tbody>
-                            {documents.length === 0 ? (
+                            {safeDocuments.length === 0 ? (
                                 <tr>
                                     <td colSpan={8} style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
                                         <FileText size={48} style={{ margin: '0 auto 1rem', opacity: 0.2 }} />
@@ -370,7 +403,7 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
                                     </td>
                                 </tr>
                             ) : (
-                                documents.map((doc) => (
+                                safeDocuments.map((doc) => (
                                     <tr
                                         key={doc.id}
                                         onClick={() => {
@@ -401,9 +434,11 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
                                             cursor: doc.status === 'processing' ? 'default' : 'pointer', // Change cursor
                                             transition: 'background-color 0.15s ease',
                                             backgroundColor: (
-                                                (doc.pipeline_status === 'TRIPLE_EXTRACTED' || doc.status === 'TRIPLE_EXTRACTED') ||
-                                                (doc.pipeline_status === 'ENTITY_EXTRACTED' || doc.status === 'ENTITY_EXTRACTED')
-                                            ) ? '#f0fdf4' : undefined // Slight green tint for waiting
+                                                (doc.pipeline_metadata?.execution_mode !== 'batch') && (
+                                                    (doc.pipeline_status === 'TRIPLE_EXTRACTED' || doc.status === 'TRIPLE_EXTRACTED') ||
+                                                    (doc.pipeline_status === 'ENTITY_EXTRACTED' || doc.status === 'ENTITY_EXTRACTED')
+                                                )
+                                            ) ? '#f0fdf4' : undefined // Slight green tint for waiting (Step Run only)
                                         }}
                                         className={doc.status === 'processing' ? '' : "hover:bg-gray-50"}
                                     >
@@ -427,22 +462,40 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
                                         <td style={{ padding: '1rem', textAlign: 'center' }}>
                                             <div style={{ display: 'flex', justifyContent: 'center', gap: '0.5rem' }}>
                                                 {/* CONTINUE BUTTON - Hide if Batch Mode */}
-                                                {((doc.pipeline_status === 'TRIPLE_EXTRACTED' || doc.status === 'TRIPLE_EXTRACTED') ||
-                                                    (doc.pipeline_status === 'ENTITY_EXTRACTED' || doc.status === 'ENTITY_EXTRACTED')) &&
-                                                    doc.pipeline_metadata?.execution_mode !== 'batch' && (
+                                                {(() => {
+                                                    // Step Run 관련 상태 확인
+                                                    const pipelineStatus = doc.pipeline_status || doc.status;
+                                                    const isStepRun = doc.pipeline_metadata?.execution_mode !== 'batch' && [
+                                                        'EXTRACTING_ENTITIES',
+                                                        'EXTRACTING_TRIPLES',
+                                                        'ENTITY_EXTRACTED',
+                                                        'TRIPLE_EXTRACTED',
+                                                        'STORING'
+                                                    ].includes(pipelineStatus);
+
+                                                    if (!isStepRun) return null;
+
+                                                    // 버튼 활성/비활성 판단
+                                                    const isDeleting = doc.status === 'deleting';
+                                                    const isExtracting = ['EXTRACTING_ENTITIES', 'EXTRACTING_TRIPLES', 'STORING'].includes(pipelineStatus);
+                                                    const isWaitingForContinue = ['ENTITY_EXTRACTED', 'TRIPLE_EXTRACTED'].includes(pipelineStatus);
+                                                    const isButtonDisabled = isDeleting || isExtracting || !!processingDocId;
+
+                                                    return (
                                                         <button
-                                                            className="btn btn-primary"
+                                                            className={`btn ${isButtonDisabled ? '' : 'btn-primary'}`}
                                                             onClick={(e) => {
                                                                 e.stopPropagation();
                                                                 handleContinueProcessing(doc);
                                                             }}
-                                                            disabled={!!processingDocId}
-                                                            title="Continue Processing"
+                                                            disabled={isButtonDisabled}
+                                                            title={isDeleting ? "Deleting..." : isExtracting ? "Processing..." : "Continue Processing"}
                                                             style={{
                                                                 padding: '0.4rem',
                                                                 minWidth: 'auto',
                                                                 borderRadius: '6px',
-                                                                opacity: processingDocId === doc.id ? 0.7 : 1,
+                                                                opacity: isButtonDisabled ? 0.5 : 1,
+                                                                cursor: isButtonDisabled ? 'not-allowed' : 'pointer',
                                                                 display: 'flex',
                                                                 alignItems: 'center',
                                                                 justifyContent: 'center',
@@ -450,13 +503,10 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
                                                                 fontWeight: 600
                                                             }}
                                                         >
-                                                            {processingDocId === doc.id ? (
-                                                                <span className="spinner-small" style={{ width: '16px', height: '16px', border: '2px solid rgba(255,255,255,0.3)', borderTopColor: 'white' }}></span>
-                                                            ) : (
-                                                                <SvgIcon icon={chevronDoubleRightIcon} style={{ width: '18px', height: '18px' }} />
-                                                            )}
+                                                            <ChevronsRight size={18} strokeWidth={2.5} />
                                                         </button>
-                                                    )}
+                                                    );
+                                                })()}
 
                                                 <button
                                                     className="btn btn-icon"
@@ -465,8 +515,28 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
                                                         handleViewEntities(doc.id, doc.filename);
                                                     }}
                                                     title="View Entity List"
-                                                    disabled={isLoadingResults || doc.status === 'processing'} // Disable if processing
-                                                    style={{ color: doc.status === 'processing' ? 'var(--text-tertiary)' : '#3b82f6' }}
+                                                    disabled={(() => {
+                                                        if (doc.status === 'deleting') return true;
+                                                        if (isLoadingResults) return true;
+                                                        // Enable if status indicates data exists, regardless of processing state
+                                                        const pStatus = doc.pipeline_status || doc.status;
+                                                        const hasData = ['ENTITY_EXTRACTED', 'EXTRACTING_TRIPLES', 'TRIPLE_EXTRACTED', 'STORING', 'COMPLETED', 'completed'].includes(pStatus);
+                                                        return !hasData;
+                                                    })()}
+                                                    style={{
+                                                        color: (() => {
+                                                            if (doc.status === 'deleting') return 'var(--text-tertiary)';
+                                                            const pStatus = doc.pipeline_status || doc.status;
+                                                            const hasData = ['ENTITY_EXTRACTED', 'EXTRACTING_TRIPLES', 'TRIPLE_EXTRACTED', 'STORING', 'COMPLETED', 'completed'].includes(pStatus);
+                                                            return hasData ? '#3b82f6' : 'var(--text-tertiary)';
+                                                        })(),
+                                                        opacity: (() => {
+                                                            if (doc.status === 'deleting') return 0.5;
+                                                            const pStatus = doc.pipeline_status || doc.status;
+                                                            const hasData = ['ENTITY_EXTRACTED', 'EXTRACTING_TRIPLES', 'TRIPLE_EXTRACTED', 'STORING', 'COMPLETED', 'completed'].includes(pStatus);
+                                                            return hasData ? 1 : 0.5;
+                                                        })()
+                                                    }}
                                                 >
                                                     <Book size={18} />
                                                 </button>
@@ -478,8 +548,28 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
                                                         handleViewTriples(doc.id, doc.filename);
                                                     }}
                                                     title="View Triple List"
-                                                    disabled={isLoadingResults || doc.status === 'processing'} // Disable if processing
-                                                    style={{ color: doc.status === 'processing' ? 'var(--text-tertiary)' : '#3b82f6' }}
+                                                    disabled={(() => {
+                                                        if (doc.status === 'deleting') return true;
+                                                        if (isLoadingResults) return true;
+                                                        // Enable if status indicates data exists, regardless of processing state
+                                                        const pStatus = doc.pipeline_status || doc.status;
+                                                        const hasData = ['TRIPLE_EXTRACTED', 'STORING', 'COMPLETED', 'completed'].includes(pStatus);
+                                                        return !hasData;
+                                                    })()}
+                                                    style={{
+                                                        color: (() => {
+                                                            if (doc.status === 'deleting') return 'var(--text-tertiary)';
+                                                            const pStatus = doc.pipeline_status || doc.status;
+                                                            const hasData = ['TRIPLE_EXTRACTED', 'STORING', 'COMPLETED', 'completed'].includes(pStatus);
+                                                            return hasData ? '#3b82f6' : 'var(--text-tertiary)';
+                                                        })(),
+                                                        opacity: (() => {
+                                                            if (doc.status === 'deleting') return 0.5;
+                                                            const pStatus = doc.pipeline_status || doc.status;
+                                                            const hasData = ['TRIPLE_EXTRACTED', 'STORING', 'COMPLETED', 'completed'].includes(pStatus);
+                                                            return hasData ? 1 : 0.5;
+                                                        })()
+                                                    }}
                                                 >
                                                     <Database size={18} />
                                                 </button>
@@ -490,9 +580,11 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
                                                         setDeleteConfirmState({ isOpen: true, docId: doc.id });
                                                     }}
                                                     title="Delete Document"
+                                                    disabled={doc.status === 'deleting'}
                                                     style={{
                                                         color: 'var(--error)',
-                                                        opacity: 0.7
+                                                        opacity: doc.status === 'deleting' ? 0.5 : 1,
+                                                        cursor: doc.status === 'deleting' ? 'not-allowed' : 'pointer'
                                                     }}
                                                 >
                                                     <Trash2 size={18} />

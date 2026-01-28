@@ -1,0 +1,31 @@
+{
+  "created_at": "2026-01-28T05:11:16.730270",
+  "node_count": 14,
+  "triple_count": 135,
+  "stats": [
+    {
+      "step": "Step 0: Text Cleaning",
+      "duration": 0.0
+    },
+    {
+      "step": "Step 1: Entity Extraction (Pre-pass)",
+      "duration": 20.46
+    },
+    {
+      "step": "Step 2: Text Chunking (14 chunks)",
+      "duration": 1.01
+    },
+    {
+      "step": "Step 3: Triple Extraction (135 triples)",
+      "duration": 60.56
+    },
+    {
+      "step": "Step 4: Entity Normalization",
+      "duration": 42.13
+    },
+    {
+      "step": "Total Execution Time",
+      "duration": 124.17
+    }
+  ]
+}
