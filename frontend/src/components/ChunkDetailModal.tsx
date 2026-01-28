@@ -83,6 +83,8 @@ const LabelWithTooltip = ({ label, tooltip }: { label: string, tooltip: string }
     );
 };
 
+
+
 export default function ChunkDetailModal({ isOpen, onClose, chunk, title = 'Chunk Content', onSave, isGraphEnabled = false, kbId }: ChunkDetailModalProps) {
     const [isEditing, setIsEditing] = useState(false);
     const [editContent, setEditContent] = useState('');
@@ -354,7 +356,6 @@ export default function ChunkDetailModal({ isOpen, onClose, chunk, title = 'Chun
                     <code style={{ fontFamily: 'monospace', color: '#0f172a' }}>{chunk.id}</code>
                 </div>
 
-                {/* Graph Extraction Settings Panel */}
                 {showExtractionSettings && isGraphEnabled && (
                     <div style={{ marginBottom: '1.25rem', background: '#eff6ff', padding: '1.25rem', borderRadius: '12px', border: '1px solid #bfdbfe' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1.25rem', color: '#3b82f6', fontWeight: 600, fontSize: '0.95rem' }}>

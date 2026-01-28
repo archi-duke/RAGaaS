@@ -383,3 +383,51 @@ async def get_pipeline_data(kb_id: str, doc_id: str):
         logger.info(f"Triples file not found (searched: {triples_file})")
                 
     return metadata
+
+
+@router.get("/{kb_id}/documents/{doc_id}/chunks")
+async def get_document_chunks(kb_id: str, doc_id: str):
+    """Retrieve all chunks for a specific document from Milvus."""
+    from pymilvus import Collection, utility
+    
+    # Verify document exists
+    doc = await DocModel.find_one(DocModel.id == doc_id, DocModel.kb_id == kb_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    try:
+        # Query Milvus for chunks belonging to this document
+        collection_name = f"kb_{kb_id.replace('-', '_')}"
+        
+        # Check if collection exists
+        if not utility.has_collection(collection_name):
+            logger.warning(f"Collection {collection_name} does not exist")
+            return {"chunks": []}
+        
+        # Get collection and load it
+        collection = Collection(collection_name)
+        collection.load()
+        
+        # Query for chunks with this doc_id
+        results = collection.query(
+            expr=f'doc_id == "{doc_id}"',
+            output_fields=["chunk_id", "content", "metadata", "doc_id"],
+            limit=10000  # Large limit to get all chunks
+        )
+        
+        # Format response
+        chunks = []
+        for result in results:
+            chunk_data = {
+                "chunk_id": result.get("chunk_id", ""),
+                "content": result.get("content", ""),
+                "metadata": result.get("metadata", {}),
+            }
+            chunks.append(chunk_data)
+        
+        logger.info(f"Retrieved {len(chunks)} chunks for document {doc_id}")
+        return {"chunks": chunks}
+        
+    except Exception as e:
+        logger.error(f"Failed to retrieve chunks for document {doc_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve chunks: {str(e)}")
