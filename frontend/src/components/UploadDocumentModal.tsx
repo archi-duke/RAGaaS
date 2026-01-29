@@ -314,7 +314,7 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
         try {
             await extractionApi.confirm(previewData.preview_id, {
                 enable_inference: graphParams.enable_inference,
-                callback_url: "http://127.0.0.1:8000/api/knowledge-bases/ingest/callback"
+                callback_url: "http://backend:8000/api/knowledge-bases/ingest/callback"
             });
             onUploadComplete();
             onClose();
@@ -396,7 +396,7 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                     ...chunkingConfig
                 },
                 sampling_size: graphParams.max_sample_size,
-                callback_url: "http://127.0.0.1:8000/api/knowledge-bases/ingest/callback"
+                callback_url: "http://backend:8000/api/knowledge-bases/ingest/callback"
             });
 
             const dictData = {
@@ -501,7 +501,7 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                 normalization_algorithm: graphParams.normalization_algorithm,
                 normalization_threshold: graphParams.normalization_threshold,
                 entity_dictionary: dictionaryInfo?.dictionary,
-                callback_url: "http://127.0.0.1:8000/api/knowledge-bases/ingest/callback"
+                callback_url: "http://backend:8000/api/knowledge-bases/ingest/callback"
             });
 
             const tripleData = {
