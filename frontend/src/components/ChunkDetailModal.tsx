@@ -5,6 +5,7 @@ import { extractionApi, kbApi } from '../services/api';
 import ExtractionExampleModal from './ExtractionExampleModal';
 import ExtractionPromptModal from './ExtractionPromptModal';
 import GraphExtractionSettings from './GraphExtractionSettings';
+import MessageDialog from './MessageDialog';
 
 interface Triple {
     subject: string;
@@ -103,6 +104,14 @@ export default function ChunkDetailModal({ isOpen, onClose, chunk, title = 'Chun
     const [showExampleModal, setShowExampleModal] = useState(false);
     const [showPromptModal, setShowPromptModal] = useState(false);
 
+    // Message Dialog state
+    const [messageDialog, setMessageDialog] = useState<{ isOpen: boolean; title: string; message: string; type: 'info' | 'success' | 'error' }>({
+        isOpen: false,
+        title: '',
+        message: '',
+        type: 'info'
+    });
+
     // Selection state for partial extraction
     const contentRef = useRef<HTMLDivElement>(null);
     const [selectionText, setSelectionText] = useState('');
@@ -160,7 +169,9 @@ export default function ChunkDetailModal({ isOpen, onClose, chunk, title = 'Chun
         setShowExtractionSettings(false);
         setExtractedTriples([]);
         setShowResults(false);
+        setShowResults(false);
         setSelectedTriples(new Set());
+        setMessageDialog({ isOpen: false, title: '', message: '', type: 'info' });
     }, [chunk]);
 
     // Load default extraction prompt
@@ -191,7 +202,12 @@ export default function ChunkDetailModal({ isOpen, onClose, chunk, title = 'Chun
             setIsEditing(false);
         } catch (error) {
             console.error('Failed to save chunk:', error);
-            alert('Failed to save chunk content');
+            setMessageDialog({
+                isOpen: true,
+                title: 'Save Failed',
+                message: 'Failed to save chunk content',
+                type: 'error'
+            });
         } finally {
             setIsSaving(false);
         }
@@ -219,7 +235,12 @@ export default function ChunkDetailModal({ isOpen, onClose, chunk, title = 'Chun
             setSelectedTriples(new Set()); // Reset selection
         } catch (error: any) {
             console.error('Extract failed:', error);
-            alert(error.response?.data?.detail || 'An error occurred during triple extraction.');
+            setMessageDialog({
+                isOpen: true,
+                title: 'Extraction Failed',
+                message: error.response?.data?.detail || 'An error occurred during triple extraction.',
+                type: 'error'
+            });
         } finally {
             setIsExtracting(false);
         }
@@ -246,7 +267,12 @@ export default function ChunkDetailModal({ isOpen, onClose, chunk, title = 'Chun
     const handleApplyTriples = async () => {
         if (selectedTriples.size === 0) return;
         if (!kbId) {
-            alert('Knowledge Base ID is missing.');
+            setMessageDialog({
+                isOpen: true,
+                title: 'Error',
+                message: 'Knowledge Base ID is missing.',
+                type: 'error'
+            });
             return;
         }
 
@@ -261,12 +287,22 @@ export default function ChunkDetailModal({ isOpen, onClose, chunk, title = 'Chun
                 triples: triplesToSave,
             });
 
-            alert(`${selectedTriples.size} triples have been successfully saved.`);
+            setMessageDialog({
+                isOpen: true,
+                title: 'Success',
+                message: `${selectedTriples.size} triples have been successfully saved.`,
+                type: 'success'
+            });
             setSelectedTriples(new Set());
             setShowResults(false);
         } catch (error: any) {
             console.error('Save triples failed:', error);
-            alert(error.response?.data?.detail || 'An error occurred while saving triples.');
+            setMessageDialog({
+                isOpen: true,
+                title: 'Save Failed',
+                message: error.response?.data?.detail || 'An error occurred while saving triples.',
+                type: 'error'
+            });
         } finally {
             setIsSavingTriples(false);
         }
@@ -375,7 +411,7 @@ export default function ChunkDetailModal({ isOpen, onClose, chunk, title = 'Chun
                             showEntitySample={false}
                             showExtractorType={false}
                         />
-                        
+
                         {/* Extract Button */}
                         <div style={{ textAlign: 'center', marginTop: '1rem' }}>
                             <button
@@ -557,6 +593,14 @@ export default function ChunkDetailModal({ isOpen, onClose, chunk, title = 'Chun
                 onClose={() => setShowPromptModal(false)}
                 initialPrompt={graphParams.custom_prompt}
                 onSave={(prompt) => setGraphParams(prev => ({ ...prev, custom_prompt: prompt }))}
+            />
+
+            <MessageDialog
+                isOpen={messageDialog.isOpen}
+                title={messageDialog.title}
+                message={messageDialog.message}
+                type={messageDialog.type}
+                onClose={() => setMessageDialog({ ...messageDialog, isOpen: false })}
             />
         </div>,
         document.body

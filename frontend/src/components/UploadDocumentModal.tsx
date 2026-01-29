@@ -105,7 +105,6 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
         message: '',
         type: 'info'
     });
-
     // Graph Params - LlamaIndex based
     const [graphParams, setGraphParams] = useState({
         extractor_type: 'simple' as 'simple' | 'dynamic' | 'schema',
@@ -173,7 +172,7 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
             setIsExtracting(false);
             setIsStepRunning(false);
             setResumedDocId(null);
-            setMessageDialog({ isOpen: false, title: '', message: '', type: 'info' });
+
 
             if (kbId) {
                 loadKbConfig();
@@ -828,6 +827,7 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                 onSave={(prompt) => setGraphParams(prev => ({ ...prev, custom_prompt: prompt }))}
                 mode="extraction_prompt"
             />
+
             <MessageDialog
                 isOpen={messageDialog.isOpen}
                 title={messageDialog.title}

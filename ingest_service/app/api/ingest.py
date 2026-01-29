@@ -965,7 +965,7 @@ async def extract_from_chunk(request: ChunkExtractRequest):
         }
         
         # Extract triples using pipeline
-        triples = ingest_pipeline.extract_graph(
+        triples = await ingest_pipeline.extract_graph(
             nodes=[temp_node],
             extractor_type=extractor_type,
             config=graph_config,
