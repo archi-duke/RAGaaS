@@ -330,7 +330,9 @@ export default function ChunkDetailModal({ isOpen, onClose, chunk, title = 'Chun
                     width: '90%',
                     maxWidth: '900px',
                     maxHeight: '90vh',
-                    overflow: 'auto',
+                    overflow: 'hidden',
+                    display: 'flex',
+                    flexDirection: 'column',
                     backgroundColor: 'white',
                     padding: '24px',
                     borderRadius: '12px',
@@ -340,7 +342,15 @@ export default function ChunkDetailModal({ isOpen, onClose, chunk, title = 'Chun
                 onClick={(e) => e.stopPropagation()}
             >
                 {/* Header */}
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
+                <div style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    paddingBottom: '1rem',
+                    marginBottom: 0,
+                    borderBottom: '1px solid #e2e8f0',
+                    flexShrink: 0
+                }}>
                     <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 700, color: '#1e293b', display: 'flex', alignItems: 'center', gap: '8px' }}>
                         📄 {title}
                     </h3>
@@ -369,8 +379,9 @@ export default function ChunkDetailModal({ isOpen, onClose, chunk, title = 'Chun
                         )}
                         {onSave && !isEditing && (
                             <button
+                                className="k-button k-button-sm k-rounded-md k-button-solid k-button-solid-base"
                                 onClick={() => setIsEditing(true)}
-                                style={{ cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem' }}
+                                style={{ cursor: 'pointer', fontSize: '0.85rem' }}
                             >
                                 Edit
                             </button>
@@ -385,202 +396,205 @@ export default function ChunkDetailModal({ isOpen, onClose, chunk, title = 'Chun
                     </div>
                 </div>
 
-                {/* Meta Info */}
-                <div style={{
-                    fontSize: '0.85rem',
-                    color: '#64748b',
-                    marginBottom: '1.25rem',
-                    padding: '8px 12px',
-                    backgroundColor: '#f1f5f9',
-                    borderRadius: '6px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px'
-                }}>
-                    <span style={{ fontWeight: 600 }}>Chunk ID:</span>
-                    <code style={{ fontFamily: 'monospace', color: '#0f172a' }}>{chunk.id}</code>
-                </div>
-
-                {showExtractionSettings && isGraphEnabled && (
-                    <div style={{ marginBottom: '1.25rem' }}>
-                        <GraphExtractionSettings
-                            graphParams={graphParams}
-                            onParamsChange={setGraphParams}
-                            onManageExamples={() => setShowExampleModal(true)}
-                            onEditPrompt={() => setShowPromptModal(true)}
-                            showEntitySample={false}
-                            showExtractorType={false}
-                        />
-
-                        {/* Extract Button */}
-                        <div style={{ textAlign: 'center', marginTop: '1rem' }}>
-                            <button
-                                className="btn btn-primary"
-                                onClick={handleExtract}
-                                disabled={isExtracting}
-                                style={{
-                                    padding: '0.65rem 2rem',
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    gap: '0.5rem',
-                                    fontSize: '0.9rem',
-                                    fontWeight: 600
-                                }}
-                            >
-                                <FlaskConical size={16} />
-                                {isExtracting ? 'Extracting...' : (selectionText ? 'Extract (Selection)' : 'Extract')}
-                            </button>
-                        </div>
+                {/* Scrollable Content */}
+                <div style={{ flex: 1, overflowY: 'auto', paddingRight: '4px', paddingTop: '1.25rem' }}>
+                    {/* Meta Info */}
+                    <div style={{
+                        fontSize: '0.85rem',
+                        color: '#64748b',
+                        marginBottom: '1.25rem',
+                        padding: '8px 12px',
+                        backgroundColor: '#f1f5f9',
+                        borderRadius: '6px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px'
+                    }}>
+                        <span style={{ fontWeight: 600 }}>Chunk ID:</span>
+                        <code style={{ fontFamily: 'monospace', color: '#0f172a' }}>{chunk.id}</code>
                     </div>
-                )}
 
-                {/* Extracted Triples Results */}
-                {showResults && extractedTriples.length > 0 && (
-                    <div style={{ marginBottom: '1.25rem', background: '#eff6ff', padding: '1rem', borderRadius: '12px', border: '1px solid #bfdbfe' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
-                            <span style={{ fontWeight: 600, color: '#1e40af', fontSize: '0.9rem' }}>
-                                🔹 Extracted Triples ({extractedTriples.length} results, {selectedTriples.size} selected)
-                            </span>
-                            <div style={{ display: 'flex', gap: '0.5rem' }}>
+                    {showExtractionSettings && isGraphEnabled && (
+                        <div style={{ marginBottom: '1.25rem' }}>
+                            <GraphExtractionSettings
+                                graphParams={graphParams}
+                                onParamsChange={setGraphParams}
+                                onManageExamples={() => setShowExampleModal(true)}
+                                onEditPrompt={() => setShowPromptModal(true)}
+                                showEntitySample={false}
+                                showExtractorType={false}
+                            />
+
+                            {/* Extract Button */}
+                            <div style={{ textAlign: 'center', marginTop: '1rem' }}>
                                 <button
                                     className="btn btn-primary"
-                                    onClick={handleApplyTriples}
-                                    disabled={selectedTriples.size === 0 || isSavingTriples}
+                                    onClick={handleExtract}
+                                    disabled={isExtracting}
                                     style={{
-                                        padding: '0.25rem 0.75rem',
-                                        fontSize: '0.75rem',
-                                        minWidth: '80px'
+                                        padding: '0.65rem 2rem',
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        gap: '0.5rem',
+                                        fontSize: '0.9rem',
+                                        fontWeight: 600
                                     }}
                                 >
-                                    {isSavingTriples ? 'Saving...' : `Apply (${selectedTriples.size})`}
-                                </button>
-                                <button
-                                    className="btn"
-                                    onClick={() => setShowResults(false)}
-                                    style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }}
-                                >
-                                    Hide
+                                    <FlaskConical size={16} />
+                                    {isExtracting ? 'Extracting...' : (selectionText ? 'Extract (Selection)' : 'Extract')}
                                 </button>
                             </div>
-                        </div>
-                        <div style={{ /* maxHeight removed to show full list */ }}>
-                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
-                                <thead>
-                                    <tr style={{ backgroundColor: '#dbeafe' }}>
-                                        <th style={{ padding: '8px', textAlign: 'center', borderBottom: '1px solid #bfdbfe', width: '40px' }}>
-                                            <input
-                                                type="checkbox"
-                                                checked={selectedTriples.size === extractedTriples.length && extractedTriples.length > 0}
-                                                onChange={handleToggleAll}
-                                                style={{ width: '1rem', height: '1rem', cursor: 'pointer' }}
-                                            />
-                                        </th>
-                                        <th style={{ padding: '8px', textAlign: 'left', borderBottom: '1px solid #bfdbfe' }}>Subject</th>
-                                        <th style={{ padding: '8px', textAlign: 'center', borderBottom: '1px solid #bfdbfe' }}>Predicate</th>
-                                        <th style={{ padding: '8px', textAlign: 'left', borderBottom: '1px solid #bfdbfe' }}>Object</th>
-                                        <th style={{ padding: '8px', textAlign: 'center', borderBottom: '1px solid #bfdbfe', width: '80px' }}>Conf.</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {extractedTriples.map((triple, idx) => (
-                                        <tr key={idx} style={{ backgroundColor: triple.is_inverse ? '#fef9c3' : 'white' }}>
-                                            <td style={{ padding: '8px', textAlign: 'center', borderBottom: '1px solid #e2e8f0' }}>
-                                                <input
-                                                    type="checkbox"
-                                                    checked={selectedTriples.has(idx)}
-                                                    onChange={() => handleToggleTriple(idx)}
-                                                    style={{ width: '1rem', height: '1rem', cursor: 'pointer' }}
-                                                />
-                                            </td>
-                                            <td style={{ padding: '8px', borderBottom: '1px solid #e2e8f0' }}>{triple.subject}</td>
-                                            <td style={{ padding: '8px', textAlign: 'center', borderBottom: '1px solid #e2e8f0', fontStyle: 'italic', color: '#0284c7' }}>
-                                                {triple.predicate}
-                                                {triple.is_inverse && <span style={{ marginLeft: '4px', fontSize: '0.7rem', color: '#ca8a04' }}>(inv)</span>}
-                                            </td>
-                                            <td style={{ padding: '8px', borderBottom: '1px solid #e2e8f0' }}>{triple.object}</td>
-                                            <td style={{ padding: '8px', textAlign: 'center', borderBottom: '1px solid #e2e8f0', color: '#64748b' }}>
-                                                {triple.confidence?.toFixed(2) || '-'}
-                                            </td>
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                )}
-
-                {showResults && extractedTriples.length === 0 && (
-                    <div style={{ marginBottom: '1.25rem', background: '#fef3c7', padding: '1rem', borderRadius: '12px', border: '1px solid #f59e0b', textAlign: 'center', color: '#92400e' }}>
-                        ⚠️ No triples extracted. Try different settings or text.
-                    </div>
-                )}
-
-                {/* Content Area */}
-                <div style={{ position: 'relative' }}>
-                    {isEditing ? (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                            <textarea
-                                value={editContent}
-                                onChange={(e) => setEditContent(e.target.value)}
-                                style={{
-                                    width: '100%',
-                                    minHeight: '400px',
-                                    padding: '16px',
-                                    borderRadius: '8px',
-                                    border: '2px solid #3b82f6',
-                                    fontSize: '0.95rem',
-                                    lineHeight: 1.6,
-                                    fontFamily: 'inherit',
-                                    resize: 'vertical',
-                                    outline: 'none'
-                                }}
-                                autoFocus
-                                disabled={isSaving}
-                            />
-                            <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
-                                <button
-                                    className="btn"
-                                    onClick={() => setIsEditing(false)}
-                                    disabled={isSaving}
-                                    style={{ padding: '0.5rem 1.5rem' }}
-                                >
-                                    Cancel
-                                </button>
-                                <button
-                                    className="btn btn-primary"
-                                    onClick={handleSave}
-                                    disabled={isSaving || !editContent.trim()}
-                                    style={{ padding: '0.5rem 2rem', minWidth: '100px' }}
-                                >
-                                    {isSaving ? 'Saving...' : 'Save Changes'}
-                                </button>
-                            </div>
-                        </div>
-                    ) : (
-                        <div
-                            style={{
-                                padding: '20px',
-                                backgroundColor: '#f8fafc',
-                                borderRadius: '10px',
-                                whiteSpace: 'pre-wrap',
-                                lineHeight: 1.7,
-                                border: '1px solid #e2e8f0',
-                                fontSize: '1rem',
-                                color: '#334155',
-                                maxHeight: showExtractionSettings || showResults ? '40vh' : '60vh',
-                                overflowY: 'auto'
-                            }}
-                            ref={contentRef}
-                        >
-                            {chunk.content.replace(/(\r\n|\n|\r){2,}/gm, '\n')}
                         </div>
                     )}
+
+                    {/* Extracted Triples Results */}
+                    {showResults && extractedTriples.length > 0 && (
+                        <div style={{ marginBottom: '1.25rem', background: '#eff6ff', padding: '1rem', borderRadius: '12px', border: '1px solid #bfdbfe' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
+                                <span style={{ fontWeight: 600, color: '#1e40af', fontSize: '0.9rem' }}>
+                                    🔹 Extracted Triples ({extractedTriples.length} results, {selectedTriples.size} selected)
+                                </span>
+                                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                    <button
+                                        className="btn btn-primary"
+                                        onClick={handleApplyTriples}
+                                        disabled={selectedTriples.size === 0 || isSavingTriples}
+                                        style={{
+                                            padding: '0.25rem 0.75rem',
+                                            fontSize: '0.75rem',
+                                            minWidth: '80px'
+                                        }}
+                                    >
+                                        {isSavingTriples ? 'Saving...' : `Apply (${selectedTriples.size})`}
+                                    </button>
+                                    <button
+                                        className="btn"
+                                        onClick={() => setShowResults(false)}
+                                        style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }}
+                                    >
+                                        Hide
+                                    </button>
+                                </div>
+                            </div>
+                            <div style={{ /* maxHeight removed to show full list */ }}>
+                                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
+                                    <thead>
+                                        <tr style={{ backgroundColor: '#dbeafe' }}>
+                                            <th style={{ padding: '8px', textAlign: 'center', borderBottom: '1px solid #bfdbfe', width: '40px' }}>
+                                                <input
+                                                    type="checkbox"
+                                                    checked={selectedTriples.size === extractedTriples.length && extractedTriples.length > 0}
+                                                    onChange={handleToggleAll}
+                                                    style={{ width: '1rem', height: '1rem', cursor: 'pointer' }}
+                                                />
+                                            </th>
+                                            <th style={{ padding: '8px', textAlign: 'left', borderBottom: '1px solid #bfdbfe' }}>Subject</th>
+                                            <th style={{ padding: '8px', textAlign: 'center', borderBottom: '1px solid #bfdbfe' }}>Predicate</th>
+                                            <th style={{ padding: '8px', textAlign: 'left', borderBottom: '1px solid #bfdbfe' }}>Object</th>
+                                            <th style={{ padding: '8px', textAlign: 'center', borderBottom: '1px solid #bfdbfe', width: '80px' }}>Conf.</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {extractedTriples.map((triple, idx) => (
+                                            <tr key={idx} style={{ backgroundColor: triple.is_inverse ? '#fef9c3' : 'white' }}>
+                                                <td style={{ padding: '8px', textAlign: 'center', borderBottom: '1px solid #e2e8f0' }}>
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={selectedTriples.has(idx)}
+                                                        onChange={() => handleToggleTriple(idx)}
+                                                        style={{ width: '1rem', height: '1rem', cursor: 'pointer' }}
+                                                    />
+                                                </td>
+                                                <td style={{ padding: '8px', borderBottom: '1px solid #e2e8f0' }}>{triple.subject}</td>
+                                                <td style={{ padding: '8px', textAlign: 'center', borderBottom: '1px solid #e2e8f0', fontStyle: 'italic', color: '#0284c7' }}>
+                                                    {triple.predicate}
+                                                    {triple.is_inverse && <span style={{ marginLeft: '4px', fontSize: '0.7rem', color: '#ca8a04' }}>(inv)</span>}
+                                                </td>
+                                                <td style={{ padding: '8px', borderBottom: '1px solid #e2e8f0' }}>{triple.object}</td>
+                                                <td style={{ padding: '8px', textAlign: 'center', borderBottom: '1px solid #e2e8f0', color: '#64748b' }}>
+                                                    {triple.confidence?.toFixed(2) || '-'}
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    )}
+
+                    {showResults && extractedTriples.length === 0 && (
+                        <div style={{ marginBottom: '1.25rem', background: '#fef3c7', padding: '1rem', borderRadius: '12px', border: '1px solid #f59e0b', textAlign: 'center', color: '#92400e' }}>
+                            ⚠️ No triples extracted. Try different settings or text.
+                        </div>
+                    )}
+
+                    {/* Content Area */}
+                    <div style={{ position: 'relative' }}>
+                        {isEditing ? (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                                <textarea
+                                    value={editContent}
+                                    onChange={(e) => setEditContent(e.target.value)}
+                                    style={{
+                                        width: '100%',
+                                        minHeight: '400px',
+                                        padding: '16px',
+                                        borderRadius: '8px',
+                                        border: '2px solid #3b82f6',
+                                        fontSize: '0.95rem',
+                                        lineHeight: 1.6,
+                                        fontFamily: 'inherit',
+                                        resize: 'vertical',
+                                        outline: 'none'
+                                    }}
+                                    autoFocus
+                                    disabled={isSaving}
+                                />
+                                <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+                                    <button
+                                        className="btn"
+                                        onClick={() => setIsEditing(false)}
+                                        disabled={isSaving}
+                                        style={{ padding: '0.5rem 1.5rem' }}
+                                    >
+                                        Cancel
+                                    </button>
+                                    <button
+                                        className="btn btn-primary"
+                                        onClick={handleSave}
+                                        disabled={isSaving || !editContent.trim()}
+                                        style={{ padding: '0.5rem 2rem', minWidth: '100px' }}
+                                    >
+                                        {isSaving ? 'Saving...' : 'Save Changes'}
+                                    </button>
+                                </div>
+                            </div>
+                        ) : (
+                            <div
+                                style={{
+                                    padding: '20px',
+                                    backgroundColor: '#f8fafc',
+                                    borderRadius: '10px',
+                                    whiteSpace: 'pre-wrap',
+                                    lineHeight: 1.7,
+                                    border: '1px solid #e2e8f0',
+                                    fontSize: '1rem',
+                                    color: '#334155',
+                                    maxHeight: showExtractionSettings || showResults ? '40vh' : '60vh',
+                                    overflowY: 'auto'
+                                }}
+                                ref={contentRef}
+                            >
+                                {chunk.content.replace(/(\r\n|\n|\r){2,}/gm, '\n')}
+                            </div>
+                        )}
+                    </div>
                 </div>
             </div>
 
             {/* Extraction Example Modal */}
-            <ExtractionExampleModal
+            < ExtractionExampleModal
                 isOpen={showExampleModal}
                 onClose={() => setShowExampleModal(false)}
                 initialYaml={graphParams.extraction_examples_yaml}
@@ -602,7 +616,7 @@ export default function ChunkDetailModal({ isOpen, onClose, chunk, title = 'Chun
                 type={messageDialog.type}
                 onClose={() => setMessageDialog({ ...messageDialog, isOpen: false })}
             />
-        </div>,
+        </div >,
         document.body
     );
 }

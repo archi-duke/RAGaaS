@@ -599,217 +599,237 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 zIndex: 50
             }} onClick={onClose}>
-                <div className="card" style={{ width: '100%', maxWidth: '600px', maxHeight: '90vh', overflow: 'auto' }} onClick={(e) => e.stopPropagation()}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
-                        <h2 style={{ margin: 0 }}>Upload Document</h2>
-                        <button className="btn" onClick={onClose} style={{ padding: '0.5rem' }}>
-                            <X size={20} />
-                        </button>
-                    </div>
 
-                    <div style={{ marginBottom: '2rem' }}>
-                        <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 500 }}>Select File</label>
-                        <div
-                            style={{
-                                border: '2px dashed var(--border)',
-                                borderRadius: '8px',
-                                padding: '2rem',
-                                textAlign: 'center',
-                                cursor: 'pointer',
-                                background: '#fafafa',
-                                opacity: resumedDocId ? 0.6 : 1,
-                                pointerEvents: resumedDocId ? 'none' : 'auto'
-                            }}
-                            onClick={() => fileInputRef.current?.click()}
-                        >
-                            <input
-                                type="file"
-                                ref={fileInputRef}
-                                style={{ display: 'none' }}
-                                onChange={(e) => {
-                                    handleFileChange(e);
-                                    if (!resumedDocId) {
-                                        setIsEntityExtracted(false);
-                                        setResumedDocId(null);
-                                        setDictionaryData(null);
-                                        setPreviewData(null);
-                                    }
-                                }}
-                                accept=".txt,.pdf,.md"
-                                disabled={!!resumedDocId}
-                            />
-                            {file ? (
-                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', color: 'var(--primary)' }}>
-                                    <FileText size={24} />
-                                    <span style={{ fontWeight: 500 }}>{file.name}</span>
-                                </div>
-                            ) : (
-                                <div style={{ color: 'var(--text-secondary)' }}>
-                                    {resumedDocId ? (
-                                        <div style={{ color: 'var(--primary)', fontWeight: 600 }}>
-                                            Resuming Document Processing... (File on server)
-                                        </div>
-                                    ) : (
-                                        <>
-                                            <Upload size={32} style={{ marginBottom: '0.5rem' }} />
-                                            <p style={{ margin: 0 }}>Click to upload PDF, TXT, or MD</p>
-                                        </>
-                                    )}
-                                </div>
+                <div className="card" style={{
+                    width: '100%',
+                    maxWidth: '600px',
+                    maxHeight: '90vh',
+                    overflow: 'hidden',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    padding: 0
+                }} onClick={(e) => e.stopPropagation()}>
+                    <div style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        padding: '1.5rem',
+                        borderBottom: '1px solid #e2e8f0',
+                        backgroundColor: 'white'
+                    }}>
+                        <h2 style={{ margin: 0, fontSize: '1.25rem' }}>Upload Document</h2>
+                        <div style={{ display: 'flex', gap: '1rem' }}>
+                            {/* RESUME MODE: Show Continue if we are in waiting state (Have docID, and either dictionary or triples) */}
+                            {resumedDocId && (
+                                <button
+                                    className="btn btn-primary"
+                                    onClick={handleContinue}
+                                    disabled={isUploading || isExtracting || isStepRunning}
+                                >
+                                    Continue
+                                </button>
                             )}
+
+                            {/* STANDARD MODE: Show Step Run & Batch Run (Upload) - Only if NOT resuming */}
+                            {!resumedDocId && (
+                                <>
+                                    {isGraphEnabled && (
+                                        <button
+                                            className="btn"
+                                            onClick={handleStepRun}
+                                            disabled={(!file && !resumedDocId) || isUploading || isExtracting || isStepRunning}
+                                            style={{
+                                                border: '1px solid #3b82f6',
+                                                color: '#3b82f6',
+                                                background: 'white'
+                                            }}
+                                        >
+                                            {isStepRunning ? 'Processing Step Run...' : 'Step Run'}
+                                        </button>
+                                    )}
+
+                                    <button
+                                        className="btn btn-primary"
+                                        onClick={handleUpload}
+                                        disabled={(!file && !resumedDocId) || isUploading || isExtracting || isStepRunning}
+                                    >
+                                        {isUploading ? 'Uploading...' : 'Batch Run'}
+                                    </button>
+                                </>
+                            )}
+                            <button className="btn" onClick={onClose} disabled={isUploading || isExtracting || isStepRunning}>Cancel</button>
                         </div>
                     </div>
 
-                    {/* Chunking Strategy Section */}
-                    <div style={{ marginBottom: '2rem' }}>
-                        <label style={{ display: 'block', marginBottom: '0.8rem', fontWeight: 600, color: '#334155' }}>Chunking Strategy</label>
-
-                        <div style={{ marginBottom: '1rem' }}>
-                            <select
-                                className="input"
-                                value={strategy}
-                                onChange={(e) => setStrategy(e.target.value)}
+                    <div style={{
+                        padding: '1.5rem',
+                        overflowY: 'auto',
+                        flex: 1
+                    }}>
+                        <div style={{ marginBottom: '2rem' }}>
+                            <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 500 }}>Select File</label>
+                            <div
                                 style={{
-                                    width: '100%',
-                                    padding: '0.75rem',
+                                    border: '2px dashed var(--border)',
                                     borderRadius: '8px',
-                                    border: '1px solid #e2e8f0',
-                                    backgroundColor: '#fff',
-                                    fontSize: '0.95rem',
-                                    color: '#1e293b',
-                                    cursor: 'pointer'
+                                    padding: '2rem',
+                                    textAlign: 'center',
+                                    cursor: 'pointer',
+                                    background: '#fafafa',
+                                    opacity: resumedDocId ? 0.6 : 1,
+                                    pointerEvents: resumedDocId ? 'none' : 'auto'
                                 }}
+                                onClick={() => fileInputRef.current?.click()}
                             >
-                                {[
-                                    { id: 'fixed_size', name: 'Fixed Size (Standard)' },
-                                    { id: 'sliding_window', name: 'Sliding Window (Contextual)' },
-                                    { id: 'hierarchical', name: 'Hierarchical (Parent-Child)' },
-                                    { id: 'semantic', name: 'Semantic (Meaning-based)' },
-                                    { id: 'markdown', name: 'Markdown (Structure-based)' },
-                                    { id: 'hybrid', name: 'Hybrid (Markdown + Fixed)' }
-                                ]
-                                    .filter(s => !(isGraphEnabled && s.id === 'semantic'))
-                                    .map(s => (
-                                        <option key={s.id} value={s.id}>{s.name}</option>
-                                    ))}
-                            </select>
-                            <div style={{ fontSize: '0.8rem', color: '#64748b', marginTop: '0.5rem', paddingLeft: '0.2rem' }}>
-                                {strategy === 'fixed_size' && "Standard fixed-length chunks. Best for general use."}
-                                {strategy === 'sliding_window' && "Captures surrounding context for each chunk."}
-                                {strategy === 'hierarchical' && "Creates parent-child structure for detailed retrieval."}
-                                {strategy === 'semantic' && "Splits text based on semantic meaning changes."}
-                                {strategy === 'markdown' && "Splits based on document headers (#, ##)."}
-                                {strategy === 'hybrid' && "Combines structural splitting with size limits."}
+                                <input
+                                    type="file"
+                                    ref={fileInputRef}
+                                    style={{ display: 'none' }}
+                                    onChange={(e) => {
+                                        handleFileChange(e);
+                                        if (!resumedDocId) {
+                                            setIsEntityExtracted(false);
+                                            setResumedDocId(null);
+                                            setDictionaryData(null);
+                                            setPreviewData(null);
+                                        }
+                                    }}
+                                    accept=".txt,.pdf,.md"
+                                    disabled={!!resumedDocId}
+                                />
+                                {file ? (
+                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', color: 'var(--primary)' }}>
+                                        <FileText size={24} />
+                                        <span style={{ fontWeight: 500 }}>{file.name}</span>
+                                    </div>
+                                ) : (
+                                    <div style={{ color: 'var(--text-secondary)' }}>
+                                        {resumedDocId ? (
+                                            <div style={{ color: 'var(--primary)', fontWeight: 600 }}>
+                                                Resuming Document Processing... (File on server)
+                                            </div>
+                                        ) : (
+                                            <>
+                                                <Upload size={32} style={{ marginBottom: '0.5rem' }} />
+                                                <p style={{ margin: 0 }}>Click to upload PDF, TXT, or MD</p>
+                                            </>
+                                        )}
+                                    </div>
+                                )}
                             </div>
                         </div>
 
-                        {/* Configuration Panel for Selected Strategy */}
-                        <div style={{ padding: '1.25rem', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px' }}>
-                            {strategy === 'fixed_size' && (
-                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-                                    <div>
-                                        <LabelWithTooltip label="Chunk Size" tooltip="Characters per chunk" />
-                                        <input type="number" className="input" value={chunkingConfig.chunk_size} onChange={(e) => setChunkingConfig({ ...chunkingConfig, chunk_size: parseInt(e.target.value) })} />
-                                    </div>
-                                    <div>
-                                        <LabelWithTooltip label="Overlap" tooltip="Character overlap" />
-                                        <input type="number" className="input" value={chunkingConfig.chunk_overlap} onChange={(e) => setChunkingConfig({ ...chunkingConfig, chunk_overlap: parseInt(e.target.value) })} />
-                                    </div>
-                                </div>
-                            )}
-                            {strategy === 'sliding_window' && (
-                                <div>
-                                    <LabelWithTooltip label="Window Size" tooltip="Number of sentences around" />
-                                    <input type="number" className="input" value={chunkingConfig.window_size} onChange={(e) => setChunkingConfig({ ...chunkingConfig, window_size: parseInt(e.target.value) })} />
-                                </div>
-                            )}
-                            {strategy === 'hierarchical' && (
-                                <div>
-                                    <LabelWithTooltip label="Levels (Large->Small)" tooltip="e.g., 2048, 512, 128" />
-                                    <div style={{ display: 'flex', gap: '0.5rem' }}>
-                                        {chunkingConfig.chunk_sizes.map((size, idx) => (
-                                            <input key={idx} type="number" className="input" value={size}
-                                                onChange={(e) => {
-                                                    const newSizes = [...chunkingConfig.chunk_sizes];
-                                                    newSizes[idx] = parseInt(e.target.value);
-                                                    setChunkingConfig({ ...chunkingConfig, chunk_sizes: newSizes });
-                                                }} />
-                                        ))}
-                                    </div>
-                                </div>
-                            )}
-                            {strategy === 'semantic' && (
-                                <div>
-                                    <LabelWithTooltip label="Breakpoint Percentile" tooltip="Threshold for splitting (50-99)" />
-                                    <input
-                                        type="number" className="input"
-                                        value={chunkingConfig.breakpoint_threshold}
-                                        onChange={(e) => setChunkingConfig({ ...chunkingConfig, breakpoint_threshold: parseInt(e.target.value) })}
-                                        min={50} max={99}
-                                    />
-                                </div>
-                            )}
-                            {(strategy === 'markdown' || strategy === 'hybrid') && (
-                                <div style={{ fontSize: '0.85rem', color: '#64748b' }}>
-                                    Automatically splits by document headers (#, ##).
-                                    {strategy === 'hybrid' && " Fallback to fixed size for large sections."}
-                                </div>
-                            )}
-                        </div>
-                    </div>
+                        {/* Chunking Strategy Section */}
+                        <div style={{ marginBottom: '2rem' }}>
+                            <label style={{ display: 'block', marginBottom: '0.8rem', fontWeight: 600, color: '#334155' }}>Chunking Strategy</label>
 
-                    {isGraphEnabled && (
-                        <GraphExtractionSettings
-                            graphParams={graphParams}
-                            onParamsChange={setGraphParams}
-                            onManageExamples={() => setShowExampleModal(true)}
-                            onEditPrompt={() => setShowPromptModal(true)}
-                            showEntitySample={true}
-                        />
-                    )}
-
-                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '1rem' }}>
-                        <button className="btn" onClick={onClose} disabled={isUploading || isExtracting || isStepRunning}>Cancel</button>
-
-                        {/* RESUME MODE: Show Continue if we are in waiting state (Have docID, and either dictionary or triples) */}
-                        {resumedDocId && (
-                            <button
-                                className="btn btn-primary"
-                                onClick={handleContinue}
-                                disabled={isUploading || isExtracting || isStepRunning}
-                            >
-                                Continue
-                            </button>
-                        )}
-
-                        {/* STANDARD MODE: Show Step Run & Batch Run (Upload) - Only if NOT resuming */}
-                        {!resumedDocId && (
-                            <>
-                                {isGraphEnabled && (
-                                    <button
-                                        className="btn"
-                                        onClick={handleStepRun}
-                                        disabled={(!file && !resumedDocId) || isUploading || isExtracting || isStepRunning}
-                                        style={{
-                                            border: '1px solid #3b82f6',
-                                            color: '#3b82f6',
-                                            background: 'white'
-                                        }}
-                                    >
-                                        {isStepRunning ? 'Processing Step Run...' : 'Step Run'}
-                                    </button>
-                                )}
-
-                                <button
-                                    className="btn btn-primary"
-                                    onClick={handleUpload}
-                                    disabled={(!file && !resumedDocId) || isUploading || isExtracting || isStepRunning}
+                            <div style={{ marginBottom: '1rem' }}>
+                                <select
+                                    className="input"
+                                    value={strategy}
+                                    onChange={(e) => setStrategy(e.target.value)}
+                                    style={{
+                                        width: '100%',
+                                        padding: '0.75rem',
+                                        borderRadius: '8px',
+                                        border: '1px solid #e2e8f0',
+                                        backgroundColor: '#fff',
+                                        fontSize: '0.95rem',
+                                        color: '#1e293b',
+                                        cursor: 'pointer'
+                                    }}
                                 >
-                                    {isUploading ? 'Uploading...' : 'Batch Run'}
-                                </button>
-                            </>
+                                    {[
+                                        { id: 'fixed_size', name: 'Fixed Size (Standard)' },
+                                        { id: 'sliding_window', name: 'Sliding Window (Contextual)' },
+                                        { id: 'hierarchical', name: 'Hierarchical (Parent-Child)' },
+                                        { id: 'semantic', name: 'Semantic (Meaning-based)' },
+                                        { id: 'markdown', name: 'Markdown (Structure-based)' },
+                                        { id: 'hybrid', name: 'Hybrid (Markdown + Fixed)' }
+                                    ]
+                                        .filter(s => !(isGraphEnabled && s.id === 'semantic'))
+                                        .map(s => (
+                                            <option key={s.id} value={s.id}>{s.name}</option>
+                                        ))}
+                                </select>
+                                <div style={{ fontSize: '0.8rem', color: '#64748b', marginTop: '0.5rem', paddingLeft: '0.2rem' }}>
+                                    {strategy === 'fixed_size' && "Standard fixed-length chunks. Best for general use."}
+                                    {strategy === 'sliding_window' && "Captures surrounding context for each chunk."}
+                                    {strategy === 'hierarchical' && "Creates parent-child structure for detailed retrieval."}
+                                    {strategy === 'semantic' && "Splits text based on semantic meaning changes."}
+                                    {strategy === 'markdown' && "Splits based on document headers (#, ##)."}
+                                    {strategy === 'hybrid' && "Combines structural splitting with size limits."}
+                                </div>
+                            </div>
+
+                            {/* Configuration Panel for Selected Strategy */}
+                            <div style={{ padding: '1.25rem', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px' }}>
+                                {strategy === 'fixed_size' && (
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                                        <div>
+                                            <LabelWithTooltip label="Chunk Size" tooltip="Characters per chunk" />
+                                            <input type="number" className="input" value={chunkingConfig.chunk_size} onChange={(e) => setChunkingConfig({ ...chunkingConfig, chunk_size: parseInt(e.target.value) })} />
+                                        </div>
+                                        <div>
+                                            <LabelWithTooltip label="Overlap" tooltip="Character overlap" />
+                                            <input type="number" className="input" value={chunkingConfig.chunk_overlap} onChange={(e) => setChunkingConfig({ ...chunkingConfig, chunk_overlap: parseInt(e.target.value) })} />
+                                        </div>
+                                    </div>
+                                )}
+                                {strategy === 'sliding_window' && (
+                                    <div>
+                                        <LabelWithTooltip label="Window Size" tooltip="Number of sentences around" />
+                                        <input type="number" className="input" value={chunkingConfig.window_size} onChange={(e) => setChunkingConfig({ ...chunkingConfig, window_size: parseInt(e.target.value) })} />
+                                    </div>
+                                )}
+                                {strategy === 'hierarchical' && (
+                                    <div>
+                                        <LabelWithTooltip label="Levels (Large->Small)" tooltip="e.g., 2048, 512, 128" />
+                                        <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                            {chunkingConfig.chunk_sizes.map((size, idx) => (
+                                                <input key={idx} type="number" className="input" value={size}
+                                                    onChange={(e) => {
+                                                        const newSizes = [...chunkingConfig.chunk_sizes];
+                                                        newSizes[idx] = parseInt(e.target.value);
+                                                        setChunkingConfig({ ...chunkingConfig, chunk_sizes: newSizes });
+                                                    }} />
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+                                {strategy === 'semantic' && (
+                                    <div>
+                                        <LabelWithTooltip label="Breakpoint Percentile" tooltip="Threshold for splitting (50-99)" />
+                                        <input
+                                            type="number" className="input"
+                                            value={chunkingConfig.breakpoint_threshold}
+                                            onChange={(e) => setChunkingConfig({ ...chunkingConfig, breakpoint_threshold: parseInt(e.target.value) })}
+                                            min={50} max={99}
+                                        />
+                                    </div>
+                                )}
+                                {(strategy === 'markdown' || strategy === 'hybrid') && (
+                                    <div style={{ fontSize: '0.85rem', color: '#64748b' }}>
+                                        Automatically splits by document headers (#, ##).
+                                        {strategy === 'hybrid' && " Fallback to fixed size for large sections."}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+
+                        {isGraphEnabled && (
+                            <GraphExtractionSettings
+                                graphParams={graphParams}
+                                onParamsChange={setGraphParams}
+                                onManageExamples={() => setShowExampleModal(true)}
+                                onEditPrompt={() => setShowPromptModal(true)}
+                                showEntitySample={true}
+                            />
                         )}
+
                     </div>
+
+
                 </div>
             </div>
 
@@ -835,27 +855,31 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                 type={messageDialog.type}
                 onClose={() => setMessageDialog({ ...messageDialog, isOpen: false })}
             />
-            {previewData && (
-                <ExtractionPreviewModal
-                    isOpen={showPreviewModal}
-                    onClose={() => setShowPreviewModal(false)}
-                    previewId={previewData.preview_id}
-                    triples={previewData.triples}
-                    nodeCount={previewData.node_count}
-                    isLoading={isExtracting}
-                    onConfirm={handlePreviewConfirm}
-                    onDiscard={handlePreviewDiscard}
-                />
-            )}
-            {dictionaryData && (
-                <EntityDictionaryModal
-                    isOpen={showDictionaryModal}
-                    onClose={() => setShowDictionaryModal(false)}
-                    dictionary={dictionaryData.dictionary}
-                    entityCount={dictionaryData.entity_count}
-                    isLoading={isExtracting}
-                />
-            )}
+            {
+                previewData && (
+                    <ExtractionPreviewModal
+                        isOpen={showPreviewModal}
+                        onClose={() => setShowPreviewModal(false)}
+                        previewId={previewData.preview_id}
+                        triples={previewData.triples}
+                        nodeCount={previewData.node_count}
+                        isLoading={isExtracting}
+                        onConfirm={handlePreviewConfirm}
+                        onDiscard={handlePreviewDiscard}
+                    />
+                )
+            }
+            {
+                dictionaryData && (
+                    <EntityDictionaryModal
+                        isOpen={showDictionaryModal}
+                        onClose={() => setShowDictionaryModal(false)}
+                        dictionary={dictionaryData.dictionary}
+                        entityCount={dictionaryData.entity_count}
+                        isLoading={isExtracting}
+                    />
+                )
+            }
         </>
     );
 }
