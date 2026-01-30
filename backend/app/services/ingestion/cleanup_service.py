@@ -41,9 +41,13 @@ class CleanupService:
             # 1. Fetch Chunk IDs from Milvus (Source of Truth for Doc-Chunk mapping)
             chunk_ids = []
             try:
-                from pymilvus import utility
-                collection = create_collection(kb_id)
-                collection.load()
+                from pymilvus import Collection, utility
+                collection_name = f"kb_{kb_id.replace('-', '_')}"
+                collection = Collection(collection_name)
+                try:
+                    collection.load()
+                except:
+                    pass  # Already loaded
                 
                 # Query all chunks for this doc
                 expr = f'doc_id == "{doc_id}"'
@@ -195,8 +199,13 @@ class CleanupService:
             # 4. Milvus Cleanup (Vector)
             try:
                 if not collection: # In case connection failed in Step 1
-                    collection = create_collection(kb_id)
-                    collection.load()
+                    from pymilvus import Collection
+                    collection_name = f"kb_{kb_id.replace('-', '_')}"
+                    collection = Collection(collection_name)
+                    try:
+                        collection.load()
+                    except:
+                        pass  # Already loaded or doesn't exist
                 
                 expr = f'doc_id == "{doc_id}"'
                 collection.delete(expr)
@@ -225,12 +234,41 @@ class CleanupService:
                     
                 from app.core.config import settings
                 import glob
-                pattern = os.path.join(settings.SHARED_STORAGE_PATH, f"{doc_id}_*")
-                for f in glob.glob(pattern):
-                    try:
-                        os.remove(f)
-                    except:
-                        pass
+                
+                # Delete doc-specific files in KB folder
+                kb_folder = os.path.join(settings.SHARED_STORAGE_PATH, kb_id)
+                if os.path.exists(kb_folder):
+                    # Delete {doc_id}_* files in KB folder
+                    pattern = os.path.join(kb_folder, f"{doc_id}_*")
+                    for f in glob.glob(pattern):
+                        try:
+                            os.remove(f)
+                            print(f"[Cleanup] Deleted file: {f}")
+                        except Exception as e:
+                            print(f"[Cleanup] Failed to delete {f}: {e}")
+                    
+                    # Clean up .temp subfolder for this doc
+                    temp_folder = os.path.join(kb_folder, ".temp", doc_id)
+                    if os.path.exists(temp_folder):
+                        shutil.rmtree(temp_folder)
+                        print(f"[Cleanup] Deleted .temp folder: {temp_folder}")
+                    
+                    # Check if KB folder is empty (except .temp and .DS_Store)
+                    remaining_items = []
+                    for item in os.listdir(kb_folder):
+                        if item not in ['.temp', '.DS_Store']:
+                            remaining_items.append(item)
+                    
+                    # If no meaningful files left, check .temp too
+                    if not remaining_items:
+                        temp_path = os.path.join(kb_folder, '.temp')
+                        if os.path.exists(temp_path):
+                            temp_items = [i for i in os.listdir(temp_path) if i != '.DS_Store']
+                            if not temp_items:
+                                # KB folder is effectively empty, clean it up
+                                shutil.rmtree(kb_folder)
+                                print(f"[Cleanup] Deleted empty KB folder: {kb_folder}")
+                
             except Exception as e:
                 print(f"[Cleanup] Filesystem cleanup warning: {e}")
     
@@ -250,6 +288,23 @@ class CleanupService:
                 print(f"[Cleanup] ✅ Deleted Document record for {doc_id}")
             else:
                 print(f"[Cleanup] ⚠️ Document {doc_id} not found/already deleted.")
+            
+            # 5. Check if this was the last document in KB - cleanup empty collection
+            try:
+                remaining_docs = await Document.find(Document.kb_id == kb_id).count()
+                if remaining_docs == 0:
+                    print(f"[Cleanup] No more documents in KB {kb_id}, cleaning up empty collection...")
+                    from pymilvus import utility
+                    from app.core.milvus import connect_milvus
+                    connect_milvus()
+                    collection_name = f"kb_{kb_id.replace('-', '_')}"
+                    if utility.has_collection(collection_name):
+                        from pymilvus import Collection
+                        col = Collection(collection_name)
+                        col.drop()
+                        print(f"[Cleanup] ✅ Dropped empty Milvus collection: {collection_name}")
+            except Exception as e:
+                print(f"[Cleanup] Warning - failed to check/cleanup empty collection: {e}")
             
             # Delete Related Mappings (triple_chunk_mappings)
             try:
@@ -316,8 +371,13 @@ class CleanupService:
 
         # 3. Check Milvus
         try:
-            collection = create_collection(kb_id)
-            collection.load()
+            from pymilvus import Collection
+            collection_name = f"kb_{kb_id.replace('-', '_')}"
+            collection = Collection(collection_name)
+            try:
+                collection.load()
+            except:
+                pass
             res = collection.query(f'doc_id == "{doc_id}"', output_fields=["chunk_id"], limit=1)
             if res:
                 garbage_found.append("Milvus Vectors")

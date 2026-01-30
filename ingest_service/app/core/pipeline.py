@@ -227,20 +227,26 @@ class IngestPipeline:
                         prompt = custom_prompt.replace("{text}", text[:2000]).replace("{examples}", examples_prompt_part + dictionary_text)
                     else:
                         prompt = f"""Extract primary entities and their relationships from the following text.
-Format: (Subject, Relation, Object)
-Extract up to 5 triplets.
+Format:
+- ALWAYS return a list of Triplets.
+- Use 'Subject|Relation|Object' format (Pipe separated).
+- NO conversational text. NO intro/outro. Only the data.
+- Extract up to 5 triplets.
+
 {examples_prompt_part}
 {dictionary_text}
+
 Text:
 {text[:2000]}
 
-Triplets (one per line, format: Subject|Relation|Object):"""
+Triplets:"""
                     
                     if (idx + 1) % 5 == 0 or idx == 0:
                         print(f"[Pipeline] Processing chunk {idx+1}/{len(nodes)}...")
                         
                     response = await self.llm.acomplete(prompt)
                     response_text = response.text.strip()
+                    print(f"[Pipeline] Raw Extraction Response (Node {idx}): {response_text[:300]}...") # Debug log
                     
                     node_triples = []
                     parsed_json = self._try_parse_json(response_text)
@@ -268,16 +274,26 @@ Triplets (one per line, format: Subject|Relation|Object):"""
                     else:
                         for line in response_text.split('\n'):
                             line = line.strip()
+                            # Strip markdown bullets
+                            if line.startswith("- "): line = line[2:]
+                            elif line.startswith("* "): line = line[2:]
+                            
                             if '|' in line:
                                 parts = line.split('|')
                                 if len(parts) >= 3:
-                                    node_triples.append({
-                                        "subject": parts[0].strip(),
-                                        "predicate": parts[1].strip(),
-                                        "object": parts[2].strip(),
-                                        "source_node_id": node.node_id,
-                                        "confidence": 0.7,
-                                    })
+                                    s = parts[0].strip()
+                                    p = parts[1].strip()
+                                    o = parts[2].strip()
+                                    
+                                    # Basic validation
+                                    if s and p and o and len(s) < 50 and len(p) < 50: 
+                                        node_triples.append({
+                                            "subject": s,
+                                            "predicate": p,
+                                            "object": o,
+                                            "source_node_id": node.node_id,
+                                            "confidence": 0.7,
+                                        })
                     return node_triples
                 except Exception as e:
                     print(f"Error extracting from node {idx}: {e}")

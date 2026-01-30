@@ -239,6 +239,11 @@ async def process_ingest_job(job_id: str, request: IngestRequest):
         
         # Graph: Save triples (Neo4j or Fuseki) - Optional storage
         if result["triples"]:
+            # ✅ Save to File System for Frontend / Backend access
+            from app.utils.temp_storage import temp_storage
+            await temp_storage.save_triples(request.kb_id, request.doc_id, result["triples"])
+            print(f"[IngestJob] Saved {len(result['triples'])} triples to file system.")
+
             if request.graph_store == "fuseki":
                 print(f"[IngestJob] Saving to Fuseki for doc {request.doc_id}...")
                 await fuseki_connector.insert_triples(

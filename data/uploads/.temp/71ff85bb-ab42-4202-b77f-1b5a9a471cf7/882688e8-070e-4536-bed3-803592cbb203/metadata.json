@@ -1,8 +1,0 @@
-{
-  "created_at": "2026-01-28T05:30:25.020851",
-  "preview_id": "562a3b8a-9fbd-43a3-b96d-c5d588372521",
-  "node_count": 4,
-  "triple_count": 20,
-  "graph_store": "neo4j",
-  "generate_inverse_relations": true
-}

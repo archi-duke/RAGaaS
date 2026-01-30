@@ -28,7 +28,7 @@ export const kbApi = {
     getExtractionPrompt: () => api.get('/knowledge-bases/extraction-prompt/content'),
     saveExtractionPrompt: (content: string) => api.post('/knowledge-bases/extraction-prompt/save', { content }),
     getQueryPrompt: (type: 'ontology_plus' | 'ontology_minus' | 'neo4j' = 'ontology_minus') => api.get('/knowledge-bases/query-prompt/content', { params: { type } }),
-    getTriples: (kbId: string, backend: string, skip: number = 0, limit: number = 50, sort?: any, filter?: any) => api.get(`/retrieval/graph/triples/${kbId}`, { params: { backend, skip, limit, include_chunk_text: false, sort: sort ? JSON.stringify(sort) : undefined, filter: filter ? JSON.stringify(filter) : undefined } }),
+    getTriples: (kbId: string, backend: string, skip: number = 0, limit: number = 50, sort?: any, filter?: any) => api.get(`/graph/triples/${kbId}`, { params: { backend, skip, limit, include_chunk_text: false, sort: sort ? JSON.stringify(sort) : undefined, filter: filter ? JSON.stringify(filter) : undefined } }),
     getChunk: (kbId: string, chunkId: string) => api.get(`/knowledge-bases/${kbId}/chunks/${chunkId}`),
 };
 

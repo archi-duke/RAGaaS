@@ -316,13 +316,20 @@ async def delete_knowledge_base(kb_id: str):
 
     # 7. Delete shared storage files for this KB
     try:
-        import glob
+        import shutil
         from app.core.config import settings
-        upload_path = settings.SHARED_STORAGE_PATH
-        # Find all files that might belong to this KB's documents
-        # Pattern: {doc_id}_{filename} - need doc IDs but we already deleted records
-        # Alternative: just log, or use a naming convention with kb_id
-        print(f"[KB Delete] Shared storage cleanup - files were deleted with documents")
+        kb_folder = os.path.join(settings.SHARED_STORAGE_PATH, kb_id)
+        if os.path.exists(kb_folder):
+            shutil.rmtree(kb_folder)
+            print(f"[KB Delete] ✅ Deleted KB folder: {kb_folder}")
+        else:
+            print(f"[KB Delete] KB folder not found: {kb_folder}")
+            
+        # Also clean up .temp folder for this KB
+        temp_kb_folder = os.path.join(settings.SHARED_STORAGE_PATH, ".temp", kb_id)
+        if os.path.exists(temp_kb_folder):
+            shutil.rmtree(temp_kb_folder)
+            print(f"[KB Delete] ✅ Deleted .temp KB folder: {temp_kb_folder}")
     except Exception as e:
         print(f"[KB Delete] Shared storage cleanup error: {e}")
 

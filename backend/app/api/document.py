@@ -77,19 +77,25 @@ async def upload_document(
     final_config = kb.chunking_config.copy() if kb.chunking_config else {}
     if chunking_config:
         try:
-            final_config.update(json.loads(chunking_config))
-        except:
+            parsed = json.loads(chunking_config)
+            final_config.update(parsed)
+            # Flatten nested chunking_config (frontend may send chunk_size inside chunking_config)
+            nested = parsed.get("chunking_config") or {}
+            for k, v in nested.items():
+                if k not in final_config or final_config.get(k) is None:
+                    final_config[k] = v
+        except Exception:
             logger.error("Failed to parse chunking_config override")
 
     # Build Pipeline Configs
     chunking_cfg = {
         "strategy": final_config.get("chunking_strategy") or final_config.get("strategy") or kb.chunking_strategy or "fixed_size",
-        "chunk_size": final_config.get("chunk_size", 300), # Default 300 per optimization
-        "chunk_overlap": final_config.get("chunk_overlap", 20),
-        "window_size": final_config.get("window_size", 3),
-        "chunk_sizes": final_config.get("chunk_sizes", [2048, 512, 128]),
-        "buffer_size": final_config.get("buffer_size", 1),
-        "breakpoint_threshold": final_config.get("breakpoint_threshold", 95),
+        "chunk_size": final_config.get("chunk_size") or 300,
+        "chunk_overlap": final_config.get("chunk_overlap") or 20,
+        "window_size": final_config.get("window_size") or 3,
+        "chunk_sizes": final_config.get("chunk_sizes") or [2048, 512, 128],
+        "buffer_size": final_config.get("buffer_size") or 1,
+        "breakpoint_threshold": final_config.get("breakpoint_threshold") or 95,
     }
     
     graph_config = {
@@ -132,12 +138,15 @@ async def upload_document(
             logger.error("Failed to parse entity_dictionary JSON")
 
     # 6. Call Ingest Service (Async Task)
+    callback_base = os.getenv("CALLBACK_BASE_URL", "http://127.0.0.1:8000")
+    callback_url = f"{callback_base.rstrip('/')}/api/knowledge-bases/ingest/callback"
+
     async def call_ingest_service():
         try:
             from app.services.ingestion.ingest_client import ingest_client
             await ingest_client.create_ingest_job(
                 kb_id=kb_id,
-                doc_id=doc.id,
+                doc_id=str(doc.id),
                 file_path=file_path,
                 chunking_config=chunking_cfg,
                 graph_config=graph_config,
@@ -149,8 +158,9 @@ async def upload_document(
                 normalization_algorithm=normalization_algorithm,
                 normalization_threshold=normalization_threshold,
                 preview_only=preview_only,
-                callback_url="http://127.0.0.1:8000/api/knowledge-bases/ingest/callback",
-                entity_dictionary=dict_data
+                callback_url=callback_url,
+                entity_dictionary=dict_data,
+                sampling_size=doc.max_sample_size,
             )
         except Exception as e:
             logger.error(f"[Ingest] Service call failed: {e}")
@@ -220,6 +230,30 @@ async def ingest_callback(payload: IngestCallback):
     if payload.status == "completed":
         doc.status = DocumentStatus.COMPLETED.value
         doc.pipeline_status = "COMPLETED"
+        
+        # ✅ Update counts from result
+        if payload.result:
+            doc.chunk_count = payload.result.get("node_count", 0)
+            doc.triple_count = payload.result.get("triple_count", 0)
+            
+            # Read entity_count from entity_dictionary.json (Raw Dict)
+            try:
+                import json
+                temp_dict_path = os.path.join(
+                    settings.SHARED_STORAGE_PATH, 
+                    payload.kb_id, 
+                    f"{payload.doc_id}_dictionary.json"
+                )
+                if os.path.exists(temp_dict_path):
+                    with open(temp_dict_path, 'r', encoding='utf-8') as f:
+                        entity_data = json.load(f)
+                        if isinstance(entity_data, dict):
+                            doc.entity_count = len(entity_data)
+                        else:
+                            doc.entity_count = 0
+            except Exception as e:
+                logger.warning(f"Failed to read entity_count: {e}")
+                
     elif payload.status == "failed":
         doc.status = DocumentStatus.ERROR.value
     else:
@@ -235,7 +269,10 @@ async def ingest_callback(payload: IngestCallback):
         "type": "document_status_update",
         "doc_id": payload.doc_id,
         "status": doc.status,
-        "pipeline_status": doc.pipeline_status
+        "pipeline_status": doc.pipeline_status,
+        "chunk_count": doc.chunk_count,
+        "entity_count": doc.entity_count,
+        "triple_count": doc.triple_count
     })
 
     # Cleanup source file if completed
