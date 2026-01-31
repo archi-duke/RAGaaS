@@ -40,7 +40,7 @@ app.include_router(document.router, prefix="/api/knowledge-bases", tags=["Docume
 app.include_router(retrieval.router, prefix="/api/knowledge-bases", tags=["Retrieval"])
 
 from app.api import graph_viewer
-app.include_router(graph_viewer.router, prefix="/api/retrieval/graph", tags=["Graph Viewer"])
+app.include_router(graph_viewer.router, prefix="/api/graph", tags=["Graph Viewer"])
 
 @app.websocket("/api/ws/{kb_id}")
 async def websocket_endpoint(websocket: WebSocket, kb_id: str):
