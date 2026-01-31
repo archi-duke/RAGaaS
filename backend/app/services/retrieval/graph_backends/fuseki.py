@@ -363,7 +363,15 @@ class FusekiBackend(GraphBackend):
                 skip_llm_generation = False  # Fast Path 성공 시 True로 변경됨
                 entity_centric_enabled = kwargs.get("enable_entity_centric_schema", True)  # 기본 활성화
                 
-                if entity_centric_enabled and query_text:
+                # [OPTION 3] Multi-hop Pattern Detection - Skip Fast Path if multi-hop detected
+                is_multihop_pattern = False
+                if query_text and "의" in query_text:
+                    count_ui = query_text.count("의")
+                    if count_ui >= 2:
+                        is_multihop_pattern = True
+                        log_trace(f"[Fuseki] 🔄 Multi-hop pattern detected (의 x{count_ui}). Skipping Fast Path, delegating to LLM.")
+                
+                if entity_centric_enabled and query_text and not is_multihop_pattern:
                     log_trace("[Fuseki] Entity-Centric Schema: ENABLED")
                     
                     # 1. 질문에서 엔티티 추출
@@ -695,22 +703,28 @@ class FusekiBackend(GraphBackend):
 
                 # LLM 호출 (Fast Path로 이미 답을 찾은 경우 건너뜀)
                 if not skip_llm_generation:
+                    log_trace(f"[Fuseki] Calling LLM SPARQL Generator (skip_llm_generation={skip_llm_generation})")
+                    print(f"[DEBUG] Calling SPARQLGenerator.generate() with inv_mode={inv_mode}", flush=True)
                     gen_result = self.generator.generate(
                         question=query_text,
                         context=f"Entities: {', '.join(entities)}",
                         mode="ontology",
-                        inverse_search_mode=inv_mode,
-                        schema_info=kb_schema,
+                        inverse_relation=inv_mode,
+                        schema_info=schema_info,
                         kb_id=kb_id,
-                        use_dynamic_schema=kwargs.get("use_dynamic_schema", False),
+                        use_dynamic_schema=dynamic_schema_enabled,
                         context_predicates=context_predicates if context_predicates else None
                     )
+                    print(f"[DEBUG] SPARQLGenerator returned: {gen_result}", flush=True)
+                    log_trace(f"[Fuseki] LLM returned: {gen_result}")
                 else:
                     log_trace("[Fuseki] Skipping LLM SPARQL generation (Fast Path already provided results)")
                     gen_result = {"sparql": None}  # LLM 결과 없음을 명시
             
             
                 generated_sparql = gen_result.get("sparql")
+                print(f"[DEBUG] generated_sparql type: {type(generated_sparql)}, value: {generated_sparql[:200] if generated_sparql else None}", flush=True)
+                log_trace(f"[Fuseki] extracted generated_sparql: {generated_sparql}")
             
                 # [NEW] Fast Path 데이터 우선 처리 (LLM 결과와 독립적)
                 if skip_llm_generation and found_triples:
@@ -762,17 +776,20 @@ class FusekiBackend(GraphBackend):
                             "trace_logs": trace_logs
                         }
                 
-                    if generated_sparql:
+            # SPARQL 실행 로직 (Fast Path 밖으로 이동)
+                if generated_sparql:
                         # Prepend schema usage comment for Debug Log
                         if schema_info:
                              generated_sparql = f"# [Used Promoted Ontology Schema]\n{generated_sparql}"
 
                         log_trace(f"[Fuseki] Generated SPARQL:\n{generated_sparql}")
+                        print(f"[DEBUG] Step 1: Generated SPARQL received, length={len(generated_sparql)}", flush=True)
                     
                         # Remove any existing PREFIX declarations from LLM-generated query
                         # to avoid conflicts with our correct prefixes
                         sparql_body = re.sub(r'PREFIX\s+\w+:\s*<[^>]+>\s*', '', generated_sparql, flags=re.IGNORECASE)
                         sparql_body = sparql_body.strip()
+                        print(f"[DEBUG] Step 2: Prefixes removed, body length={len(sparql_body)}", flush=True)
                     
                         # Ensure standard prefixes with correct namespaces
                         # FIX: Must match Doc2Onto's default namespaces (example.org)
@@ -792,22 +809,29 @@ class FusekiBackend(GraphBackend):
                         # This is crucial because Doc2Onto loads data (base.trig) into named graphs
                         if re.search(r'WHERE', sparql_body, re.IGNORECASE):
                             # Simple injection: replace the first 'WHERE' with 'FROM <urn:x-arq:UnionGraph> WHERE'
-                            print("[DEBUG FUSEKI] Injecting UnionGraph...", flush=True)
+                            print("[DEBUG] Step 3: Injecting UnionGraph...", flush=True)
                             sparql_query_content = re.sub(r'WHERE', "FROM <urn:x-arq:UnionGraph>\nWHERE", sparql_body, count=1, flags=re.IGNORECASE)
                         else:
-                            print("[DEBUG FUSEKI] WHERE clause NOT found in query!", flush=True)
+                            print("[DEBUG] Step 3: WHERE clause NOT found in query!", flush=True)
                             sparql_query_content = sparql_body
 
                         full_query = prefixes + sparql_query_content
                     
-                        print(f"[DEBUG FUSEKI] Final Query:\n{full_query}", flush=True)
+                        print(f"[DEBUG] Step 4: Final Query prepared, length={len(full_query)}", flush=True)
+                        print(f"[DEBUG] Step 4: Full Query:\n{full_query}", flush=True)
                         log_trace(f"[Fuseki] Executing SPARQL:\n{full_query}")
                     
                         # Execute
+                        print(f"[DEBUG] Step 5: Calling fuseki_client.query_sparql()...", flush=True)
                         results = fuseki_client.query_sparql(kb_id, full_query)
+                        print(f"[DEBUG] Step 6: Got results from Fuseki", flush=True)
                         bindings = results.get("results", {}).get("bindings", [])
                     
-                        print(f"[DEBUG FUSEKI] Results count: {len(bindings)}", flush=True)
+                        print(f"[DEBUG] Step 7: Bindings count: {len(bindings)}", flush=True)
+                        if len(bindings) > 0:
+                            print(f"[DEBUG] First binding: {bindings[0]}", flush=True)
+                        else:
+                            print(f"[DEBUG] No bindings found. Full results: {results}", flush=True)
                         if bindings:
                              sparql_query = full_query
                          
@@ -1001,7 +1025,11 @@ class FusekiBackend(GraphBackend):
                                 }
                         
             except Exception as e:
+                import traceback
+                error_details = traceback.format_exc()
                 log_trace(f"[Fuseki] Error during SPARQL generation/execution: {e}")
+                log_trace(f"[Fuseki] Full traceback:\n{error_details}")
+                print(f"[Fuseki] ERROR Details:\n{error_details}", flush=True)
                 # Fallback continues below
         
         # [MODIFIED] Fallback Logic Removed
