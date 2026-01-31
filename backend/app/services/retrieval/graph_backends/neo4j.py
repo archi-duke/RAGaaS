@@ -37,40 +37,53 @@ class Neo4jBackend(GraphBackend):
             found_chunk_ids = set()
             skip_llm_generation = False
             
-            # 1. Extract entities from question (with Josa stripping)
-            question_entities = self._extract_entities_from_question(query_text, entities)
-            log_trace(f"[Neo4j] Extracted entities from question: {question_entities}")
+            # [OPTION 3] Multi-hop Pattern Detection - Skip Fast Path if multi-hop detected
+            is_multihop_pattern = False
+            if query_text and "의" in query_text:
+                count_ui = query_text.count("의")
+                if count_ui >= 2:
+                    is_multihop_pattern = True
+                    log_trace(f"[Neo4j] 🔄 Multi-hop pattern detected (의 x{count_ui}). Skipping Fast Path, delegating to LLM.")
+            
+            # 1. Extract entities from question (with Josa stripping) - Skip if multi-hop
+            if not is_multihop_pattern:
+                question_entities = self._extract_entities_from_question(query_text, entities)
+                log_trace(f"[Neo4j] Extracted entities from question: {question_entities}")
+            else:
+                question_entities = []
             
             # 2. Heuristic: Strip Korean particles (조사)
-            try:
-                tokens = query_text.split()
-                for t in tokens:
-                    t_clean = t.rstrip(".,?!")
-                    josas = ["에게", "으로", "에서", "하고", "이나", "이다", "까지", "부터", "은", "는", "이", "가", "을", "를", "의", "와", "과", "로"]
-                    for josa in josas:
-                        if t_clean.endswith(josa) and len(t_clean) > len(josa):
-                            t_clean = t_clean[:-len(josa)]
-                            break
-                    
-                    if t_clean and len(t_clean) > 1 and t_clean not in question_entities:
-                        question_entities.append(t_clean)
-                log_trace(f"[Neo4j] Expanded entities with heuristic: {question_entities}")
-            except Exception as e_heuristic:
-                log_trace(f"[Neo4j] Heuristic entity expansion failed: {e_heuristic}")
+            if not is_multihop_pattern:
+                try:
+                    tokens = query_text.split()
+                    for t in tokens:
+                        t_clean = t.rstrip(".,?!")
+                        josas = ["에게", "으로", "에서", "하고", "이나", "이다", "까지", "부터", "은", "는", "이", "가", "을", "를", "의", "와", "과", "로"]
+                        for josa in josas:
+                            if t_clean.endswith(josa) and len(t_clean) > len(josa):
+                                t_clean = t_clean[:-len(josa)]
+                                break
+                        
+                        if t_clean and len(t_clean) > 1 and t_clean not in question_entities:
+                            question_entities.append(t_clean)
+                    log_trace(f"[Neo4j] Expanded entities with heuristic: {question_entities}")
+                except Exception as e_heuristic:
+                    log_trace(f"[Neo4j] Heuristic entity expansion failed: {e_heuristic}")
 
             # 3. Resolve entities to Neo4j nodes
             resolved_entities = []
-            for entity in question_entities:
-                exists = self._check_entity_exists(kb_id, entity)
-                if exists:
-                    resolved_entities.append(entity)
-                    log_trace(f"[Neo4j] Resolved '{entity}' -> exists in graph")
-                
-                if len(resolved_entities) >= 2:
-                    break
+            if not is_multihop_pattern:
+                for entity in question_entities:
+                    exists = self._check_entity_exists(kb_id, entity)
+                    if exists:
+                        resolved_entities.append(entity)
+                        log_trace(f"[Neo4j] Resolved '{entity}' -> exists in graph")
+                    
+                    if len(resolved_entities) >= 2:
+                        break
             
             # 4. Pattern Classification & Fast Path Execution
-            if resolved_entities:
+            if resolved_entities and not is_multihop_pattern:
                 num_entities = len(resolved_entities)
                 
                 if num_entities == 1:
@@ -318,6 +331,7 @@ class Neo4jBackend(GraphBackend):
             # Determine inverse relation mode
             inv_mode = kwargs.get("inverse_extraction_mode", "auto")
             enable_inverse = kwargs.get("enable_inverse_search", False)
+            dynamic_schema_enabled = kwargs.get("use_dynamic_schema", False)
             
             if not enable_inverse:
                 inv_mode = "none"
@@ -335,8 +349,10 @@ class Neo4jBackend(GraphBackend):
 - 오직 DB에 저장된 방향으로만 검색하세요.
 """
                 custom_prompt = no_inverse_instruction + custom_prompt
-
-            use_dynamic_schema = kwargs.get("use_dynamic_schema", False)
+            
+            # LLM 호출 (상세 로깅)
+            log_trace(f"[Neo4j] Calling LLM Cypher Generator (inv_mode={inv_mode}, dynamic_schema={dynamic_schema_enabled})")
+            print(f"[DEBUG] Calling CypherGenerator.generate() with inv_mode={inv_mode}, dynamic_schema={dynamic_schema_enabled}", flush=True)
             
             gen_result = generator.generate(
                 query_text, 
@@ -344,19 +360,33 @@ class Neo4jBackend(GraphBackend):
                 custom_prompt=custom_prompt if custom_prompt else None,
                 inverse_search_mode=inv_mode,
                 kb_id=kb_id,
-                use_dynamic_schema=use_dynamic_schema
+                use_dynamic_schema=dynamic_schema_enabled
             )
+            
+            print(f"[DEBUG] CypherGenerator returned: {gen_result}", flush=True)
+            log_trace(f"[Neo4j] LLM returned: {gen_result}")
+            
             cypher_query = gen_result.get("cypher")
             thought = gen_result.get("thought")
             
-            log_trace(f"[Neo4j] Generated Cypher: {cypher_query}")
+            print(f"[DEBUG] extracted cypher_query type: {type(cypher_query)}, value: {cypher_query[:200] if cypher_query else None}", flush=True)
+            log_trace(f"[Neo4j] Extracted Cypher query: {cypher_query}")
+            log_trace(f"[Neo4j] Generated Cypher:\n{cypher_query}")
             log_trace(f"[Neo4j] Reason: {thought}")
             
             if not cypher_query:
+                log_trace("[Neo4j] No Cypher query generated. Returning empty results.")
                 return {"chunk_ids": [], "sparql_query": "Generation Failed", "triples": [], "trace_logs": trace_logs}
-                
+            
             # Execute generated query
+            print(f"[DEBUG] Step 1: Cypher query prepared, length={len(cypher_query)}", flush=True)
+            print(f"[DEBUG] Step 2: Executing Cypher on Neo4j...", flush=True)
+            log_trace(f"[Neo4j] Executing Cypher:\n{cypher_query}")
+            
             records = neo4j_client.execute_query(cypher_query, {"kb_id": kb_id})
+            
+            print(f"[DEBUG] Step 3: Got results from Neo4j, record count: {len(records)}", flush=True)
+            log_trace(f"[Neo4j] Query returned {len(records)} records")
             
             discovered_entities = set()
             
@@ -400,10 +430,18 @@ class Neo4jBackend(GraphBackend):
             }
 
         except Exception as e:
-            logger.error(f"Neo4j search failed: {e}")
             import traceback
-            traceback.print_exc()
+            error_details = traceback.format_exc()
+            error_msg = f"Neo4j search failed: {e}"
+            logger.error(error_msg)
+            
+            log_trace(f"[Neo4j] Error during Cypher generation/execution: {e}")
+            log_trace(f"[Neo4j] Full traceback:\n{error_details}")
+            print(f"[Neo4j] ERROR Details:\n{error_details}", flush=True)
+            
             trace_logs.append(f"[Neo4j] Error: {str(e)}")
+            trace_logs.append(f"[Neo4j] Traceback: {error_details}")
+            
             return {"chunk_ids": [], "sparql_query": "Error", "triples": [], "trace_logs": trace_logs}
 
     def _extract_entities_from_question(self, query_text: str, fallback_entities: List[str]) -> List[str]:
