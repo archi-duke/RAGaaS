@@ -128,125 +128,163 @@ async def promote_knowledge_base(
     if payload.get("action") == "revert":
         kb.is_promoted = False
         kb.promotion_metadata = {}
-    else:
-        # 1. Prepare Config
+        await kb.save()
+        return {"id": kb.id, "is_promoted": kb.is_promoted, "promotion_metadata": kb.promotion_metadata}
+    
+    # ========================================
+    # STEP 1: Graph Store → TriG 변환
+    # ========================================
+    try:
+        from app.graph2ontology.loaders.graph_store_exporter import GraphStoreExporter
+        
+        # 출력 디렉토리: data/uploads/{kb_id}/promotion/
+        output_dir = Path(f"data/uploads/{kb_id}/promotion")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        exporter = GraphStoreExporter()
+        
+        # KB의 graph_backend에 따라 적절한 추출기 사용
+        print(f"[Promotion] Step 1: Exporting triples from {kb.graph_backend}...")
+        
+        if kb.graph_backend == 'ontology':
+            # Fuseki에서 추출
+            export_result = await exporter.export_from_fuseki(kb_id, output_dir)
+        elif kb.graph_backend == 'neo4j':
+            # Neo4j에서 추출
+            export_result = await exporter.export_from_neo4j(kb_id, output_dir)
+        else:
+            raise HTTPException(
+                status_code=400, 
+                detail=(
+                    f"KB '{kb.name}' does not have graph backend enabled. "
+                    f"Current backend: {kb.graph_backend}. "
+                    f"Please enable 'ontology' or 'neo4j' backend when creating the KB."
+                )
+            )
+        
+        # 트리플 수 검증
+        if export_result["triple_count"] == 0:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"No triples found in {kb.graph_backend} for KB '{kb.name}'. "
+                    f"Please upload documents with graph extraction enabled first."
+                )
+            )
+        
+        print(f"[Promotion] ✅ Exported {export_result['triple_count']} triples from {export_result['graph_count']} graphs")
+        
+        # ========================================
+        # STEP 2: OntologyPromoter 실행
+        # ========================================
+        print(f"[Promotion] Step 2: Running OntologyPromoter...")
+        
+        from app.graph2ontology.promoters.ontology_promoter import OntologyPromoter
+        
         config = payload.get("config", payload)
         
-        # 2. Run OntologyPromoter
-        try:
-            # Dynamic import to avoid circular issues if any
-            from app.doc2onto_backup.promoters.ontology_promoter import OntologyPromoter
-            import glob
+        promoter = OntologyPromoter(
+            confidence_threshold=config.get("confidence_threshold", 0.6),
+            min_evidence_count=config.get("min_evidence_count", 1),
+            detect_cycles=config.get("detect_cycles", True),
+            remove_hypothetical=config.get("remove_hypothetical", True)
+        )
+        
+        # TriG 파일로 Promotion 실행
+        promo_result = promoter.promote(
+            base_trig=export_result["base_path"],
+            evidence_trig=export_result.get("evidence_path"),
+            output_dir=output_dir,
+            version=config.get("version_tag", "v1.0"),
+            dry_run=False
+        )
+        
+        print(f"[Promotion] ✅ Promotion completed: {promo_result['stats']}")
+        
+        # ========================================
+        # STEP 3: 결과를 Fuseki에 업로드 (ontology backend만)
+        # ========================================
+        if kb.graph_backend == 'ontology':
+            print(f"[Promotion] Step 3: Uploading ontology to Fuseki...")
             
-            # Locate input files
-            # Assuming CWD is backend root
-            base_pattern = f"doc2onto_out/{kb_id}/**/base.trig"
-            evidence_pattern = f"doc2onto_out/{kb_id}/**/evidence.trig"
+            from app.core.fuseki import fuseki_client
+            ontology_graph_uri = f"urn:ontology:{kb_id}"
             
-            base_files = glob.glob(base_pattern, recursive=True)
-            evidence_files = glob.glob(evidence_pattern, recursive=True)
+            # 기존 온톨로지 그래프 삭제
+            print(f"[Promotion] Cleaning up existing ontology graph: {ontology_graph_uri}")
+            fuseki_client.drop_graph(kb_id, ontology_graph_uri)
             
-            if not base_files:
-                raise HTTPException(status_code=400, detail=f"No base.trig files found for KB {kb_id}. Please suggest running ingestion first.")
-                
-            print(f"Found {len(base_files)} base files and {len(evidence_files)} evidence files for promotion.")
-
-            # Create temp dir for merged input and output
-            import tempfile
-            import shutil
-            
-            with tempfile.TemporaryDirectory() as temp_dir:
-                temp_path = Path(temp_dir)
-                merged_base = temp_path / "base_merged.trig"
-                merged_evidence = temp_path / "evidence_merged.trig"
-                output_dir = Path(f"doc2onto_out/{kb_id}/promotion")
-                
-                # Merge Base Files
-                with open(merged_base, 'wb') as outfile:
-                    for filename in base_files:
-                        with open(filename, 'rb') as readfile:
-                            shutil.copyfileobj(readfile, outfile)
-                            outfile.write(b'\n') # Separation
-                            
-                # Merge Evidence Files
-                if evidence_files:
-                    with open(merged_evidence, 'wb') as outfile:
-                        for filename in evidence_files:
-                            with open(filename, 'rb') as readfile:
-                                shutil.copyfileobj(readfile, outfile)
-                                outfile.write(b'\n')
-                
-                # Initialize Promoter
-                promoter = OntologyPromoter(
-                    confidence_threshold=config.get("confidence_threshold", 0.6), # Default lowered for testing
-                    min_evidence_count=config.get("min_evidence_count", 1),
-                    detect_cycles=config.get("detect_cycles", True),
-                    remove_hypothetical=config.get("remove_hypothetical", True)
+            # Schema snapshot 업로드
+            schema_ttl = output_dir / "schema_snapshot.ttl"
+            if schema_ttl.exists():
+                print(f"[Promotion] Uploading schema snapshot...")
+                success = fuseki_client.upload_file(
+                    kb_id, 
+                    str(schema_ttl), 
+                    ontology_graph_uri, 
+                    content_type="text/turtle"
                 )
                 
-                # Run Promotion
-                promo_result = promoter.promote(
-                    base_trig=merged_base,
-                    evidence_trig=merged_evidence if evidence_files else None,
-                    output_dir=output_dir,
-                    version=config.get("version_tag", "v1.0"),
-                    dry_run=False
-                )
-                
-                # 3. Update DB
-                kb.is_promoted = True
-                
-                # Add timestamp
-                from datetime import datetime
-                promo_result["promoted_at"] = datetime.now().isoformat()
-                
-                kb.promotion_metadata = promo_result
-                
-                # 4. Upload to Fuseki (Auto-load)
-                try:
-                    from app.core.fuseki import fuseki_client
-                    ontology_graph_uri = f"urn:ontology:{kb_id}"
+                if success:
+                    print(f"[Promotion] ✅ Schema snapshot uploaded")
                     
-                    print(f"[Promotion] Cleaning up existing schema in: {ontology_graph_uri}")
-                    drop_success = fuseki_client.drop_graph(kb_id, ontology_graph_uri)
-                    
-                    owl_path = promo_result.get("ontology_path")  # relative path
-                    if owl_path:
-                        schema_dir = os.path.dirname(os.path.abspath(owl_path))
-                        schema_ttl = os.path.join(schema_dir, "schema_snapshot.ttl")
+                    # Instance types 추가
+                    instance_ttl = output_dir / "instance_types.ttl"
+                    if instance_ttl.exists():
+                        print(f"[Promotion] Appending instance types...")
+                        dataset_url = fuseki_client._get_dataset_url(kb_id)
+                        url = f"{dataset_url}/data?graph={ontology_graph_uri}"
                         
-                        if os.path.exists(schema_ttl):
-                            print(f"[Promotion] Uploading schema snapshot to Fuseki graph: {ontology_graph_uri}")
-                            success = fuseki_client.upload_file(kb_id, schema_ttl, ontology_graph_uri, content_type="text/turtle")
-                            if success:
-                                print(f"[Promotion] Successfully loaded schema to Fuseki.")
-                                instance_ttl = os.path.join(schema_dir, "instance_types.ttl")
-                                if os.path.exists(instance_ttl):
-                                    print(f"[Promotion] Appending instance types to Fuseki graph...")
-                                    dataset_url = fuseki_client._get_dataset_url(kb_id)
-                                    url = f"{dataset_url}/data?graph={ontology_graph_uri}"
-                                    with open(instance_ttl, "rb") as f:
-                                        data = f.read()
-                                    import requests
-                                    resp = requests.post(
-                                        url,
-                                        data=data,
-                                        headers={"Content-Type": "text/turtle"},
-                                        auth=fuseki_client.auth,
-                                        timeout=60
-                                    )
+                        with open(instance_ttl, "rb") as f:
+                            data = f.read()
+                        
+                        import requests
+                        resp = requests.post(
+                            url,
+                            data=data,
+                            headers={"Content-Type": "text/turtle"},
+                            auth=fuseki_client.auth,
+                            timeout=60
+                        )
+                        
+                        if resp.status_code in [200, 201, 204]:
+                            print(f"[Promotion] ✅ Instance types uploaded")
                         else:
-                             print(f"[Promotion] Schema snapshot not found at {schema_ttl}")
-                except Exception as e_upload:
-                     print(f"[Promotion] Error loading to Fuseki: {e_upload}")
-                
-        except Exception as e:
-            import traceback
-            traceback.print_exc()
-            raise HTTPException(status_code=500, detail=f"Promotion failed: {str(e)}")
-
-    await kb.save()
-    return {"id": kb.id, "is_promoted": kb.is_promoted, "promotion_metadata": kb.promotion_metadata}
+                            print(f"[Promotion] ⚠️ Failed to upload instance types: {resp.status_code}")
+                else:
+                    print(f"[Promotion] ⚠️ Failed to upload schema snapshot")
+            else:
+                print(f"[Promotion] ⚠️ Schema snapshot not found at {schema_ttl}")
+        
+        # ========================================
+        # STEP 4: DB 메타데이터 업데이트
+        # ========================================
+        kb.is_promoted = True
+        
+        from datetime import datetime
+        promo_result["promoted_at"] = datetime.now().isoformat()
+        promo_result["source"] = kb.graph_backend  # 어디서 추출했는지 기록
+        promo_result["source_triple_count"] = export_result["triple_count"]
+        promo_result["source_graph_count"] = export_result["graph_count"]
+        
+        kb.promotion_metadata = promo_result
+        await kb.save()
+        
+        print(f"[Promotion] ✅ KB metadata updated")
+        
+        return {
+            "id": kb.id, 
+            "is_promoted": kb.is_promoted, 
+            "promotion_metadata": kb.promotion_metadata
+        }
+        
+    except HTTPException:
+        # HTTPException은 그대로 전달
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Promotion failed: {str(e)}")
 
 @router.delete("/{kb_id}")
 async def delete_knowledge_base(kb_id: str):

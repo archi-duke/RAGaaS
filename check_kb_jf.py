@@ -13,8 +13,8 @@ from beanie import init_beanie
 from app.core.config import settings
 
 async def main():
-    client = AsyncIOMotorClient(settings.MONGODB_URL)
-    await init_beanie(database=client.get_default_database(), document_models=[KnowledgeBase, Document])
+    client = AsyncIOMotorClient(settings.MONGO_URI)
+    await init_beanie(database=client[settings.MONGO_DB], document_models=[KnowledgeBase, Document])
 
     kb = await KnowledgeBase.find_one({"name": "test jf"})
     if not kb:

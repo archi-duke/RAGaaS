@@ -78,7 +78,6 @@ class IngestRequest(BaseModel):
     normalization_threshold: float = 0.85
     enable_normalization_confirmation: bool = False  # User review before applying
     callback_url: Optional[str] = None
-    preview_only: bool = False  # Skip processing, just save file path (for preview flows)
     sampling_size: Optional[int] = None # For Doc2Graph Dictionary (Phase 1)
     entity_dictionary: Optional[Dict[str, Any]] = None # Pre-computed dictionary
 
@@ -348,20 +347,13 @@ async def create_ingest_job(
         "error": None,
     }
     
-    if request.preview_only:
-        # Skip pipeline execution
-        print(f"[Ingest] Preview Only: Skipping pipeline for {request.file_path}")
-        jobs[job_id]["status"] = JobStatus.COMPLETED
-        jobs[job_id]["progress"] = 100
-        jobs[job_id]["result"] = {"file_path": request.file_path}
-    else:
-        # Add background task
-        background_tasks.add_task(process_ingest_job, job_id, request)
+    # Add background task
+    background_tasks.add_task(process_ingest_job, job_id, request)
     
     return IngestResponse(
         job_id=job_id,
         status=jobs[job_id]["status"],
-        message="Ingest job created successfully" + (" (Preview Mode)" if request.preview_only else ""),
+        message="Ingest job created successfully",
     )
 
 

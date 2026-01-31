@@ -28,9 +28,7 @@ async def upload_document(
     normalization_algorithm: str = Form("embedding"),
     normalization_threshold: float = Form(0.85),
     enable_normalization_confirmation: bool = Form(False),
-    preview_only: bool = Form(False),
     entity_dictionary: str = Form(None), # Optional dictionary JSON string
-    execution_mode: str = Form("batch"), # batch | step
 ):
     # 1. Fetch Knowledge Base
     kb = await KBModel.get(kb_id)
@@ -40,8 +38,8 @@ async def upload_document(
     # 2. Handle Document Record (Check for overwrite)
     existing_doc = await DocModel.find_one(DocModel.kb_id == kb_id, DocModel.filename == file.filename)
     
-    # Init Metadata with Execution Mode
-    pipeline_metadata = {"execution_mode": execution_mode}
+    # Init Metadata
+    pipeline_metadata = {}
 
     if existing_doc:
         logger.info(f"Overwriting document: {file.filename}")
@@ -157,7 +155,6 @@ async def upload_document(
                 enable_entity_normalization=enable_entity_normalization,
                 normalization_algorithm=normalization_algorithm,
                 normalization_threshold=normalization_threshold,
-                preview_only=preview_only,
                 callback_url=callback_url,
                 entity_dictionary=dict_data,
                 sampling_size=doc.max_sample_size,
@@ -208,6 +205,29 @@ async def delete_document(kb_id: str, doc_id: str):
         # If it raised here, it means cleanup_service failed critically.
         # We should probably still return OK if the doc is gone, or error if not.
         return {"ok": False, "detail": str(e)}
+
+    # 🧹 Check if this was the last document - if so, clean up Promotion artifacts
+    remaining_docs = await DocModel.find(DocModel.kb_id == kb_id).to_list()
+    if len(remaining_docs) == 0:
+        kb = await KBModel.get(kb_id)
+        if kb and kb.is_promoted:
+            logger.info(f"[DocumentDelete] Last document deleted - cleaning up Promotion artifacts for KB {kb_id}")
+            try:
+                # Delete Ontology graph from Fuseki
+                if kb.graph_backend == 'ontology':
+                    from app.core.fuseki import fuseki_client
+                    ontology_graph_uri = f"urn:ontology:{kb_id}"
+                    fuseki_client.drop_graph(kb_id, ontology_graph_uri)
+                    logger.info(f"[DocumentDelete] Dropped Ontology graph: {ontology_graph_uri}")
+                
+                # Reset Promotion state
+                kb.is_promoted = False
+                kb.promotion_metadata = {}
+                await kb.save()
+                logger.info(f"[DocumentDelete] Reset Promotion state for KB {kb_id}")
+            except Exception as e:
+                logger.error(f"[DocumentDelete] Failed to clean up Promotion artifacts: {e}")
+                # Don't fail the delete operation even if cleanup fails
 
     return {"ok": True}
 
@@ -293,89 +313,7 @@ async def ingest_callback(payload: IngestCallback):
             
     return {"ok": True}
 
-class UpdatePipelineStatusRequest(BaseModel):
-    status: str
-    metadata: Dict[str, Any]
 
-@router.put("/{kb_id}/documents/{doc_id}/pipeline")
-async def update_pipeline_status(kb_id: str, doc_id: str, payload: UpdatePipelineStatusRequest):
-    """Update pipeline intermediate status (for resuming). Saves large data to file system."""
-    logger.info(f"update_pipeline_status called for doc {doc_id} with status {payload.status}")
-    
-    doc = await DocModel.find_one(DocModel.id == doc_id, DocModel.kb_id == kb_id)
-    if not doc:
-        logger.error(f"Document {doc_id} not found in KB {kb_id}")
-        raise HTTPException(status_code=404, detail="Document not found")
-    
-    metadata = payload.metadata
-    status = payload.status
-    
-    # Check for large payloads and offload to file
-    shared_path = settings.SHARED_STORAGE_PATH
-    doc_dir = os.path.join(shared_path, kb_id)
-    os.makedirs(doc_dir, exist_ok=True)
-    
-    logger.info(f"Saving pipeline data to directory: {doc_dir}")
-    
-    # 1. Entity Dictionary
-    if "dictionary" in metadata:
-        if isinstance(metadata["dictionary"], dict):
-            dict_file_name = f"{doc_id}_dictionary.json"
-            dict_path = os.path.join(doc_dir, dict_file_name)
-            try:
-                dict_len = len(metadata["dictionary"])
-                logger.info(f"Found dictionary with {dict_len} items. Saving to {dict_path}")
-                
-                with open(dict_path, "w", encoding="utf-8") as f:
-                    json.dump(metadata["dictionary"], f, ensure_ascii=False, indent=2)
-                logger.info(f"Successfully saved dictionary to {dict_path}")
-                
-                # Replace data with file reference
-                del metadata["dictionary"]
-                metadata["dictionary_file"] = dict_file_name
-            except Exception as e:
-                logger.error(f"Failed to save dictionary to file: {e}")
-        else:
-             logger.warning(f"Metadata 'dictionary' field exists but is not a dict: {type(metadata['dictionary'])}")
-    else:
-        logger.info("No 'dictionary' field found in metadata")
-
-    # 2. Extracted Triples
-    if "triples" in metadata:
-        if isinstance(metadata["triples"], list):
-            triples_file_name = f"{doc_id}_triples.json"
-            triples_path = os.path.join(doc_dir, triples_file_name)
-            try:
-                triples_len = len(metadata["triples"])
-                logger.info(f"Found triples with {triples_len} items. Saving to {triples_path}")
-
-                with open(triples_path, "w", encoding="utf-8") as f:
-                    json.dump(metadata["triples"], f, ensure_ascii=False, indent=2)
-                logger.info(f"Successfully saved triples to {triples_path}")
-                
-                # Replace data with file reference
-                del metadata["triples"]
-                metadata["triples_file"] = triples_file_name
-            except Exception as e:
-                logger.error(f"Failed to save triples to file: {e}")
-        else:
-             logger.warning(f"Metadata 'triples' field exists but is not a list: {type(metadata['triples'])}")
-
-    doc.status = DocumentStatus.PROCESSING.value
-    doc.pipeline_status = status
-    doc.pipeline_metadata = metadata
-    await doc.save()
-
-    # Broadcast update
-    from app.core.websocket_manager import manager
-    await manager.broadcast(kb_id, {
-        "type": "document_status_update",
-        "doc_id": doc_id,
-        "status": doc.status,
-        "pipeline_status": doc.pipeline_status
-    })
-    
-    return {"ok": True, "pipeline_status": doc.pipeline_status}
 
 
 @router.get("/{kb_id}/documents/{doc_id}/pipeline/data")

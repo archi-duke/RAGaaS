@@ -68,16 +68,8 @@ export const docApi = {
             if (config.enable_normalization_confirmation !== undefined) {
                 formData.append('enable_normalization_confirmation', String(config.enable_normalization_confirmation));
             }
-            // Send preview_only flag
-            if (config.preview_only !== undefined) {
-                formData.append('preview_only', String(config.preview_only));
-            }
             if (config.entity_dictionary) {
                 formData.append('entity_dictionary', JSON.stringify(config.entity_dictionary));
-            }
-            // Send Execution Mode (batch | step)
-            if (config.execution_mode) {
-                formData.append('execution_mode', config.execution_mode);
             }
         }
         return api.post(`/knowledge-bases/${kbId}/documents`, formData, {
@@ -101,9 +93,6 @@ export const docApi = {
     update: (kbId: string, docId: string, data: { extraction_examples?: string; custom_prompt?: string }) =>
         api.patch(`/knowledge-bases/${kbId}/documents/${docId}`, data),
 
-    // [NEW] Update Pipeline Status (for Resume)
-    updatePipelineStatus: (kbId: string, docId: string, data: { status: string; metadata: any }) =>
-        api.put(`/knowledge-bases/${kbId}/documents/${docId}/pipeline`, data),
 
     // [New] Fetch Pipeline Data (Large JSONs) on demand
     getPipelineData: (kbId: string, docId: string) =>

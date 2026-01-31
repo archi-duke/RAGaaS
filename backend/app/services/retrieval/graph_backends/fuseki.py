@@ -659,8 +659,6 @@ class FusekiBackend(GraphBackend):
                                     context_predicates = list(set(all_preds))
                             except Exception as e:
                                 log_trace(f"[Fuseki] Pattern 2: Error in Fast Path query: {e}")
-                    else:
-                        pass # No entities detected
 
                 # [RELEVANCE CHECK]
                 # Fast Path가 무차별적으로 데이터를 가져오는 것을 방지
