@@ -50,11 +50,19 @@ export default function ChunksModal({ isOpen, onClose, document, chunks, isLoadi
         if (!hasParentMetadata) return { isParentChild: false, groupedChunks: [] };
 
         const groups = new Map<string, ParentGroup>();
+        const parentIdToIndex = new Map<string, number>();
+        let currentIndex = 0;
 
         chunks.forEach((chunk) => {
             const parentId = chunk.metadata?.parent_id || 'unknown';
-            const parentIndex = chunk.metadata?.parent_index ?? -1;
-            const parentContent = chunk.metadata?.parent_content || '(No parent content)';
+
+            // Assign index to parent_id if not seen before
+            if (!parentIdToIndex.has(parentId)) {
+                parentIdToIndex.set(parentId, currentIndex++);
+            }
+
+            const parentIndex = chunk.metadata?.parent_index ?? parentIdToIndex.get(parentId) ?? -1;
+            const parentContent = chunk.metadata?.parent_content || chunk.content; // Fallback to first child's content
 
             if (!groups.has(parentId)) {
                 groups.set(parentId, {
