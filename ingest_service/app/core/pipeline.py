@@ -45,6 +45,7 @@ class ChunkingStrategy(str, Enum):
     SEMANTIC = "semantic"
     MARKDOWN = "markdown"
     HYBRID = "hybrid"
+    PARENT_CHILD = "parent_child"
 
 
 class GraphExtractorType(str, Enum):
@@ -107,6 +108,22 @@ class IngestPipeline:
         
         elif strategy == ChunkingStrategy.MARKDOWN:
             return MarkdownNodeParser()
+        
+        elif strategy == ChunkingStrategy.PARENT_CHILD:
+            # Parent-Child: Create custom parser that generates parent chunks
+            # and splits them into children with parent metadata
+            # We'll use SentenceSplitter for both levels with different sizes
+            parent_size = config.get("parent_size", 2000)
+            child_size = config.get("child_size", 500)
+            parent_overlap = config.get("parent_overlap", 0)
+            child_overlap = config.get("child_overlap", 100)
+            
+            # Return a custom wrapper that handles parent-child logic
+            # For now, we'll use the child splitter and add parent metadata in chunk_document
+            return SentenceSplitter(
+                chunk_size=child_size,
+                chunk_overlap=child_overlap,
+            )
         
         elif strategy == ChunkingStrategy.HYBRID:
             # Hybrid: Markdown first, then SentenceSplitter for large chunks
@@ -175,6 +192,10 @@ class IngestPipeline:
     ) -> List[BaseNode]:
         """Chunk documents and return list of nodes"""
         
+        # Special handling for parent-child strategy
+        if strategy == ChunkingStrategy.PARENT_CHILD:
+            return self._chunk_parent_child(text, config)
+        
         # Create Document
         document = Document(text=text)
         
@@ -184,7 +205,69 @@ class IngestPipeline:
         # Parse into nodes
         nodes = parser.get_nodes_from_documents([document])
         
+        # For hierarchical, extract parent-child relationships from node.relationships
+        # and add to metadata for Milvus storage
+        if strategy == ChunkingStrategy.HIERARCHICAL:
+            for node in nodes:
+                if hasattr(node, 'relationships'):
+                    # Extract parent reference if exists
+                    from llama_index.core.schema import NodeRelationship
+                    if NodeRelationship.PARENT in node.relationships:
+                        parent_node = node.relationships[NodeRelationship.PARENT]
+                        if hasattr(parent_node, 'node_id'):
+                            node.metadata['parent_id'] = parent_node.node_id
+        
         return nodes
+    
+    def _chunk_parent_child(
+        self,
+        text: str,
+        config: Dict[str, Any]
+    ) -> List[BaseNode]:
+        """Custom parent-child chunking with metadata"""
+        from llama_index.core.schema import TextNode
+        import uuid
+        
+        parent_size = config.get("parent_size", 2000)
+        child_size = config.get("child_size", 500)
+        parent_overlap = config.get("parent_overlap", 0)
+        child_overlap = config.get("child_overlap", 100)
+        
+        # Create parent splitter
+        parent_splitter = SentenceSplitter(
+            chunk_size=parent_size,
+            chunk_overlap=parent_overlap
+        )
+        
+        # Create child splitter
+        child_splitter = SentenceSplitter(
+            chunk_size=child_size,
+            chunk_overlap=child_overlap
+        )
+        
+        # Split into parent chunks
+        parent_doc = Document(text=text)
+        parent_nodes = parent_splitter.get_nodes_from_documents([parent_doc])
+        
+        # Now split each parent into children
+        all_child_nodes = []
+        
+        for parent_idx, parent_node in enumerate(parent_nodes):
+            parent_text = parent_node.get_content()
+            parent_id = f"parent_{parent_idx}"
+            
+            # Split parent into children
+            child_doc = Document(text=parent_text)
+            child_nodes = child_splitter.get_nodes_from_documents([child_doc])
+            
+            # Add parent metadata to each child
+            for child_node in child_nodes:
+                child_node.metadata['parent_id'] = parent_id
+                child_node.metadata['parent_index'] = parent_idx
+                child_node.metadata['parent_content'] = parent_text
+                all_child_nodes.append(child_node)
+        
+        return all_child_nodes
     
     async def extract_graph(
         self,
