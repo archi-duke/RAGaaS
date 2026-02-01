@@ -428,6 +428,21 @@ async def get_document_chunks(kb_id: str, doc_id: str):
             }
             chunks.append(chunk_data)
         
+        # Sort chunks by start_char_idx to ensure proper ordering
+        # Fallback to chunk_index if start_char_idx is not available
+        def get_sort_key(chunk):
+            metadata = chunk.get("metadata", {})
+            # Try start_char_idx first (more accurate)
+            if "start_char_idx" in metadata:
+                return metadata["start_char_idx"]
+            # Fallback to chunk_index
+            if "chunk_index" in metadata:
+                return metadata["chunk_index"] * 10000  # Large multiplier to separate from char indices
+            # Last resort: return 0 (keep original order)
+            return 0
+        
+        chunks.sort(key=get_sort_key)
+        
         logger.info(f"Retrieved {len(chunks)} chunks for document {doc_id}")
         return {"chunks": chunks}
         

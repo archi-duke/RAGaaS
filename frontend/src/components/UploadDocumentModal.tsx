@@ -112,12 +112,10 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
         chunk_overlap: 20,
         window_size: 3,
         chunk_sizes: [2048, 512, 128],
-        buffer_size: 1,
-        breakpoint_threshold: 95,
-        parent_size: 2000,
-        child_size: 500,
         parent_overlap: 0,
         child_overlap: 100,
+        target_size: 800,
+        llm_auto_size: false,
     });
 
     useEffect(() => {
@@ -288,11 +286,9 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                                         { id: 'fixed_size', name: 'Fixed Size (Standard)' },
                                         { id: 'sliding_window', name: 'Sliding Window (Contextual)' },
                                         { id: 'hierarchical', name: 'Hierarchical (Parent-Child)' },
-                                        { id: 'semantic', name: 'Semantic (Meaning-based)' },
-                                        { id: 'markdown', name: 'Markdown (Structure-based)' },
-                                        { id: 'hybrid', name: 'Hybrid (Markdown + Fixed)' }
+                                        { id: 'context_aware', name: 'Context Aware (LLM-based)' }
                                     ]
-                                        .filter(s => !(isGraphEnabled && s.id === 'semantic'))
+                                        .filter(s => !(isGraphEnabled && s.id === 'context_aware'))
                                         .map(s => (
                                             <option key={s.id} value={s.id}>{s.name}</option>
                                         ))}
@@ -304,10 +300,16 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
                                         <div>
                                             <LabelWithTooltip label="Chunk Size" tooltip="Characters per chunk" />
+                                            <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '0.4rem', lineHeight: 1.3 }}>
+                                                Maximum characters per chunk. Determines the primary size of information retrieval units.
+                                            </div>
                                             <input type="number" className="input" value={chunkingConfig.chunk_size} onChange={(e) => setChunkingConfig({ ...chunkingConfig, chunk_size: parseInt(e.target.value) })} />
                                         </div>
                                         <div>
                                             <LabelWithTooltip label="Overlap" tooltip="Character overlap" />
+                                            <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '0.4rem', lineHeight: 1.3 }}>
+                                                Shared characters between chunks to maintain context across boundaries.
+                                            </div>
                                             <input type="number" className="input" value={chunkingConfig.chunk_overlap} onChange={(e) => setChunkingConfig({ ...chunkingConfig, chunk_overlap: parseInt(e.target.value) })} />
                                         </div>
                                     </div>
@@ -315,12 +317,18 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                                 {strategy === 'sliding_window' && (
                                     <div>
                                         <LabelWithTooltip label="Window Size" tooltip="Number of sentences around" />
+                                        <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '0.4rem', lineHeight: 1.3 }}>
+                                            Number of surrounding sentences to include around each target sentence for enriched context.
+                                        </div>
                                         <input type="number" className="input" value={chunkingConfig.window_size} onChange={(e) => setChunkingConfig({ ...chunkingConfig, window_size: parseInt(e.target.value) })} />
                                     </div>
                                 )}
                                 {strategy === 'hierarchical' && (
                                     <div>
                                         <LabelWithTooltip label="Levels (Large->Small)" tooltip="e.g., 2048, 512, 128" />
+                                        <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '0.4rem', lineHeight: 1.3 }}>
+                                            Recursive chunking structure. Allows retrieving small chunks while maintaining broad parent context.
+                                        </div>
                                         <div style={{ display: 'flex', gap: '0.5rem' }}>
                                             {chunkingConfig.chunk_sizes.map((size, idx) => (
                                                 <input key={idx} type="number" className="input" value={size}
@@ -333,22 +341,36 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                                         </div>
                                     </div>
                                 )}
-                                {strategy === 'semantic' && (
-                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                                {strategy === 'context_aware' && (
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
                                         <div>
-                                            <LabelWithTooltip label="Buffer Size" tooltip="Sentences to group" />
-                                            <input type="number" className="input" value={chunkingConfig.buffer_size} onChange={(e) => setChunkingConfig({ ...chunkingConfig, buffer_size: parseInt(e.target.value) })} />
+                                            <LabelWithTooltip label="Target Chunk Size" tooltip="Desired characters per chunk" />
+                                            <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '0.4rem', lineHeight: 1.3 }}>
+                                                LLM will intelligently split text at semantic boundaries while aiming for this character count. (Recommended: 500-1000)
+                                            </div>
+                                            <input
+                                                type="number"
+                                                className="input"
+                                                value={chunkingConfig.target_size}
+                                                onChange={(e) => setChunkingConfig({ ...chunkingConfig, target_size: parseInt(e.target.value) })}
+                                                disabled={chunkingConfig.llm_auto_size}
+                                                style={{ opacity: chunkingConfig.llm_auto_size ? 0.5 : 1 }}
+                                            />
                                         </div>
                                         <div>
-                                            <LabelWithTooltip label="Threshold (%)" tooltip="Break if percentile > x" />
-                                            <input type="number" className="input" value={chunkingConfig.breakpoint_threshold} onChange={(e) => setChunkingConfig({ ...chunkingConfig, breakpoint_threshold: parseInt(e.target.value) })} />
+                                            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                                                <input
+                                                    type="checkbox"
+                                                    checked={chunkingConfig.llm_auto_size}
+                                                    onChange={(e) => setChunkingConfig({ ...chunkingConfig, llm_auto_size: e.target.checked })}
+                                                    style={{ width: '1.1rem', height: '1.1rem' }}
+                                                />
+                                                <span style={{ fontSize: '0.9rem', fontWeight: 500 }}>Let LLM decide chunk size automatically</span>
+                                            </label>
+                                            <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '0.3rem', marginLeft: '1.6rem', lineHeight: 1.3 }}>
+                                                LLM will determine optimal split points based on semantic coherence without size constraints.
+                                            </div>
                                         </div>
-                                    </div>
-                                )}
-                                {(strategy === 'markdown' || strategy === 'hybrid') && (
-                                    <div style={{ fontSize: '0.85rem', color: '#64748b' }}>
-                                        Automatically splits by document headers (#, ##).
-                                        {strategy === 'hybrid' && " Fallback to fixed size for large sections."}
                                     </div>
                                 )}
                             </div>

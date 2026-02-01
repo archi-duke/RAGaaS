@@ -81,13 +81,10 @@ export default function ChunksModal({ isOpen, onClose, document, chunks, isLoadi
         return { isParentChild: true, groupedChunks: sortedGroups };
     }, [chunks]);
 
-    // Initialize all expanded on load
+    // Initialize as collapsed by default
     React.useEffect(() => {
-        if (isParentChild && groupedChunks.length > 0) {
-            // Default: Expand first 3
-            setExpandedParents(new Set(groupedChunks.slice(0, 3).map(g => g.parentId)));
-        }
-    }, [isParentChild, groupedChunks]);
+        setExpandedParents(new Set());
+    }, [isParentChild]);
 
 
     if (!isOpen || !document) return null;

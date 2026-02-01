@@ -19,11 +19,11 @@ from enum import Enum
 
 from llama_index.core import Document, Settings as LlamaSettings
 from llama_index.core.node_parser import (
+    NodeParser,
     SentenceSplitter,
     SentenceWindowNodeParser,
     HierarchicalNodeParser,
     SemanticSplitterNodeParser,
-    MarkdownNodeParser,
 )
 from llama_index.core.indices.property_graph import (
     SimpleLLMPathExtractor,
@@ -31,20 +31,315 @@ from llama_index.core.indices.property_graph import (
     SchemaLLMPathExtractor,
     ImplicitPathExtractor,
 )
-from llama_index.core.schema import BaseNode
+from llama_index.core.schema import BaseNode, TextNode
 from llama_index.embeddings.openai import OpenAIEmbedding
 from llama_index.llms.openai import OpenAI
+from pydantic import Field
+from typing import Sequence
 
 from app.core.config import settings
+
+
+class ContextAwareNodeParser(NodeParser):
+    """LLM-based context-aware chunking using sliding window approach
+    
+    Strategy:
+    - target_size: Recommended chunk size (not a hard limit)
+    - max_chunk_size: Absolute maximum to prevent oversized chunks
+    - Semantic boundaries are prioritized over strict size limits
+    - A complete semantic unit (paragraph, section) can exceed target_size
+    """
+    
+    llm: Any = Field(default=None, description="LLM instance for context analysis")
+    target_size: int = Field(default=800, description="Target chunk size (recommended, not strict)")
+    llm_auto_size: bool = Field(default=False, description="Let LLM decide size automatically")
+    window_size: int = Field(default=1200, description="Size of analysis window")
+    overlap: int = Field(default=300, description="Overlap between windows")
+    max_chunk_size: int = Field(default=None, description="Maximum chunk size (default: target_size * 2)")
+        
+    def get_nodes_from_documents(self, documents: List[Document]) -> List[BaseNode]:
+        """Parse documents into nodes using LLM-based context detection"""
+        all_nodes = []
+        
+        for doc in documents:
+            text = doc.get_content()
+            metadata = doc.metadata
+            
+            # Split text using LLM sliding window
+            chunks = self._llm_split_text(text)
+            
+            # Create nodes from chunks with accurate position tracking
+            current_search_pos = 0
+            
+            for i, chunk_text in enumerate(chunks):
+                if not chunk_text.strip():
+                    continue
+                
+                # Find exact position in original text
+                # Use normalized search to handle whitespace differences
+                chunk_normalized = chunk_text.strip()
+                chunk_start = text.find(chunk_normalized, current_search_pos)
+                
+                if chunk_start == -1:
+                    # Fallback: try to find first few words
+                    first_words = ' '.join(chunk_normalized.split()[:5])
+                    chunk_start = text.find(first_words, current_search_pos)
+                    if chunk_start == -1:
+                        # Last resort: use sequential position
+                        chunk_start = current_search_pos
+                        print(f"[Warning] Could not find exact position for chunk {i}, using estimated position {chunk_start}")
+                
+                node = TextNode(
+                    text=chunk_text,
+                    metadata={
+                        **metadata, 
+                        "chunk_index": i,
+                        "start_char_idx": chunk_start,
+                        "end_char_idx": chunk_start + len(chunk_text)
+                    }
+                )
+                all_nodes.append(node)
+                
+                # Update search position to after current chunk
+                current_search_pos = chunk_start + len(chunk_text)
+        
+        # Sort nodes by start_char_idx to guarantee ordering
+        all_nodes.sort(key=lambda n: n.metadata.get("start_char_idx", 0))
+        
+        # Reassign chunk_index after sorting
+        for i, node in enumerate(all_nodes):
+            node.metadata["chunk_index"] = i
+        
+        return all_nodes
+    
+    def _parse_nodes(self, nodes: List[BaseNode], show_progress: bool = False, **kwargs) -> List[BaseNode]:
+        """Required by NodeParser base class - delegates to get_nodes_from_documents"""
+        # Convert BaseNodes back to Documents for processing
+        documents = []
+        for node in nodes:
+            doc = Document(text=node.get_content(), metadata=node.metadata)
+            documents.append(doc)
+        
+        return self.get_nodes_from_documents(documents)
+    
+    def _llm_split_text(self, text: str) -> List[str]:
+        """Split text using LLM to detect context boundaries with semantic coherence
+        
+        Prioritizes semantic completeness over strict size limits.
+        """
+        if len(text) < self.target_size:
+            return [text]
+        
+        # Set max_chunk_size if not explicitly set
+        if self.max_chunk_size is None:
+            self.max_chunk_size = self.target_size * 2
+        
+        # Build prompt for LLM
+        size_instruction = (
+            "automatically determine optimal chunk size based on semantic coherence"
+            if self.llm_auto_size
+            else f"aim for chunks around {self.target_size} characters, but prioritize semantic completeness"
+        )
+        
+        chunks = []
+        remaining_text = text
+        position = 0
+        
+        while len(remaining_text) > 0:
+            # If remaining text is small, add as final chunk
+            if len(remaining_text) < self.target_size * 0.5:
+                chunks.append(remaining_text)
+                break
+            
+            # Extract window for analysis
+            window_size = min(self.window_size, len(remaining_text))
+            window = remaining_text[:window_size]
+            
+            # Ask LLM to extract first semantic chunk
+            prompt = f"""Analyze the following text and extract the first semantically complete section.
+
+IMPORTANT:
+- Return ONLY the extracted text, nothing else
+- The section must end at a natural boundary (완결된 문장, 문단, 리스트 항목)
+- DO NOT modify, summarize, or add any text
+- {size_instruction}
+- PRIORITIZE semantic completeness over size limits
+- If a paragraph/section is slightly over target size but semantically complete, include it entirely
+- DO NOT force-split in the middle of a meaningful unit
+- Include complete sentences/paragraphs only
+- Stop at: period(.), section break(\\n\\n), list end, dialogue completion
+
+Text to analyze:
+{window}
+
+Return ONLY the extracted section (copy exact text):"""
+
+            try:
+                response = self.llm.complete(prompt)
+                extracted = response.text.strip()
+                
+                # Remove markdown code blocks if present
+                if extracted.startswith('```') and extracted.endswith('```'):
+                    lines = extracted.split('\n')
+                    extracted = '\n'.join(lines[1:-1]).strip()
+                
+                # Validate extraction
+                if not extracted or len(extracted) < 50:
+                    # Fallback to sentence-based split
+                    chunk = self._extract_sentences_up_to_size(window, self.target_size)
+                    if chunk:
+                        chunks.append(chunk)
+                        # Find exact position in remaining text
+                        chunk_end = remaining_text.find(chunk) + len(chunk)
+                        remaining_text = remaining_text[chunk_end:].lstrip()
+                        position += chunk_end
+                    else:
+                        break
+                    continue
+                
+                # Warn if chunk is excessively large (but still allow it)
+                if len(extracted) > self.max_chunk_size:
+                    print(f"[Warning] LLM extracted chunk of size {len(extracted)} exceeds max_chunk_size {self.max_chunk_size}. "
+                          f"Keeping it as semantic unit is prioritized over size limit.")
+                
+                # Find exact match in remaining text to preserve accuracy
+                # Try to find extracted text in original
+                match_start = remaining_text.find(extracted[:100])  # Use first 100 chars as anchor
+                
+                if match_start != -1:
+                    # Found match, extract from original text
+                    chunk_end = match_start + len(extracted)
+                    chunk = remaining_text[match_start:chunk_end]
+                    chunks.append(chunk)
+                    remaining_text = remaining_text[chunk_end:].lstrip()
+                    position += chunk_end
+                else:
+                    # Couldn't find exact match, use sentence-based fallback
+                    print(f"[Warning] Could not find LLM extraction in text, using sentence fallback")
+                    chunk = self._extract_sentences_up_to_size(window, self.target_size)
+                    if chunk:
+                        chunks.append(chunk)
+                        chunk_end = len(chunk)
+                        remaining_text = remaining_text[chunk_end:].lstrip()
+                        position += chunk_end
+                    else:
+                        # Last resort: take target_size worth of text at sentence boundary
+                        chunk = window[:self.target_size]
+                        last_sentence_end = self._find_last_sentence_end(chunk)
+                        if last_sentence_end > 0:
+                            chunk = chunk[:last_sentence_end]
+                        chunks.append(chunk)
+                        remaining_text = remaining_text[len(chunk):].lstrip()
+                        position += len(chunk)
+                        
+            except Exception as e:
+                print(f"LLM chunking error: {e}, using sentence fallback")
+                chunk = self._extract_sentences_up_to_size(window, self.target_size)
+                if chunk:
+                    chunks.append(chunk)
+                    remaining_text = remaining_text[len(chunk):].lstrip()
+                    position += len(chunk)
+                else:
+                    break
+        
+        # Validation: ensure no empty chunks
+        chunks = [c.strip() for c in chunks if c.strip()]
+        
+        return chunks if chunks else [text]
+    
+    def _extract_sentences_up_to_size(self, text: str, target_size: int) -> str:
+        """Extract sentences up to target size, ending at sentence boundary
+        
+        Strategy:
+        - Target size is a recommendation, not a hard limit
+        - Allow exceeding target_size to preserve semantic units (up to max_size)
+        - Prefer complete sentences/paragraphs even if slightly over target
+        """
+        import re
+        
+        # Allow up to 30% over target_size to preserve semantic units
+        # But never exceed 2x target_size (absolute maximum)
+        max_size = min(int(target_size * 1.3), target_size * 2)
+        
+        # Korean sentence endings: ., !, ?, 다., 요., etc.
+        # Also handle paragraph breaks
+        sentence_pattern = r'[.!?]\s+|\n\n'
+        
+        matches = list(re.finditer(sentence_pattern, text))
+        
+        if not matches:
+            # No clear sentence boundaries, try to split at paragraph or return as is
+            if '\n\n' in text:
+                para_end = text.find('\n\n')
+                return text[:para_end + 2] if para_end > 100 else text[:max_size]
+            return text[:max_size]
+        
+        # Find the best sentence boundary:
+        # 1. Prefer boundaries close to target_size
+        # 2. Allow going over target_size to complete a sentence (up to max_size)
+        # 3. Never force-split in the middle of a sentence
+        best_end = 0
+        best_distance = float('inf')
+        
+        for match in matches:
+            end_pos = match.end()
+            
+            # Stop if we've gone way past the maximum allowed size
+            if end_pos > max_size:
+                break
+            
+            # Calculate distance from target
+            distance = abs(end_pos - target_size)
+            
+            # Update best boundary if:
+            # - We haven't passed target yet, OR
+            # - We passed target but this is closer than previous best
+            if end_pos <= target_size:
+                # Before target: always update
+                best_end = end_pos
+                best_distance = distance
+            elif end_pos <= max_size:
+                # Past target but within max: use if closer to target
+                # OR if we don't have a good boundary yet
+                if distance < best_distance or best_end == 0:
+                    best_end = end_pos
+                    best_distance = distance
+                else:
+                    # We found a boundary past target, and it's getting worse - stop
+                    break
+        
+        if best_end > 0:
+            return text[:best_end].strip()
+        
+        # Fallback: return up to first sentence (even if it exceeds target)
+        return text[:matches[0].end()].strip() if matches else text[:max_size]
+    
+    def _find_last_sentence_end(self, text: str) -> int:
+        """Find the last complete sentence ending in text"""
+        import re
+        
+        # Korean and English sentence endings
+        sentence_endings = r'[.!?](?:\s|$)|\n\n'
+        
+        matches = list(re.finditer(sentence_endings, text))
+        
+        if matches:
+            # Return position after last sentence ending
+            return matches[-1].end()
+        
+        # No sentence ending found, try paragraph break
+        last_para = text.rfind('\n\n')
+        if last_para > 0:
+            return last_para + 2
+        
+        return 0
 
 
 class ChunkingStrategy(str, Enum):
     FIXED_SIZE = "fixed_size"
     SLIDING_WINDOW = "sliding_window"
     HIERARCHICAL = "hierarchical"
-    SEMANTIC = "semantic"
-    MARKDOWN = "markdown"
-    HYBRID = "hybrid"
+    CONTEXT_AWARE = "context_aware"
     PARENT_CHILD = "parent_child"
 
 
@@ -99,15 +394,16 @@ class IngestPipeline:
                 chunk_sizes=chunk_sizes
             )
         
-        elif strategy == ChunkingStrategy.SEMANTIC:
-            return SemanticSplitterNodeParser(
-                buffer_size=config.get("buffer_size", 1),
-                breakpoint_percentile_threshold=config.get("breakpoint_threshold", 95),
-                embed_model=self.embed_model,
+        elif strategy == ChunkingStrategy.CONTEXT_AWARE:
+            # LLM-based Context Aware Chunking using sliding window
+            target_size = config.get("target_size", 800)
+            llm_auto_size = config.get("llm_auto_size", False)
+            
+            return ContextAwareNodeParser(
+                llm=self.llm,
+                target_size=target_size,
+                llm_auto_size=llm_auto_size
             )
-        
-        elif strategy == ChunkingStrategy.MARKDOWN:
-            return MarkdownNodeParser()
         
         elif strategy == ChunkingStrategy.PARENT_CHILD:
             # Parent-Child: Create custom parser that generates parent chunks
@@ -125,13 +421,6 @@ class IngestPipeline:
                 chunk_overlap=child_overlap,
             )
         
-        elif strategy == ChunkingStrategy.HYBRID:
-            # Hybrid: Markdown first, then SentenceSplitter for large chunks
-            # Complex pipeline needed for actual implementation
-            return SentenceSplitter(
-                chunk_size=config.get("chunk_size", 1024),
-                chunk_overlap=config.get("chunk_overlap", 20),
-            )
         
         else:
             # Default to SentenceSplitter
