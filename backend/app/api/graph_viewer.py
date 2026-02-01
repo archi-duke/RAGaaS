@@ -111,6 +111,8 @@ async def expand_graph(
         # Fuseki Query
         sparql = f"""
         PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+        PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+
         SELECT DISTINCT ?s ?p ?o ?sLabel ?oLabel
         FROM <urn:x-arq:UnionGraph>
         WHERE {{
@@ -134,6 +136,11 @@ async def expand_graph(
             OPTIONAL {{ ?s rdfs:label ?sLabel }}
             OPTIONAL {{ ?o rdfs:label ?oLabel }}
             FILTER (!isLiteral(?o))
+            
+            # Filter out internal Statement nodes (reification)
+            FILTER (!CONTAINS(STR(?s), "/stmt/"))
+            FILTER (!CONTAINS(STR(?o), "/stmt/"))
+            FILTER (?p != rdf:subject && ?p != rdf:predicate && ?p != rdf:object)
         }}
         LIMIT 50
         """
