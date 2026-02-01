@@ -38,6 +38,10 @@ def create_collection(kb_id: str, metric_type: str = "COSINE", index_type: str =
                 current_type = idx.params.get("index_type")
                 if current_type != index_type:
                     print(f"Index type mismatch: {current_type} vs {index_type}. Recreating index.")
+                    try:
+                        col.release()
+                    except:
+                        pass
                     col.drop_index()
                 else:
                     return col

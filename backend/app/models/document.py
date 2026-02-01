@@ -40,6 +40,11 @@ class Document(Document):
     # Pipeline State (for Resuming)
     pipeline_status: Optional[str] = None # e.g. "ENTITY_EXTRACTED", "TRIPLE_EXTRACTED"
     pipeline_metadata: Optional[dict] = None # Stores intermediate data (preview_id, dictionary, summary)
+    
+    # Statistics
+    chunk_count: Optional[int] = 0
+    entity_count: Optional[int] = 0
+    triple_count: Optional[int] = 0
 
     class Settings:
         name = "documents"

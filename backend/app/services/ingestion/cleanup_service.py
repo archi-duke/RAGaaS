@@ -43,21 +43,24 @@ class CleanupService:
             try:
                 from pymilvus import Collection, utility
                 collection_name = f"kb_{kb_id.replace('-', '_')}"
-                collection = Collection(collection_name)
-                try:
-                    collection.load()
-                except:
-                    pass  # Already loaded
-                
-                # Query all chunks for this doc
-                expr = f'doc_id == "{doc_id}"'
-                try:
-                    # Limit 10000 to be safe, if more, might need paging but unlikely for single doc
-                    res = collection.query(expr, output_fields=["chunk_id"], limit=10000)
-                    chunk_ids = [r["chunk_id"] for r in res]
-                    print(f"[Cleanup] Identified {len(chunk_ids)} chunks for doc {doc_id}")
-                except Exception as e:
-                    print(f"[Cleanup] Failed to query chunks for doc {doc_id}: {e}")
+                if utility.has_collection(collection_name):
+                    collection = Collection(collection_name)
+                    try:
+                        collection.load()
+                    except:
+                        pass  # Already loaded
+                    
+                    # Query all chunks for this doc
+                    expr = f'doc_id == "{doc_id}"'
+                    try:
+                        # Limit 10000 to be safe, if more, might need paging but unlikely for single doc
+                        res = collection.query(expr, output_fields=["chunk_id"], limit=10000)
+                        chunk_ids = [r["chunk_id"] for r in res]
+                        print(f"[Cleanup] Identified {len(chunk_ids)} chunks for doc {doc_id}")
+                    except Exception as e:
+                        print(f"[Cleanup] Failed to query chunks for doc {doc_id}: {e}")
+                else:
+                    print(f"[Cleanup] Milvus collection {collection_name} does not exist. Skipping chunk query and continuing cleanup.")
                     
             except Exception as e:
                 print(f"[Cleanup] ❌ Milvus connection failed: {e}")
@@ -199,24 +202,31 @@ class CleanupService:
             # 4. Milvus Cleanup (Vector)
             try:
                 if not collection: # In case connection failed in Step 1
-                    from pymilvus import Collection
+                    from pymilvus import Collection, utility
                     collection_name = f"kb_{kb_id.replace('-', '_')}"
-                    collection = Collection(collection_name)
+                    if utility.has_collection(collection_name):
+                        collection = Collection(collection_name)
+                        try:
+                            collection.load()
+                        except:
+                            pass  # Already loaded or error
+                    else:
+                        print(f"[Cleanup] Milvus collection {collection_name} does not exist. Skipping delete.")
+                        collection = None
+                
+                if collection:
+                    expr = f'doc_id == "{doc_id}"'
+                    collection.delete(expr)
+                    collection.flush()
+                    
+                    print(f"[Cleanup] ✅ Milvus deletion flushed for {doc_id}")
+                    
                     try:
-                        collection.load()
-                    except:
-                        pass  # Already loaded or doesn't exist
-                
-                expr = f'doc_id == "{doc_id}"'
-                collection.delete(expr)
-                collection.flush()
-                
-                print(f"[Cleanup] ✅ Milvus deletion flushed for {doc_id}")
-                
-                try:
-                    collection.release()
-                except: 
-                    pass
+                        collection.release()
+                    except: 
+                        pass
+                else:
+                    print(f"[Cleanup] ⏭️ Skipping Milvus deletion for {doc_id} as collection is missing")
                     
             except Exception as e:
                 print(f"[Cleanup] ❌ Milvus cleanup failed: {e}")

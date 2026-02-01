@@ -96,13 +96,32 @@ async def upload_document(
         "breakpoint_threshold": final_config.get("breakpoint_threshold") or 95,
     }
     
-    graph_config = {
-        "extractor_type": final_config.get("extractor_type", "simple"),
-        "max_paths_per_chunk": final_config.get("max_paths_per_chunk", 10),
-        "max_triplets_per_chunk": final_config.get("max_triplets_per_chunk", 20),
-        "num_workers": final_config.get("num_workers", 4),
-        "generate_inverse_relations": final_config.get("generate_inverse_relations", True),
-    }
+    # ✅ Graph 설정: KB의 enable_graph_rag에 따라 조건부 설정
+    if not kb.enable_graph_rag:
+        # Non-Graph KB: 트리플 추출을 생략하고 벡터 검색만 사용
+        logger.info(f"[Upload] KB {kb_id} is Non-Graph mode (enable_graph_rag=False)")
+        graph_config = {
+            "extractor_type": "none",  # 트리플 추출 생략
+            "max_paths_per_chunk": 0,  # Non-Graph 모드에서는 0
+            "max_triplets_per_chunk": 0,  # Non-Graph 모드에서는 0
+            "num_workers": 1,
+            "generate_inverse_relations": False,
+        }
+        # Non-Graph 모드에서는 entity normalization도 강제 비활성화
+        final_enable_entity_normalization = False
+        final_enable_normalization_confirmation = False
+    else:
+        # Graph KB: 기존 설정 사용
+        graph_config = {
+            "extractor_type": final_config.get("extractor_type", "simple"),
+            "max_paths_per_chunk": final_config.get("max_paths_per_chunk", 10),
+            "max_triplets_per_chunk": final_config.get("max_triplets_per_chunk", 20),
+            "num_workers": final_config.get("num_workers", 4),
+            "generate_inverse_relations": final_config.get("generate_inverse_relations", True),
+        }
+        # Graph 모드에서는 파라미터로 받은 값 사용
+        final_enable_entity_normalization = enable_entity_normalization
+        final_enable_normalization_confirmation = enable_normalization_confirmation
 
     # Update document record with extraction settings
     doc.extractor_type = graph_config.get("extractor_type")
@@ -111,11 +130,11 @@ async def upload_document(
     doc.enable_subject_restoration = enable_subject_restoration
     doc.generate_inverse = graph_config.get("generate_inverse_relations")
     doc.extraction_examples = extraction_examples_yaml or final_config.get("extraction_examples_yaml")
-    doc.enable_entity_normalization = enable_entity_normalization
+    doc.enable_entity_normalization = final_enable_entity_normalization
     doc.normalization_algorithm = normalization_algorithm
     doc.normalization_threshold = normalization_threshold
     doc.max_sample_size = final_config.get("max_sample_size", 50000)
-    doc.enable_normalization_confirmation = enable_normalization_confirmation
+    doc.enable_normalization_confirmation = final_enable_normalization_confirmation
     doc.custom_prompt = final_config.get("custom_prompt")
     doc.file_path = file_path
     await doc.save()
@@ -149,18 +168,27 @@ async def upload_document(
                 chunking_config=chunking_cfg,
                 graph_config=graph_config,
                 graph_store="fuseki" if kb.graph_backend == "ontology" else "neo4j",
+                enable_text_cleaning=enable_text_cleaning,
                 enable_subject_restoration=enable_subject_restoration,
                 extraction_examples_yaml=extraction_examples_yaml or final_config.get("extraction_examples_yaml"),
                 custom_prompt=graph_extraction_prompt,
-                enable_entity_normalization=enable_entity_normalization,
+                enable_entity_normalization=final_enable_entity_normalization,
                 normalization_algorithm=normalization_algorithm,
                 normalization_threshold=normalization_threshold,
+                enable_normalization_confirmation=final_enable_normalization_confirmation,
                 callback_url=callback_url,
                 entity_dictionary=dict_data,
                 sampling_size=doc.max_sample_size,
             )
         except Exception as e:
             logger.error(f"[Ingest] Service call failed: {e}")
+            # Log response body for 422 errors
+            if hasattr(e, 'response') and e.response is not None:
+                try:
+                    error_detail = e.response.json()
+                    logger.error(f"[Ingest] Error detail: {error_detail}")
+                except:
+                    logger.error(f"[Ingest] Response text: {e.response.text if hasattr(e.response, 'text') else 'N/A'}")
             doc.status = DocumentStatus.ERROR.value
             await doc.save()
 

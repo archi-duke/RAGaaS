@@ -1,8 +1,8 @@
 from typing import List, Dict, Any
+from pymilvus import Collection
 from .base import RetrievalStrategy
 from .vector import VectorRetrievalStrategy
 from .graph import GraphRetrievalStrategy
-from app.core.milvus import create_collection
 from app.services.embedding import embedding_service
 from rank_bm25 import BM25Okapi
 import numpy as np
@@ -16,11 +16,12 @@ class HybridRetrievalStrategy(RetrievalStrategy):
 
     async def search(self, kb_id: str, query: str, top_k: int, **kwargs) -> List[Dict[str, Any]]:
         metric_type = kwargs.get("metric_type", "COSINE")
-        index_type = kwargs.get("index_type", "IVF_FLAT")
         score_threshold = kwargs.get("score_threshold", 0.0)
         enable_graph = kwargs.get("enable_graph_search", False)
         
-        collection = create_collection(kb_id, metric_type=metric_type, index_type=index_type)
+        # Get existing collection
+        collection_name = f"kb_{kb_id.replace('-', '_')}"
+        collection = Collection(collection_name)
         collection.load()
         
         # 1. Embed query

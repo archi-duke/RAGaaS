@@ -2,7 +2,7 @@
 Ingest API Router
 """
 from fastapi import APIRouter, HTTPException, BackgroundTasks
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional, Dict, Any, List
 from enum import Enum
 import uuid
@@ -52,12 +52,22 @@ class ChunkingConfig(BaseModel):
 class GraphConfig(BaseModel):
     """Graph Extraction Configuration"""
     extractor_type: GraphExtractorType = GraphExtractorType.NONE
-    max_paths_per_chunk: int = Field(default=10, ge=1, le=50)
-    max_triplets_per_chunk: int = Field(default=20, ge=1, le=100)
+    max_paths_per_chunk: int = Field(default=10, ge=0, le=50)  # ge=0으로 변경
+    max_triplets_per_chunk: int = Field(default=20, ge=0, le=100)  # ge=0으로 변경
     num_workers: int = Field(default=4, ge=1, le=16)
     allowed_entity_types: Optional[List[str]] = None
     allowed_relation_types: Optional[List[str]] = None
     generate_inverse_relations: bool = True
+    
+    @field_validator('max_paths_per_chunk', 'max_triplets_per_chunk')
+    @classmethod
+    def validate_graph_limits(cls, v, info):
+        """extractor_type이 NONE이 아닐 때는 최소값 1 이상 요구"""
+        # info.data에서 extractor_type 확인
+        extractor_type = info.data.get('extractor_type')
+        if extractor_type and extractor_type != GraphExtractorType.NONE and v < 1:
+            raise ValueError(f'must be at least 1 when extractor_type is not NONE')
+        return v
 
 
 class IngestRequest(BaseModel):

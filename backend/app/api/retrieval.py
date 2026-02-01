@@ -278,7 +278,8 @@ async def chat_with_kb(
             enable_inverse_search=request.enable_inverse_search,
             inverse_extraction_mode=request.inverse_extraction_mode,
             use_schema_mode=request.use_schema_mode,
-            use_raw_log=request.use_raw_log
+            use_raw_log=request.use_raw_log,
+            execution_logs=execution_logs  # Pass logs list to collect strategy logs
         )
         execution_logs.append(f"[Legacy] Search complete. Found {len(results)} chunks.")
         

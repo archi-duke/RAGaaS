@@ -372,7 +372,8 @@ Triplets:"""
         
         # PHASE 1: Entity Extraction (Global Dictionary)
         t1 = time.time()
-        if enable_entity_normalization and not entity_dictionary:
+        # ✅ Graph 추출이 없으면 Entity Dictionary도 불필요 (Non-Graph KB 최적화)
+        if enable_entity_normalization and not entity_dictionary and graph_extractor_type != GraphExtractorType.NONE:
             if job_id and jobs.get(job_id, {}).get("status") == JobStatus.CANCELLED: return {}
             
             if status_callback:
@@ -392,12 +393,20 @@ Triplets:"""
             if kb_id and doc_id and entity_dictionary:
                 from app.utils.temp_storage import temp_storage
                 await temp_storage.save_entity_dictionary(kb_id, doc_id, entity_dictionary)
+        elif graph_extractor_type == GraphExtractorType.NONE:
+            print(f"[Pipeline] Phase 1: Skipped (Non-Graph mode - no entity extraction needed)")
         stats.append({"step": "Step 1: Entity Extraction (Pre-pass)", "duration": round(time.time() - t1, 2)})
         
         # PHASE 2: Chunking (Triple-level)
         t2 = time.time()
         if job_id and jobs.get(job_id, {}).get("status") == JobStatus.CANCELLED: return {}
-        print(f"[Pipeline] Phase 2: Chunking document for Triple Extraction...")
+        
+        # ✅ 로그 메시지 개선: Non-Graph 모드 명시
+        if graph_extractor_type == GraphExtractorType.NONE:
+            print(f"[Pipeline] Phase 2: Chunking document (Non-Graph mode - vector search only)...")
+        else:
+            print(f"[Pipeline] Phase 2: Chunking document for Triple Extraction...")
+        
         nodes = self.chunk_document(text, chunking_strategy, chunking_config)
         stats.append({"step": f"Step 2: Text Chunking ({len(nodes)} chunks)", "duration": round(time.time() - t2, 2)})
 
@@ -434,6 +443,8 @@ Triplets:"""
             if kb_id and doc_id and triples:
                 from app.utils.temp_storage import temp_storage
                 await temp_storage.save_triples(kb_id, doc_id, triples)
+        else:
+            print(f"[Pipeline] Phase 3: Skipped (Non-Graph mode - no triple extraction)")
         
         # ✅ 임시 파일 저장: 청크 (트리플 추출 여부와 관계없이 항상 저장)
         if kb_id and doc_id and nodes:

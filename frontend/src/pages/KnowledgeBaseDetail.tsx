@@ -51,7 +51,7 @@ export default function KnowledgeBaseDetail() {
     const [useRelationFilter, setUseRelationFilter] = useState(true);
     const [useSchemaMode, setUseSchemaMode] = useState(true); // Default ON for promoted KBs
     const [useDynamicSchema, setUseDynamicSchema] = useState(false); // Dynamic Schema for non-promoted KBs
-    const [useRawLog, setUseRawLog] = React.useState(false);
+    const [useRawLog, setUseRawLog] = React.useState(true);
 
     // Brute Force State (for 2-stage)
     const [bruteForceTopK, setBruteForceTopK] = useState(1);
@@ -1070,9 +1070,34 @@ export default function KnowledgeBaseDetail() {
             )}
 
             {activeTab === 'settings' && (
-                <div className="card">
-                    <h3>Knowledge Base Settings</h3>
-                    <p>Settings implementation pending...</p>
+                <div style={{ padding: '1rem', overflow: 'auto' }}>
+                    <div className="card" style={{ maxWidth: '600px', margin: '0 auto' }}>
+                        <h3>Knowledge Base Settings</h3>
+
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', marginTop: '1.5rem' }}>
+                            {/* Execution Log Setting */}
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <div>
+                                    <h4 style={{ margin: '0 0 0.5rem 0', fontSize: '0.95rem' }}>Show Execution Logs</h4>
+                                    <p style={{ margin: 0, fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                                        Display detailed execution traces and debug information in the Playground.
+                                    </p>
+                                </div>
+                                <label className="switch">
+                                    <input
+                                        type="checkbox"
+                                        checked={useRawLog}
+                                        onChange={(e) => setUseRawLog(e.target.checked)}
+                                    />
+                                    <span className="slider round"></span>
+                                </label>
+                            </div>
+                        </div>
+
+                        <div style={{ marginTop: '2rem', paddingTop: '1rem', borderTop: '1px solid var(--border)', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                            More settings coming soon...
+                        </div>
+                    </div>
                 </div>
             )}
 
