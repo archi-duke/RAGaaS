@@ -3,6 +3,7 @@ Ingest Service Configuration
 """
 from pydantic_settings import BaseSettings
 from typing import Optional
+import os
 
 
 class Settings(BaseSettings):
@@ -33,7 +34,8 @@ class Settings(BaseSettings):
     FUSEKI_URL: str = "http://localhost:3030"
     
     # Shared storage
-    SHARED_STORAGE_PATH: str = "/data/uploads"
+    # Shared storage for file exchange
+    SHARED_STORAGE_PATH: str = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), "data", "uploads")
     
     # Main backend URL (for callbacks)
     MAIN_BACKEND_URL: str = "http://localhost:8000"
@@ -41,6 +43,7 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
+        extra = "ignore"
 
 
 settings = Settings()

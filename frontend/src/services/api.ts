@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 const api = axios.create({
-    baseURL: 'http://localhost:8000/api',
+    baseURL: 'http://127.0.0.1:8000/api',
     headers: {
         'Content-Type': 'application/json',
     },
@@ -28,7 +28,7 @@ export const kbApi = {
     getExtractionPrompt: () => api.get('/knowledge-bases/extraction-prompt/content'),
     saveExtractionPrompt: (content: string) => api.post('/knowledge-bases/extraction-prompt/save', { content }),
     getQueryPrompt: (type: 'ontology_plus' | 'ontology_minus' | 'neo4j' = 'ontology_minus') => api.get('/knowledge-bases/query-prompt/content', { params: { type } }),
-    getTriples: (kbId: string, backend: string, skip: number = 0, limit: number = 50, sort?: any, filter?: any) => api.get(`/retrieval/graph/triples/${kbId}`, { params: { backend, skip, limit, include_chunk_text: false, sort: sort ? JSON.stringify(sort) : undefined, filter: filter ? JSON.stringify(filter) : undefined } }),
+    getTriples: (kbId: string, backend: string, skip: number = 0, limit: number = 50, sort?: any, filter?: any) => api.get(`/graph/triples/${kbId}`, { params: { backend, skip, limit, include_chunk_text: false, sort: sort ? JSON.stringify(sort) : undefined, filter: filter ? JSON.stringify(filter) : undefined } }),
     getChunk: (kbId: string, chunkId: string) => api.get(`/knowledge-bases/${kbId}/chunks/${chunkId}`),
 };
 
@@ -55,6 +55,22 @@ export const docApi = {
             if (config.extraction_examples_yaml) {
                 formData.append('extraction_examples_yaml', config.extraction_examples_yaml);
             }
+            // Send Entity Normalization parameters
+            if (config.enable_entity_normalization !== undefined) {
+                formData.append('enable_entity_normalization', String(config.enable_entity_normalization));
+            }
+            if (config.normalization_algorithm) {
+                formData.append('normalization_algorithm', config.normalization_algorithm);
+            }
+            if (config.normalization_threshold !== undefined) {
+                formData.append('normalization_threshold', String(config.normalization_threshold));
+            }
+            if (config.enable_normalization_confirmation !== undefined) {
+                formData.append('enable_normalization_confirmation', String(config.enable_normalization_confirmation));
+            }
+            if (config.entity_dictionary) {
+                formData.append('entity_dictionary', JSON.stringify(config.entity_dictionary));
+            }
         }
         return api.post(`/knowledge-bases/${kbId}/documents`, formData, {
             headers: {
@@ -76,6 +92,11 @@ export const docApi = {
     },
     update: (kbId: string, docId: string, data: { extraction_examples?: string; custom_prompt?: string }) =>
         api.patch(`/knowledge-bases/${kbId}/documents/${docId}`, data),
+
+
+    // [New] Fetch Pipeline Data (Large JSONs) on demand
+    getPipelineData: (kbId: string, docId: string) =>
+        api.get(`/knowledge-bases/${kbId}/documents/${docId}/pipeline/data`),
 };
 
 export const retrievalApi = {
@@ -143,7 +164,9 @@ export const retrievalApi = {
 
 // Ingest Service API (runs on port 8001)
 const ingestApi = axios.create({
-    baseURL: 'http://localhost:8001/api',
+    baseURL: 'http://127.0.0.1:8001/api',
+    // Set timeout to Infinity (0) to allow long-running extraction jobs
+    timeout: 0,
     headers: {
         'Content-Type': 'application/json',
     },
@@ -159,13 +182,21 @@ export const extractionApi = {
         graph_store?: string;
         enable_text_cleaning?: boolean;
         enable_subject_restoration?: boolean;
+        enable_entity_normalization?: boolean;
+        normalization_algorithm?: string;
+        normalization_threshold?: number;
+        enable_normalization_confirmation?: boolean;
         extraction_examples_yaml?: string;
         custom_prompt?: string;
+        entity_dictionary?: any;
+        callback_url?: string;
     }) => ingestApi.post('/preview', data),
 
     confirm: (previewId: string, data?: {
         enable_inference?: boolean;
         callback_url?: string;
+        kb_id?: string;
+        doc_id?: string;
     }) => ingestApi.post(`/confirm/${previewId}`, data || {}),
 
     discard: (previewId: string) => ingestApi.delete(`/preview/${previewId}`),
@@ -185,7 +216,24 @@ export const extractionApi = {
         extraction_examples_yaml?: string;
         custom_prompt?: string;
     }) => ingestApi.post('/extract-chunk', data),
+
+    // Save selected triples from chunk extraction to the triple store
+    saveChunkTriples: (data: {
+        kb_id: string;
+        chunk_id: string;
+        triples: any[];
+    }) => ingestApi.post('/save-chunk-triples', data),
+
+    // [New] Doc2Graph Dictionary Preview
+    previewDictionary: (data: {
+        kb_id: string;
+        doc_id: string;
+        file_path: string;
+        chunking?: any;
+        sampling_size?: number;
+        callback_url?: string;
+    }) => ingestApi.post('/preview-dictionary', data),
 };
 
-export default api;
 
+export default api;

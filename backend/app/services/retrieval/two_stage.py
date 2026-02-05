@@ -1,7 +1,7 @@
 from typing import List, Dict, Any
+from pymilvus import Collection
 from .base import RetrievalStrategy
 from .vector import VectorRetrievalStrategy
-from app.core.milvus import create_collection
 from app.services.embedding import embedding_service
 from sentence_transformers import CrossEncoder # type: ignore
 import numpy as np
@@ -20,7 +20,8 @@ class TwoStageRetrievalStrategy(RetrievalStrategy):
         score_threshold = kwargs.get("score_threshold", 0.0)
         
         # 1. Candidate Generation (Vector Search with high K)
-        collection = create_collection(kb_id)
+        collection_name = f"kb_{kb_id.replace('-', '_')}"
+        collection = Collection(collection_name)
         collection.load()
         
         query_vectors = await embedding_service.get_embeddings([query])

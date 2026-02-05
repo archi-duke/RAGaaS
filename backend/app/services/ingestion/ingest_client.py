@@ -8,7 +8,7 @@ from typing import Dict, Any, Optional
 import os
 
 # Ingest Service URL (docker-compose 환경변수 또는 기본값)
-INGEST_SERVICE_URL = os.getenv("INGEST_SERVICE_URL", "http://ingest-service:8001")
+INGEST_SERVICE_URL = os.getenv("INGEST_SERVICE_URL", "http://127.0.0.1:8001")
 
 
 class IngestServiceClient:
@@ -27,10 +27,15 @@ class IngestServiceClient:
         graph_store: str = "neo4j",
         enable_text_cleaning: bool = False,
         enable_subject_restoration: bool = True,
-        enable_inference: bool = False,
         extraction_examples_yaml: Optional[str] = None,
         custom_prompt: Optional[str] = None,
-        callback_url: Optional[str] = None
+        enable_entity_normalization: bool = False,
+        normalization_algorithm: str = "embedding",
+        normalization_threshold: float = 0.85,
+        enable_normalization_confirmation: bool = False,
+        callback_url: Optional[str] = None,
+        entity_dictionary: Optional[Dict[str, Any]] = None,
+        sampling_size: Optional[int] = None,
     ) -> Dict[str, Any]:
         """인제스션 작업 생성"""
         payload = {
@@ -42,10 +47,15 @@ class IngestServiceClient:
             "graph_store": graph_store,
             "enable_text_cleaning": enable_text_cleaning,
             "enable_subject_restoration": enable_subject_restoration,
-            "enable_inference": enable_inference,
             "extraction_examples_yaml": extraction_examples_yaml,
             "custom_prompt": custom_prompt,
-            "callback_url": callback_url
+            "enable_entity_normalization": enable_entity_normalization,
+            "normalization_algorithm": normalization_algorithm,
+            "normalization_threshold": normalization_threshold,
+            "enable_normalization_confirmation": enable_normalization_confirmation,
+            "callback_url": callback_url,
+            "entity_dictionary": entity_dictionary,
+            "sampling_size": sampling_size,
         }
 
         

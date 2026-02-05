@@ -20,16 +20,31 @@ class Document(Document):
     status: str = DocumentStatus.PENDING.value
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
+    file_path: Optional[str] = None
     
     # Extraction Settings
     extractor_type: Optional[str] = None
     max_paths: Optional[int] = None
     enable_text_cleaning: Optional[bool] = False
     enable_subject_restoration: Optional[bool] = True
-    enable_inference: Optional[bool] = False
     generate_inverse: Optional[bool] = False
     extraction_examples: Optional[str] = None
     custom_prompt: Optional[str] = None
+    # Entity Normalization Settings
+    enable_entity_normalization: Optional[bool] = False
+    normalization_algorithm: Optional[str] = "embedding"  # embedding | string | llm
+    normalization_threshold: Optional[float] = 0.85
+    max_sample_size: Optional[int] = 50000
+    enable_normalization_confirmation: Optional[bool] = False
+    
+    # Pipeline State (for Resuming)
+    pipeline_status: Optional[str] = None # e.g. "ENTITY_EXTRACTED", "TRIPLE_EXTRACTED"
+    pipeline_metadata: Optional[dict] = None # Stores intermediate data (preview_id, dictionary, summary)
+    
+    # Statistics
+    chunk_count: Optional[int] = 0
+    entity_count: Optional[int] = 0
+    triple_count: Optional[int] = 0
 
     class Settings:
         name = "documents"

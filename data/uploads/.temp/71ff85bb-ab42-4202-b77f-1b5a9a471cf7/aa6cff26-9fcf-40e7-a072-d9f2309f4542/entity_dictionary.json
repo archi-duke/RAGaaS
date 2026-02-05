@@ -1,0 +1,60 @@
+{
+  "created_at": "2026-01-29T16:00:24.287895",
+  "entity_count": 6,
+  "dictionary": {
+    "텍스트": {
+      "type": "Entity",
+      "variants": [
+        "텍스트"
+      ],
+      "chunk_ids": [
+        "doc_global"
+      ]
+    },
+    "제공": {
+      "type": "Entity",
+      "variants": [
+        "제공"
+      ],
+      "chunk_ids": [
+        "doc_global"
+      ]
+    },
+    "생략": {
+      "type": "Entity",
+      "variants": [
+        "생략"
+      ],
+      "chunk_ids": [
+        "doc_global"
+      ]
+    },
+    "주어": {
+      "type": "Entity",
+      "variants": [
+        "주어"
+      ],
+      "chunk_ids": [
+        "doc_global"
+      ]
+    },
+    "내용": {
+      "type": "Entity",
+      "variants": [
+        "내용"
+      ],
+      "chunk_ids": [
+        "doc_global"
+      ]
+    },
+    "요청": {
+      "type": "Entity",
+      "variants": [
+        "요청"
+      ],
+      "chunk_ids": [
+        "doc_global"
+      ]
+    }
+  }
+}

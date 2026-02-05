@@ -114,18 +114,29 @@ In this pattern:
     def generate(self, question: str, context: Optional[str] = None, mode: str = "graph", custom_prompt: Optional[str] = None, inverse_search_mode: str = "auto", kb_id: Optional[str] = None, use_dynamic_schema: bool = False) -> Dict:
         """사용자 질문을 Cypher로 변환"""
         
-        # Dynamic Load from File
+        print(f"[CypherGenerator] Generate called. KB: {kb_id}, DynamicSchema: {use_dynamic_schema}", flush=True)
+        
+        # Dynamic Load from File - Use Vibe Prompt as primary
         from pathlib import Path
-        prompt_path = Path("data/prompts/cypher_generation_prompt.txt")
-        if prompt_path.exists():
-            system_prompt = prompt_path.read_text(encoding="utf-8")
+        vibe_prompt_path = Path("data/prompts/cypher_vibe_prompt.txt")
+        fallback_prompt_path = Path("data/prompts/cypher_generation_prompt.txt")
+        
+        if vibe_prompt_path.exists():
+            system_prompt = vibe_prompt_path.read_text(encoding="utf-8")
+            print("[CypherGenerator] Using Cypher Vibe Coding prompt (internal file)", flush=True)
+        elif fallback_prompt_path.exists():
+            system_prompt = fallback_prompt_path.read_text(encoding="utf-8")
+            print("[CypherGenerator] WARNING: Using fallback prompt (cypher_generation_prompt.txt)", flush=True)
         else:
             system_prompt = self.DEFAULT_SYSTEM_PROMPT
+            print("[CypherGenerator] WARNING: Using hardcoded default prompt", flush=True)
 
         # Dynamic Schema Injection (for non-promoted KBs)
         if use_dynamic_schema and kb_id:
+            print(f"[CypherGenerator] Attempting to fetch live schema for KB {kb_id}...", flush=True)
             schema_info = self._fetch_neo4j_schema(kb_id)
             if schema_info:
+                print(f"[CypherGenerator] Fetched live schema for KB {kb_id}: {len(schema_info.get('relationship_types', []))} relationships", flush=True)
                 system_prompt += f"""
 
 [현재 데이터베이스 스키마 - 반드시 준수]
@@ -235,11 +246,17 @@ In this pattern:
                 "node_labels": list(node_labels)
             }
             
-            print(f"[CypherGenerator] Dynamic Schema for KB {kb_id}: {schema_info}")
+            if not relationship_types and not node_labels:
+                print(f"[CypherGenerator] WARNING: Dynamic Schema fetched but EMPTY for KB {kb_id}", flush=True)
+            else:
+                print(f"[CypherGenerator] Dynamic Schema for KB {kb_id}: {len(relationship_types)} relationships, {len(node_labels)} labels", flush=True)
+            
             return schema_info
             
         except Exception as e:
-            print(f"[CypherGenerator] Failed to fetch schema: {e}")
+            print(f"[CypherGenerator] ERROR fetching schema: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
             return None
 
 # 사용 예시

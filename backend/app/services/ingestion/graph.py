@@ -12,23 +12,9 @@ import yaml
 
 logger = logging.getLogger(__name__)
 
-# Inverse Relations Dictionary (Global Default)
-# Format: "Original" : "Inverse"
-INVERSE_RELATIONS = {
-    "스승": "제자",
-    "제자": "스승",
-    "부모": "자식",
-    "자식": "부모",
-    "선배": "후배",
-    "후배": "선배",
-    "형": "동생",
-    "동생": "형",
-    "언니": "동생",
-    "누나": "동생",
-    "오빠": "동생",
-    "남편": "아내",
-    "아내": "남편"
-}
+# [REMOVED] Inverse Relations Dictionary
+# Inverse relations are now handled at query time via bidirectional search,
+# not by physically duplicating triples at ingestion time.
 
 
 class GraphProcessor:
@@ -141,105 +127,40 @@ class GraphProcessor:
 
         # MULTI-PASS STRATEGY IMPLEMENTATION (HYBRID)
         
-        # Pass 1: HYBRID Entity Extraction (spaCy + LLM filtering)
-        print("[Graph] Pass 1: Hybrid Entity Extraction (spaCy + LLM)")
+        # [UPGRADED] Single-Pass Graph Extraction (Optimized for Recall)
+        # We merge Entity Discovery, Normalization, and Relation Extraction into one call
+        # to prevent missing valid entities like '장풍' that might be filtered in multi-pass.
+
+        # Add Critical Normalization Rules to the prompt
+        system_rules = """
+        ### CRITICAL RULE: Entity Normalization
+        1. **Consistency**: If the same person/entity has multiple names (e.g., "성기훈", "기훈", "Seong Gi-hun"), choose **ONE canonical Korean name** (e.g., "성기훈") and use it for all triples.
+        2. **Mappings**: Return a dictionary of variant-to-canonical mappings you performed.
+        3. **Capture All Valid Entities**: Do not ignore skills, abilities, or artifacts (e.g., "장풍", "달고나") if they have relationships.
+        """
         
-        # Step 1a: spaCy NER + Noun extraction
-        try:
-            import spacy
-            try:
-                nlp = spacy.load("ko_core_news_sm")
-            except OSError:
-                nlp = spacy.load("en_core_web_sm")  # Fallback
-            
-            doc = nlp(text)
-            spacy_candidates = set()
-            
-            # Extract named entities
-            for ent in doc.ents:
-                # Clean up: remove particles (의, 은, 는, 이, 가, 을, 를)
-                clean = ent.text.rstrip("의은는이가을를에서로")
-                if len(clean) >= 2:
-                    spacy_candidates.add(clean)
-            
-            # Extract nouns (PROPN, NOUN)
-            for token in doc:
-                if token.pos_ in ["PROPN", "NOUN"] and len(token.text) >= 2:
-                    # Skip particles
-                    if token.text not in ["것", "수", "등", "때", "중"]:
-                        spacy_candidates.add(token.text)
-            
-            print(f"[Graph] spaCy candidates ({len(spacy_candidates)}): {list(spacy_candidates)[:10]}...")
-        except Exception as e:
-            logger.error(f"spaCy extraction failed: {e}")
-            spacy_candidates = set()
-        
-        # Step 1b: LLM filters and completes the entity list
-        # Step 1b: LLM filters and completes the entity list
-        # We allow LLM to expand upon spaCy candidates to catch missed entities (e.g., "강새벽")
-        candidates_str = str(list(spacy_candidates)) if spacy_candidates else "None"
-        
-        filter_prompt = f"""Analyze the provided text and identify ALL key entities (Persons, Organizations, Concepts, Locations, Artifacts).
-
-I have run a basic NLP extraction and found these potential candidates: {candidates_str}
-
-**Your Task:**
-1. **Verity & Filter**: Keep valid candidates from the list above.
-2. **Discover Missing**: Read the text carefully to find **missed entities** that the NLP tool failed to catch (e.g., specific names, nicknames, novel terms).
-   - *Example*: If text mentions "탈북자 강새벽", but NLP missed "강새벽", you MUST add it.
-3. **Clean & Normalize**: Remove common nouns/particles. formatting.
-
-Text:
-{text}
-
-Return JSON with a single list of unique entities:
-{{"entities": ["Entity1", "Entity2", ...]}}
-"""
+        relation_prompt = prompt_template.replace("{text}", text) + "\n\n" + system_rules
         
         try:
+            print(f"[Graph] Single-Pass Extraction for chunk {chunk_id[:8]}...")
             r1 = await self.client.chat.completions.create(
-                model="gpt-4o", # Use strong model for entity discovery
-                messages=[{"role": "user", "content": filter_prompt}],
+                model="gpt-4o", # Use strong model for high-fidelity extraction
+                messages=[{"role": "user", "content": relation_prompt}],
                 temperature=0.1,
                 response_format={"type": "json_object"}
             )
-            entities = json.loads(r1.choices[0].message.content).get("entities", [])
-            logger.info(f"[Graph] Pass 1 Final entities ({len(entities)}): {entities[:10]}...")
-        except Exception as e:
-            logger.error(f"Pass 1 LLM failed: {e}")
-            entities = list(spacy_candidates) if spacy_candidates else []
-
-
-        # Pass 2: Relation Extraction with Hints
-        # Use the main template from prompt_template (which was loaded earlier from file or default)
-        relation_prompt = prompt_template.replace("{text}", text)
-        
-        # Determine how to inject entities into Pass 2
-        # If the template has {entities} placeholder, use it.
-        # Otherwise, prepend it as a hint.
-        entities_str = ', '.join(entities) if entities else "None identified yet"
-        if "{entities}" in relation_prompt:
-            relation_prompt = relation_prompt.replace("{entities}", entities_str)
-        else:
-            # Prepend entities hint if not in template to maintain Multi-pass benefit
-            relation_prompt = f"Entities to focus on (Hints from Pass 1): {entities_str}\n\n" + relation_prompt
-
-        
-        try:
-            r2 = await self.client.chat.completions.create(
-                model="gpt-4o",
-                messages=[{"role": "user", "content": relation_prompt}],
-                temperature=0,
-                response_format={"type": "json_object"}
-            )
-            content = r2.choices[0].message.content
-            print(f"[Graph] Pass 2 LLM Response: {content[:200]}...")
+            content = r1.choices[0].message.content
             data = json.loads(content)
+            
+            # The LLM should now return both triples and entity_mappings in one go
             triples_data = data.get("triples", [])
-            print(f"[Graph] Pass 2 Extracted {len(triples_data)} triples.")
+            entity_mappings = data.get("entity_mappings", {})
+            
+            logger.info(f"[Graph] Extracted {len(triples_data)} triples with {len(entity_mappings)} mapping hints.")
         except Exception as e:
-            logger.error(f"Pass 2 failed: {e}")
+            logger.error(f"Single-Pass Extraction failed: {e}")
             triples_data = []
+            entity_mappings = {}
 
         rdf_triples = []
         
@@ -247,9 +168,23 @@ Return JSON with a single list of unique entities:
         chunk_uri = f"<{self.namespace_source}{chunk_id}>"
         
         for item in triples_data:
-            subj = self._sanitize_uri(item['subject'])
+            # [NEW] Entity Normalization: 변형된 이름을 정규 이름으로 변환
+            subject_raw = item['subject']
+            object_raw = item['object']
+            
+            # entity_mappings에서 정규 이름 찾기 (없으면 원본 사용)
+            subject_normalized = entity_mappings.get(subject_raw, subject_raw)
+            object_normalized = entity_mappings.get(object_raw, object_raw)
+            
+            # 정규화 로그 (변경된 경우만)
+            if subject_raw != subject_normalized:
+                logger.info(f"[Graph] Normalized subject: '{subject_raw}' -> '{subject_normalized}'")
+            if object_raw != object_normalized:
+                logger.info(f"[Graph] Normalized object: '{object_raw}' -> '{object_normalized}'")
+            
+            subj = self._sanitize_uri(subject_normalized)
             pred = self._sanitize_uri(item['predicate'])
-            obj = self._sanitize_uri(item['object'])
+            obj = self._sanitize_uri(object_normalized)
             
             # URIs
             s_uri = f"<{self.namespace_entity}{subj}>"
@@ -259,18 +194,8 @@ Return JSON with a single list of unique entities:
             # Triple: Subject - Predicate - Object
             rdf_triples.append(f"{s_uri} {p_uri} {o_uri} .")
 
-            # Auto-generate Inverse Relation
-            if item['predicate'] in INVERSE_RELATIONS:
-                inv_pred = INVERSE_RELATIONS[item['predicate']]
-                inv_pred_safe = self._sanitize_uri(inv_pred)
-                p_inv_uri = f"<{self.namespace_relation}{inv_pred_safe}>"
-                
-                # Inverse Triple: Object - InversePredicate - Subject
-                # e.g. (성기훈, 제자, 오일남) -> (오일남, 스승, 성기훈)
-                # "오일남 is 스승 of 성기훈"
-                rdf_triples.append(f"{o_uri} {p_inv_uri} {s_uri} .")
-                # print(f"[Graph] Auto-generated inverse: {item['object']} --{inv_pred}--> {item['subject']}")
-
+            # [REMOVED] Auto-generate Inverse Relation
+            # Inverse relations are now inferred at query time, not stored physically.
             
             # Link Subject to Chunk (provenance)
             rdf_triples.append(f"{s_uri} <{self.namespace_relation}hasSource> {chunk_uri} .")
@@ -278,14 +203,14 @@ Return JSON with a single list of unique entities:
             # Link Object to Chunk (optional, but good for discovery)
             rdf_triples.append(f"{o_uri} <{self.namespace_relation}hasSource> {chunk_uri} .")
             
-            # Annotate Subject with Label
-            rdf_triples.append(f'{s_uri} <http://www.w3.org/2000/01/rdf-schema#label> "{item["subject"]}" .')
+            # Annotate Subject with Label (정규화된 이름 사용)
+            rdf_triples.append(f'{s_uri} <http://www.w3.org/2000/01/rdf-schema#label> "{subject_normalized}" .')
 
             # Annotate Predicate with Label (Critical for search)
             rdf_triples.append(f'{p_uri} <http://www.w3.org/2000/01/rdf-schema#label> "{item["predicate"]}" .')
 
-            # Annotate Object with Label
-            rdf_triples.append(f'{o_uri} <http://www.w3.org/2000/01/rdf-schema#label> "{item["object"]}" .')
+            # Annotate Object with Label (정규화된 이름 사용)
+            rdf_triples.append(f'{o_uri} <http://www.w3.org/2000/01/rdf-schema#label> "{object_normalized}" .')
 
         return {
             "rdf_triples": rdf_triples,

@@ -1,21 +1,14 @@
 
-import requests
-import json
+import asyncio
+from app.models.knowledge_base import KnowledgeBase
+from app.core.database import init_db
 
-BASE_URL = "http://localhost:8000/api"
-
-def list_kbs():
-    try:
-        resp = requests.get(f"{BASE_URL}/knowledge-bases")
-        if resp.status_code == 200:
-            kbs = resp.json()
-            print(f"Found {len(kbs)} KBs:")
-            for kb in kbs:
-                print(f"ID: {kb['id']}, Name: {kb['name']}, Doc Count: {kb.get('document_count', 'N/A')}, Metric: {kb.get('metric_type')}")
-        else:
-            print(f"Error: {resp.status_code}")
-    except Exception as e:
-        print(f"Error: {e}")
+async def list_kbs():
+    await init_db()
+    kbs = await KnowledgeBase.find_all().to_list()
+    print("Available Knowledge Bases:")
+    for kb in kbs:
+        print(f"- Name: '{kb.name}', ID: {kb.id}, Backend: {kb.graph_backend}")
 
 if __name__ == "__main__":
-    list_kbs()
+    asyncio.run(list_kbs())

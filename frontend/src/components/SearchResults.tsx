@@ -8,28 +8,28 @@ interface SearchResultsProps {
     pipeline?: any;
 }
 
-// 청크 팝업 모달 컴포넌트
+// Chunk popup modal component
 function ChunkPopup({ triple, chunks, onClose }: { triple: any; chunks: any[]; onClose: () => void }) {
     const sourceStart = triple.source_start;
     const sourceEnd = triple.source_end;
 
-    // 1. 우선: chunk_id가 있으면 직접 매칭
-    // 2. 폴백: 텍스트 기반 매칭 (subject OR object 포함 - AND 대신 OR 사용)
+    // 1. Priority: Direct match if chunk_id exists
+    // 2. Fallback: Text-based match (subject OR object - OR instead of AND)
     let relatedChunks = [];
 
-    // chunk_id가 트리플에 있는 경우 (백엔드에서 저장한 매핑)
+    // If chunk_id exists in triple (mapping stored by backend)
     if (triple.chunk_ids && triple.chunk_ids.length > 0) {
         relatedChunks = chunks.filter(c => triple.chunk_ids.includes(c.chunk_id));
     }
 
-    // chunk_id 매칭이 없으면 텍스트 기반 폴백 (더 관대한 매칭)
+    // Text-based fallback if no chunk_id match (more permissive)
     if (relatedChunks.length === 0) {
         const subj = (triple.subject || '').toLowerCase();
         const obj = (triple.object || '').toLowerCase();
 
         relatedChunks = chunks.filter(c => {
             const content = (c.content || '').toLowerCase();
-            // OR 조건: subject 또는 object 중 하나라도 포함되면 매칭
+            // OR condition: Matches if either subject or object is included
             return content.includes(subj) || content.includes(obj);
         });
     }
@@ -234,10 +234,10 @@ export default function SearchResults({ chunks, kbId, graphBackend, logs, pipeli
                                         width: '100%',
                                         boxSizing: 'border-box',
                                         padding: '1.25rem',
-                                        background: isGraph ? '#f0fdf4' : '#f8fafc',
+                                        background: isGraph ? '#eff6ff' : '#f8fafc',
                                         borderRadius: '8px',
-                                        border: isGraph ? '1px solid #86efac' : '1px solid var(--border)',
-                                        borderLeft: isGraph ? '4px solid #166534' : '4px solid var(--primary)',
+                                        border: isGraph ? '1px solid #93c5fd' : '1px solid var(--border)',
+                                        borderLeft: isGraph ? '4px solid #1e40af' : '4px solid var(--primary)',
                                         position: 'relative'
                                     }}
                                 >
@@ -251,11 +251,11 @@ export default function SearchResults({ chunks, kbId, graphBackend, logs, pipeli
                                         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
                                             <span style={{
                                                 fontWeight: 600,
-                                                background: isGraph ? '#dcfce7' : 'transparent',
-                                                color: isGraph ? '#14532d' : 'inherit',
+                                                background: isGraph ? '#dbeafe' : 'transparent',
+                                                color: isGraph ? '#1e3a8a' : 'inherit',
                                                 padding: isGraph ? '0.2rem 0.6rem' : '0',
                                                 borderRadius: isGraph ? '20px' : '0',
-                                                border: isGraph ? '1px solid #bbf7d0' : 'none',
+                                                border: isGraph ? '1px solid #bfdbfe' : 'none',
                                                 display: 'flex',
                                                 alignItems: 'center',
                                                 gap: '4px'
@@ -271,7 +271,7 @@ export default function SearchResults({ chunks, kbId, graphBackend, logs, pipeli
                                         </div>
                                         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
                                             {isGraph && (
-                                                <span className="badge" style={{ fontSize: '0.65rem', backgroundColor: '#dcfce7', color: '#166534' }}>
+                                                <span className="badge" style={{ fontSize: '0.65rem', backgroundColor: '#dbeafe', color: '#1e40af' }}>
                                                     Graph
                                                 </span>
                                             )}

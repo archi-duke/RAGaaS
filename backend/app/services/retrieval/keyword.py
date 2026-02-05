@@ -1,5 +1,5 @@
 from typing import List, Dict, Any
-from app.core.milvus import create_collection
+from pymilvus import Collection
 from app.services.embedding import embedding_service
 from .base import RetrievalStrategy
 import numpy as np
@@ -46,7 +46,9 @@ class KeywordRetrievalStrategy(RetrievalStrategy):
         if use_llm_extraction:
             search_query = await self.extract_keywords_with_llm(query)
 
-        collection = create_collection(kb_id)
+        # Get existing collection
+        collection_name = f"kb_{kb_id.replace('-', '_')}"
+        collection = Collection(collection_name)
         collection.load()
         
         from rank_bm25 import BM25Okapi
@@ -54,7 +56,7 @@ class KeywordRetrievalStrategy(RetrievalStrategy):
         # Fetch candidate chunks from Milvus (fetch generic candidates)
         # Note: In a real large-scale system, you'd use an Inverted Index (Elasticsearch/Solr)
         results = collection.query(
-            expr="id >= 0",
+            expr='chunk_id != ""',
             output_fields=["content", "doc_id", "chunk_id"],
             limit=2000
         )

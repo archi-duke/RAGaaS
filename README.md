@@ -181,6 +181,7 @@ docker-compose up -d
 
 ## 문서
 
+- [서비스 가동 및 트러블슈팅 가이드](docs/startup_guide.md) **(추천)**
 - [시스템 사양서](docs/specification.md)
 - [구현 계획](docs/implementation_plan.md)
 - [구현 완료 보고서](docs/walkthrough.md)

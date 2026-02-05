@@ -382,22 +382,7 @@ export default function HorizontalConfig({
                                         />
                                         Inverse Relations
                                     </label>
-                                    <button
-                                        className="btn"
-                                        style={{
-                                            marginLeft: '0',
-                                            fontSize: '0.8rem',
-                                            padding: '0.3rem 0.6rem',
-                                            backgroundColor: '#f1f5f9',
-                                            color: '#475569',
-                                            border: '1px solid #e2e8f0',
-                                            cursor: 'pointer',
-                                            opacity: 1
-                                        }}
-                                        onClick={onOpenPromptDialog}
-                                    >
-                                        Query Prompt
-                                    </button>
+                                    {/* Query Prompt Button REMOVED */}
                                     {/* Dynamic Schema - only show when NOT promoted */}
                                     {!isOntologyPromoted && (
                                         <label style={{

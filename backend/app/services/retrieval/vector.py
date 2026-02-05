@@ -1,6 +1,6 @@
 from typing import List, Dict, Any
+from pymilvus import Collection
 
-from app.core.milvus import create_collection
 from app.services.embedding import embedding_service
 from .base import RetrievalStrategy
 
@@ -8,26 +8,29 @@ class VectorRetrievalStrategy(RetrievalStrategy):
     async def search(self, kb_id: str, query: str, top_k: int, **kwargs) -> List[Dict[str, Any]]:
         score_threshold = kwargs.get("score_threshold", 0.0)
         metric_type = kwargs.get("metric_type", "COSINE")
-        index_type = kwargs.get("index_type", "IVF_FLAT")
         
-        collection = create_collection(kb_id, metric_type=metric_type, index_type=index_type)
+        execution_logs = kwargs.get("execution_logs", [])
+        
+        execution_logs.append(f"[Vector] Starting vector search (Top K: {top_k})")
+        execution_logs.append(f"[Vector] Metric: {metric_type}, Threshold: {score_threshold}")
+
+        # Get existing collection (created during KB setup)
+        collection_name = f"kb_{kb_id.replace('-', '_')}"
+        collection = Collection(collection_name)
         collection.load()
 
         # 1. Embed query
+        execution_logs.append(f"[Vector] Generating embedding for query: '{query}'")
         query_vectors = await embedding_service.get_embeddings([query])
         query_vec = query_vectors[0]
         
         # 2. Search
         search_params = {
             "metric_type": metric_type,
-            "params": {},
+            "params": {}
         }
         
-        if index_type == "IVF_FLAT":
-            search_params["params"] = {"nprobe": 10}
-        elif index_type == "HNSW":
-            search_params["params"] = {"ef": 64}
-        # FLAT and LSH typically don't need complex search-time params in simple cases
+        execution_logs.append(f"[Vector] Performing search with metric: {metric_type}")
         
         # Don't need vector field anymore if we trust Milvus score
         output_fields = ["content", "doc_id", "chunk_id"]
@@ -39,6 +42,8 @@ class VectorRetrievalStrategy(RetrievalStrategy):
             limit=top_k * 3,  # Fetch more for filtering
             output_fields=output_fields
         )
+        
+        execution_logs.append(f"[Vector] Milvus returned {len(results[0]) if results else 0} raw hits")
         
         retrieved = []
         for hits in results:
@@ -73,7 +78,11 @@ class VectorRetrievalStrategy(RetrievalStrategy):
                 })
         
         retrieved.sort(key=lambda x: x["score"], reverse=True)
-        return retrieved[:top_k]
+        final_results = retrieved[:top_k]
+        
+        execution_logs.append(f"[Vector] {len(final_results)} chunks passed threshold ({score_threshold})")
+        
+        return final_results
 
 
     # _cosine_similarity is no longer needed as we use Milvus scores directly

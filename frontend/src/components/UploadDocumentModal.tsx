@@ -1,9 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, X, FileText, Settings, Database, AlertCircle, Check, Info, Eye } from 'lucide-react';
-import { docApi, kbApi, extractionApi } from '../services/api';
+import { Upload, FileText } from 'lucide-react';
+import { docApi, kbApi } from '../services/api';
 import MessageDialog from './MessageDialog';
 import PromptDialog from './PromptDialog';
-import ExtractionPreviewModal from './ExtractionPreviewModal';
+import GraphExtractionSettings from './GraphExtractionSettings';
 
 interface UploadDocumentModalProps {
     isOpen: boolean;
@@ -68,25 +68,13 @@ const LabelWithTooltip = ({ label, tooltip }: { label: string, tooltip: string }
     );
 };
 
-// NOTE: ExtractionRuleModal and EditPromptModal have been removed.
-// Graph extraction is now handled by LlamaIndex in the Ingest Service.
-
 export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadComplete }: UploadDocumentModalProps) {
     const [file, setFile] = useState<File | null>(null);
     const [isUploading, setIsUploading] = useState(false);
     const [kbConfig, setKbConfig] = useState<any>(null);
 
-    // Modals state
     const [showExampleModal, setShowExampleModal] = useState(false);
     const [showPromptModal, setShowPromptModal] = useState(false);
-    const [showPreviewModal, setShowPreviewModal] = useState(false);
-    const [isExtracting, setIsExtracting] = useState(false);
-    const [previewData, setPreviewData] = useState<{
-        preview_id: string;
-        doc_id: string;
-        triples: any[];
-        node_count: number;
-    } | null>(null);
 
     const [messageDialog, setMessageDialog] = useState<{ isOpen: boolean; title: string; message: string; type: 'info' | 'success' | 'error' }>({
         isOpen: false,
@@ -95,29 +83,48 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
         type: 'info'
     });
 
-    // Graph Params - LlamaIndex based
     const [graphParams, setGraphParams] = useState({
         extractor_type: 'simple' as 'simple' | 'dynamic' | 'schema',
-        max_paths_per_chunk: 10,
+        max_paths_per_chunk: 20,
         max_triplets_per_chunk: 20,
         num_workers: 4,
         generate_inverse_relations: true,
         allowed_entity_types: [] as string[],
         allowed_relation_types: [] as string[],
-        enable_text_cleaning: false,  // Format char removal
-        enable_subject_restoration: true,  // Restore omitted subjects (Korean)
-        enable_inference: false,  // Rule-based inference
-        extraction_examples_yaml: '', // Few-Shot Examples (YAML)
-        custom_prompt: '', // Custom Extraction Prompt
+        enable_text_cleaning: false,
+        enable_subject_restoration: true,
+        enable_inference: false,
+        chunk_size: 300,
+        extraction_examples_yaml: '',
+        custom_prompt: '',
+        enable_entity_normalization: true,
+        normalization_algorithm: 'embedding' as 'embedding' | 'string' | 'llm',
+        normalization_threshold: 0.85,
+        max_sample_size: 50000,
+        enable_normalization_confirmation: false,
     });
-
-
 
     const fileInputRef = useRef<HTMLInputElement>(null);
 
+    const [strategy, setStrategy] = useState('fixed_size');
+    const [chunkingConfig, setChunkingConfig] = useState({
+        chunk_size: 300,
+        chunk_overlap: 20,
+        window_size: 3,
+        chunk_sizes: [2048, 512, 128],
+        parent_overlap: 0,
+        child_overlap: 100,
+        target_size: 800,
+        llm_auto_size: false,
+    });
+
     useEffect(() => {
-        if (isOpen && kbId) {
-            loadKbConfig();
+        if (isOpen) {
+            setFile(null);
+            setIsUploading(false);
+            if (kbId) {
+                loadKbConfig();
+            }
         }
     }, [isOpen, kbId]);
 
@@ -127,14 +134,6 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
             const data = res.data;
             setKbConfig(data);
 
-            // Initialize graph params from KB config
-            setGraphParams(prev => ({
-                ...prev,
-                graph_section_size: data.chunking_config?.graph_section_size || 2500,
-                graph_section_overlap: data.chunking_config?.graph_section_overlap || 1000
-            }));
-
-            // Load extraction prompt from server and set as default
             try {
                 const promptRes = await kbApi.getExtractionPrompt();
                 const serverPrompt = promptRes.data?.content;
@@ -159,22 +158,25 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
 
     const handleUpload = async () => {
         if (!file) return;
+
         setIsUploading(true);
         try {
             const config = {
-                ...graphParams
+                ...graphParams,
+                chunking_strategy: strategy,
+                chunking_config: chunkingConfig,
             };
 
             await docApi.upload(kbId, file, config);
             onUploadComplete();
             onClose();
-            setFile(null);
+
         } catch (err) {
             console.error(err);
             setMessageDialog({
                 isOpen: true,
                 title: 'Upload Failed',
-                message: 'An error occurred while uploading the document. Please try again.',
+                message: 'An error occurred while uploading. Please try again.',
                 type: 'error'
             });
         } finally {
@@ -182,107 +184,7 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
         }
     };
 
-    const handleExtract = async () => {
-        if (!file) return;
-        setIsExtracting(true);
-        try {
-            // First upload file to get file_path (via standard upload but we need the path)
-            // For now, we'll use the docApi to create a pending document and get its path
-            const formData = new FormData();
-            formData.append('file', file);
-
-            // Upload file to backend first to get file_path
-            const uploadRes = await docApi.upload(kbId, file, { ...graphParams, preview_only: true });
-            const docId = uploadRes.data.id;
-            const filePath = uploadRes.data.file_path || `/data/uploads/${kbId}/${file.name}`;
-
-            // Call preview API
-            const res = await extractionApi.preview({
-                kb_id: kbId,
-                doc_id: docId,
-                file_path: filePath,
-                chunking: {
-                    strategy: 'fixed_size',
-                    chunk_size: 1024,
-                    chunk_overlap: 20,
-                },
-                graph: {
-                    extractor_type: graphParams.extractor_type,
-                    max_paths_per_chunk: graphParams.max_paths_per_chunk,
-                    max_triplets_per_chunk: graphParams.max_triplets_per_chunk,
-                    num_workers: graphParams.num_workers,
-                    generate_inverse_relations: graphParams.generate_inverse_relations,
-                },
-                graph_store: kbConfig?.graph_backend === 'neo4j' ? 'neo4j' : 'fuseki',
-                enable_text_cleaning: graphParams.enable_text_cleaning,
-                enable_subject_restoration: graphParams.enable_subject_restoration,
-                extraction_examples_yaml: graphParams.extraction_examples_yaml || undefined,
-                custom_prompt: graphParams.custom_prompt || undefined,
-            });
-
-            setPreviewData({
-                preview_id: res.data.preview_id,
-                doc_id: docId,  // Store doc_id for cleanup on cancel
-                triples: res.data.triples,
-                node_count: res.data.node_count,
-            });
-            setShowPreviewModal(true);
-        } catch (err: any) {
-            console.error('Extract failed:', err);
-            setMessageDialog({
-                isOpen: true,
-                title: '추출 실패',
-                message: err.response?.data?.detail || '트리플 추출 중 오류가 발생했습니다.',
-                type: 'error'
-            });
-        } finally {
-            setIsExtracting(false);
-        }
-    };
-
-    const handlePreviewConfirm = async () => {
-        if (!previewData) return;
-        setIsExtracting(true);
-        try {
-            await extractionApi.confirm(previewData.preview_id, {
-                enable_inference: graphParams.enable_inference,
-            });
-            onUploadComplete();
-            onClose();
-            setFile(null);
-            setPreviewData(null);
-            setShowPreviewModal(false);
-        } catch (err: any) {
-            console.error('Confirm failed:', err);
-            setMessageDialog({
-                isOpen: true,
-                title: '저장 실패',
-                message: err.response?.data?.detail || '데이터 저장 중 오류가 발생했습니다.',
-                type: 'error'
-            });
-        } finally {
-            setIsExtracting(false);
-        }
-    };
-
-    const handlePreviewDiscard = async () => {
-        if (!previewData) return;
-        try {
-            // 1. Discard preview cache
-            await extractionApi.discard(previewData.preview_id);
-
-            // 2. Delete the created document record
-            await docApi.delete(kbId, previewData.doc_id);
-            console.log(`Document ${previewData.doc_id} deleted after preview cancel`);
-        } catch (err) {
-            console.error('Discard cleanup failed:', err);
-        }
-        setPreviewData(null);
-        setShowPreviewModal(false);
-    };
-
     const isGraphEnabled = kbConfig && kbConfig.graph_backend && kbConfig.graph_backend !== 'none';
-    const chunkingStrategy = kbConfig?.chunking_strategy || 'size';
 
     return (
         <>
@@ -292,234 +194,197 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 zIndex: 50
             }} onClick={onClose}>
-                <div className="card" style={{ width: '100%', maxWidth: '600px', maxHeight: '90vh', overflow: 'auto' }} onClick={(e) => e.stopPropagation()}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
-                        <h2 style={{ margin: 0 }}>Upload Document</h2>
-                        <button className="btn" onClick={onClose} style={{ padding: '0.5rem' }}>
-                            <X size={20} />
-                        </button>
-                    </div>
 
-                    <div style={{ marginBottom: '2rem' }}>
-                        <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 500 }}>Select File</label>
-                        <div
-                            style={{
-                                border: '2px dashed var(--border)',
-                                borderRadius: '8px',
-                                padding: '2rem',
-                                textAlign: 'center',
-                                cursor: 'pointer',
-                                background: '#fafafa'
-                            }}
-                            onClick={() => fileInputRef.current?.click()}
-                        >
-                            <input
-                                type="file"
-                                ref={fileInputRef}
-                                style={{ display: 'none' }}
-                                onChange={handleFileChange}
-                                accept=".txt,.pdf,.md"
-                            />
-                            {file ? (
-                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', color: 'var(--primary)' }}>
-                                    <FileText size={24} />
-                                    <span style={{ fontWeight: 500 }}>{file.name}</span>
-                                </div>
-                            ) : (
-                                <div style={{ color: 'var(--text-secondary)' }}>
-                                    <Upload size={32} style={{ marginBottom: '0.5rem' }} />
-                                    <p style={{ margin: 0 }}>Click to upload PDF, TXT, or MD</p>
-                                </div>
-                            )}
-                        </div>
-                    </div>
-
-                    {/* Graph Settings Section - 3 Column Layout */}
-                    {isGraphEnabled && (
-                        <div style={{ marginBottom: '1.5rem', background: '#f8fafc', padding: '1.25rem', borderRadius: '12px', border: '1px solid #e2e8f0' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1.25rem', color: '#3b82f6', fontWeight: 600 }}>
-                                <Database size={18} />
-                                <span>Graph Extraction Settings (LlamaIndex)</span>
-                            </div>
-
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem' }}>
-                                {/* Column 1: Config Parameters */}
-                                <div>
-                                    <h4 style={{ margin: '0 0 1rem 0', fontSize: '0.9rem', color: '#475569' }}>Configuration</h4>
-
-                                    <LabelWithTooltip label="Extractor Type" tooltip="Select LlamaIndex extractor type" />
-                                    <select
-                                        className="input"
-                                        value={graphParams.extractor_type}
-                                        onChange={(e) => setGraphParams({ ...graphParams, extractor_type: e.target.value as 'simple' | 'dynamic' | 'schema' })}
-                                        style={{ width: '100%', padding: '0.5rem', fontSize: '0.85rem', marginBottom: '1rem' }}
-                                    >
-                                        <option value="simple">Simple LLM (Default)</option>
-                                        <option value="dynamic">Dynamic LLM</option>
-                                        <option value="schema">Schema-based</option>
-                                    </select>
-
-                                    {graphParams.extractor_type === 'simple' && (
-                                        <div style={{ marginBottom: '1rem' }}>
-                                            <LabelWithTooltip label={`Max Paths: ${graphParams.max_paths_per_chunk}`} tooltip="Max triples per chunk" />
-                                            <input
-                                                type="range" min="5" max="50" step="5"
-                                                value={graphParams.max_paths_per_chunk}
-                                                onChange={(e) => setGraphParams({ ...graphParams, max_paths_per_chunk: parseInt(e.target.value) })}
-                                                style={{ width: '100%', cursor: 'pointer', accentColor: '#3b82f6' }}
-                                            />
-                                        </div>
-                                    )}
-
-                                    {graphParams.extractor_type === 'dynamic' && (
-                                        <div style={{ marginBottom: '1rem' }}>
-                                            <LabelWithTooltip label={`Max Triplets: ${graphParams.max_triplets_per_chunk}`} tooltip="Max triples per chunk" />
-                                            <input
-                                                type="range" min="10" max="100" step="10"
-                                                value={graphParams.max_triplets_per_chunk}
-                                                onChange={(e) => setGraphParams({ ...graphParams, max_triplets_per_chunk: parseInt(e.target.value) })}
-                                                style={{ width: '100%', cursor: 'pointer', accentColor: '#3b82f6' }}
-                                            />
-                                        </div>
-                                    )}
-
-                                    <div>
-                                        <LabelWithTooltip label={`Workers: ${graphParams.num_workers}`} tooltip="Number of parallel workers" />
-                                        <input
-                                            type="range" min="1" max="8" step="1"
-                                            value={graphParams.num_workers}
-                                            onChange={(e) => setGraphParams({ ...graphParams, num_workers: parseInt(e.target.value) })}
-                                            style={{ width: '100%', cursor: 'pointer', accentColor: '#3b82f6' }}
-                                        />
-                                    </div>
-                                </div>
-
-                                {/* Column 2: Checkbox Options */}
-                                <div>
-                                    <h4 style={{ margin: '0 0 1rem 0', fontSize: '0.9rem', color: '#475569' }}>Options</h4>
-
-                                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', marginBottom: '1rem' }}>
-                                        <input
-                                            type="checkbox"
-                                            checked={graphParams.generate_inverse_relations}
-                                            onChange={(e) => setGraphParams({ ...graphParams, generate_inverse_relations: e.target.checked })}
-                                            style={{ width: '1.1rem', height: '1.1rem', accentColor: '#3b82f6', flexShrink: 0 }}
-                                        />
-                                        <div>
-                                            <span style={{ color: '#334155', fontWeight: 500, fontSize: '0.9rem' }}>Generate Inverse</span>
-                                            <div style={{ fontSize: '0.75rem', color: '#64748b' }}>e.g. Teacher → Student</div>
-                                        </div>
-                                    </label>
-
-                                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', marginBottom: '1rem' }}>
-                                        <input
-                                            type="checkbox"
-                                            checked={graphParams.enable_text_cleaning}
-                                            onChange={(e) => setGraphParams({ ...graphParams, enable_text_cleaning: e.target.checked })}
-                                            style={{ width: '1.1rem', height: '1.1rem', accentColor: '#3b82f6', flexShrink: 0 }}
-                                        />
-                                        <div>
-                                            <span style={{ color: '#334155', fontWeight: 500, fontSize: '0.9rem' }}>Clean Text</span>
-                                            <div style={{ fontSize: '0.75rem', color: '#64748b' }}>Remove bullets, numbers</div>
-                                        </div>
-                                    </label>
-
-                                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', marginBottom: '1rem' }}>
-                                        <input
-                                            type="checkbox"
-                                            checked={graphParams.enable_subject_restoration}
-                                            onChange={(e) => setGraphParams({ ...graphParams, enable_subject_restoration: e.target.checked })}
-                                            style={{ width: '1.1rem', height: '1.1rem', accentColor: '#3b82f6', flexShrink: 0 }}
-                                        />
-                                        <div>
-                                            <span style={{ color: '#334155', fontWeight: 500, fontSize: '0.9rem' }}>Subject Restoration</span>
-                                            <div style={{ fontSize: '0.75rem', color: '#64748b' }}>Resolve omitted subjects (KR)</div>
-                                        </div>
-                                    </label>
-
-                                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
-                                        <input
-                                            type="checkbox"
-                                            checked={graphParams.enable_inference}
-                                            onChange={(e) => setGraphParams({ ...graphParams, enable_inference: e.target.checked })}
-                                            style={{ width: '1.1rem', height: '1.1rem', accentColor: '#3b82f6', flexShrink: 0 }}
-                                        />
-                                        <div>
-                                            <span style={{ color: '#334155', fontWeight: 500, fontSize: '0.9rem' }}>Inference</span>
-                                            <div style={{ fontSize: '0.75rem', color: '#64748b' }}>Apply reasoning rules</div>
-                                        </div>
-                                    </label>
-                                </div>
-
-                                {/* Column 3: Customization Actions */}
-                                <div>
-                                    <h4 style={{ margin: '0 0 1rem 0', fontSize: '0.9rem', color: '#475569' }}>Customization</h4>
-
-                                    <button
-                                        className="btn"
-                                        style={{ width: '100%', marginBottom: '0.75rem', justifyContent: 'center', background: '#fff', border: '1px solid #cbd5e1' }}
-                                        onClick={() => setShowExampleModal(true)}
-                                    >
-                                        Manage Examples
-                                    </button>
-                                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'default', marginBottom: '1.25rem', justifyContent: 'center' }}>
-                                        <input
-                                            type="checkbox"
-                                            checked={!!graphParams.extraction_examples_yaml}
-                                            readOnly
-                                            style={{ width: '0.9rem', height: '0.9rem', accentColor: '#3b82f6' }}
-                                        />
-                                        <span style={{ fontSize: '0.75rem', color: '#64748b' }}>Examples Added</span>
-                                    </label>
-
-                                    <button
-                                        className="btn"
-                                        style={{ width: '100%', marginBottom: '0.75rem', justifyContent: 'center', background: '#fff', border: '1px solid #cbd5e1' }}
-                                        onClick={() => setShowPromptModal(true)}
-                                    >
-                                        Edit Extraction Prompt
-                                    </button>
-                                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'default', justifyContent: 'center' }}>
-                                        <input
-                                            type="checkbox"
-                                            checked={!!graphParams.custom_prompt}
-                                            readOnly
-                                            style={{ width: '0.9rem', height: '0.9rem', accentColor: '#3b82f6' }}
-                                        />
-                                        <span style={{ fontSize: '0.75rem', color: '#64748b' }}>Custom Prompt Active</span>
-                                    </label>
-                                </div>
-                            </div>
-                        </div>
-                    )}
-
-
-                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '1rem' }}>
-                        <button className="btn" onClick={onClose} disabled={isUploading || isExtracting}>Cancel</button>
-                        {isGraphEnabled && (
+                <div className="card" style={{
+                    width: '100%',
+                    maxWidth: '800px',
+                    maxHeight: '90vh',
+                    overflow: 'hidden',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    padding: 0
+                }} onClick={(e) => e.stopPropagation()}>
+                    <div style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        padding: '1.5rem',
+                        borderBottom: '1px solid #e2e8f0',
+                        backgroundColor: 'white'
+                    }}>
+                        <h2 style={{ margin: 0, fontSize: '1.25rem' }}>Upload Document</h2>
+                        <div style={{ display: 'flex', gap: '1rem' }}>
                             <button
-                                className="btn"
-                                onClick={handleExtract}
-                                disabled={!file || isUploading || isExtracting}
-                                style={{
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    gap: '0.5rem',
-                                    border: '1px solid #3b82f6',
-                                    color: '#3b82f6'
-                                }}
+                                className="btn btn-primary"
+                                onClick={handleUpload}
+                                disabled={!file || isUploading}
                             >
-                                <Eye size={16} />
-                                {isExtracting ? 'Extracting...' : 'Extract'}
+                                {isUploading ? 'Uploading...' : 'Process Document'}
                             </button>
+                            <button className="btn" onClick={onClose} disabled={isUploading}>Cancel</button>
+                        </div>
+                    </div>
+
+                    <div style={{
+                        padding: '1.5rem',
+                        overflowY: 'auto',
+                        flex: 1
+                    }}>
+                        <div style={{ marginBottom: '2rem' }}>
+                            <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 500 }}>Select File</label>
+                            <div
+                                style={{
+                                    border: '2px dashed var(--border)',
+                                    borderRadius: '8px',
+                                    padding: '2rem',
+                                    textAlign: 'center',
+                                    cursor: 'pointer',
+                                    background: '#fafafa',
+                                }}
+                                onClick={() => fileInputRef.current?.click()}
+                            >
+                                <input
+                                    type="file"
+                                    ref={fileInputRef}
+                                    style={{ display: 'none' }}
+                                    onChange={handleFileChange}
+                                    accept=".txt,.pdf,.md"
+                                />
+                                {file ? (
+                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', color: 'var(--primary)' }}>
+                                        <FileText size={24} />
+                                        <span style={{ fontWeight: 500 }}>{file.name}</span>
+                                    </div>
+                                ) : (
+                                    <div style={{ color: 'var(--text-secondary)' }}>
+                                        <Upload size={32} style={{ marginBottom: '0.5rem' }} />
+                                        <p style={{ margin: 0 }}>Click to upload PDF, TXT, or MD</p>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+
+                        <div style={{ marginBottom: '2rem' }}>
+                            <label style={{ display: 'block', marginBottom: '0.8rem', fontWeight: 600, color: '#334155' }}>Chunking Strategy</label>
+                            <div style={{ marginBottom: '1rem' }}>
+                                <select
+                                    className="input"
+                                    value={strategy}
+                                    onChange={(e) => setStrategy(e.target.value)}
+                                    style={{
+                                        width: '100%',
+                                        padding: '0.75rem',
+                                        borderRadius: '8px',
+                                        border: '1px solid #e2e8f0',
+                                        backgroundColor: '#fff',
+                                        fontSize: '0.95rem',
+                                        color: '#1e293b',
+                                        cursor: 'pointer'
+                                    }}
+                                >
+                                    {[
+                                        { id: 'fixed_size', name: 'Fixed Size (Standard)' },
+                                        { id: 'sliding_window', name: 'Sliding Window (Contextual)' },
+                                        { id: 'hierarchical', name: 'Hierarchical (Parent-Child)' },
+                                        { id: 'context_aware', name: 'Context Aware (LLM-based)' }
+                                    ]
+                                        .filter(s => !(isGraphEnabled && s.id === 'context_aware'))
+                                        .map(s => (
+                                            <option key={s.id} value={s.id}>{s.name}</option>
+                                        ))}
+                                </select>
+                            </div>
+
+                            <div style={{ padding: '1.25rem', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px' }}>
+                                {strategy === 'fixed_size' && (
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                                        <div>
+                                            <LabelWithTooltip label="Chunk Size" tooltip="Characters per chunk" />
+                                            <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '0.4rem', lineHeight: 1.3 }}>
+                                                Maximum characters per chunk. Determines the primary size of information retrieval units.
+                                            </div>
+                                            <input type="number" className="input" value={chunkingConfig.chunk_size} onChange={(e) => setChunkingConfig({ ...chunkingConfig, chunk_size: parseInt(e.target.value) })} />
+                                        </div>
+                                        <div>
+                                            <LabelWithTooltip label="Overlap" tooltip="Character overlap" />
+                                            <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '0.4rem', lineHeight: 1.3 }}>
+                                                Shared characters between chunks to maintain context across boundaries.
+                                            </div>
+                                            <input type="number" className="input" value={chunkingConfig.chunk_overlap} onChange={(e) => setChunkingConfig({ ...chunkingConfig, chunk_overlap: parseInt(e.target.value) })} />
+                                        </div>
+                                    </div>
+                                )}
+                                {strategy === 'sliding_window' && (
+                                    <div>
+                                        <LabelWithTooltip label="Window Size" tooltip="Number of sentences around" />
+                                        <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '0.4rem', lineHeight: 1.3 }}>
+                                            Number of surrounding sentences to include around each target sentence for enriched context.
+                                        </div>
+                                        <input type="number" className="input" value={chunkingConfig.window_size} onChange={(e) => setChunkingConfig({ ...chunkingConfig, window_size: parseInt(e.target.value) })} />
+                                    </div>
+                                )}
+                                {strategy === 'hierarchical' && (
+                                    <div>
+                                        <LabelWithTooltip label="Levels (Large->Small)" tooltip="e.g., 2048, 512, 128" />
+                                        <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '0.4rem', lineHeight: 1.3 }}>
+                                            Recursive chunking structure. Allows retrieving small chunks while maintaining broad parent context.
+                                        </div>
+                                        <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                            {chunkingConfig.chunk_sizes.map((size, idx) => (
+                                                <input key={idx} type="number" className="input" value={size}
+                                                    onChange={(e) => {
+                                                        const newSizes = [...chunkingConfig.chunk_sizes];
+                                                        newSizes[idx] = parseInt(e.target.value);
+                                                        setChunkingConfig({ ...chunkingConfig, chunk_sizes: newSizes });
+                                                    }} />
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+                                {strategy === 'context_aware' && (
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                                        <div>
+                                            <LabelWithTooltip label="Target Chunk Size" tooltip="Desired characters per chunk" />
+                                            <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '0.4rem', lineHeight: 1.3 }}>
+                                                LLM will intelligently split text at semantic boundaries while aiming for this character count. (Recommended: 500-1000)
+                                            </div>
+                                            <input
+                                                type="number"
+                                                className="input"
+                                                value={chunkingConfig.target_size}
+                                                onChange={(e) => setChunkingConfig({ ...chunkingConfig, target_size: parseInt(e.target.value) })}
+                                                disabled={chunkingConfig.llm_auto_size}
+                                                style={{ opacity: chunkingConfig.llm_auto_size ? 0.5 : 1 }}
+                                            />
+                                        </div>
+                                        <div>
+                                            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                                                <input
+                                                    type="checkbox"
+                                                    checked={chunkingConfig.llm_auto_size}
+                                                    onChange={(e) => setChunkingConfig({ ...chunkingConfig, llm_auto_size: e.target.checked })}
+                                                    style={{ width: '1.1rem', height: '1.1rem' }}
+                                                />
+                                                <span style={{ fontSize: '0.9rem', fontWeight: 500 }}>Let LLM decide chunk size automatically</span>
+                                            </label>
+                                            <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '0.3rem', marginLeft: '1.6rem', lineHeight: 1.3 }}>
+                                                LLM will determine optimal split points based on semantic coherence without size constraints.
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+
+                        {isGraphEnabled && (
+                            <GraphExtractionSettings
+                                graphParams={graphParams}
+                                onParamsChange={setGraphParams}
+                                onManageExamples={() => setShowExampleModal(true)}
+                                onEditPrompt={() => setShowPromptModal(true)}
+                                showEntitySample={true}
+                            />
                         )}
-                        <button
-                            className="btn btn-primary"
-                            onClick={handleUpload}
-                            disabled={!file || isUploading || isExtracting}
-                        >
-                            {isUploading ? 'Uploading...' : 'Upload'}
-                        </button>
                     </div>
                 </div>
             </div>
@@ -531,7 +396,6 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                 onSave={(yaml) => setGraphParams(prev => ({ ...prev, extraction_examples_yaml: yaml }))}
                 mode="extraction_examples"
             />
-
             <PromptDialog
                 isOpen={showPromptModal}
                 onClose={() => setShowPromptModal(false)}
@@ -547,20 +411,6 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                 type={messageDialog.type}
                 onClose={() => setMessageDialog({ ...messageDialog, isOpen: false })}
             />
-
-            {previewData && (
-                <ExtractionPreviewModal
-                    isOpen={showPreviewModal}
-                    onClose={() => setShowPreviewModal(false)}
-                    previewId={previewData.preview_id}
-                    triples={previewData.triples}
-                    nodeCount={previewData.node_count}
-                    isLoading={isExtracting}
-                    onConfirm={handlePreviewConfirm}
-                    onDiscard={handlePreviewDiscard}
-                />
-            )}
         </>
-
     );
 }

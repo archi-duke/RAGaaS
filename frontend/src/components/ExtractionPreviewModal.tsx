@@ -15,8 +15,9 @@ interface ExtractionPreviewModalProps {
     triples: Triple[];
     nodeCount: number;
     isLoading?: boolean;
-    onConfirm: () => void;
-    onDiscard: () => void;
+    onConfirm?: () => void;
+    onDiscard?: () => void;
+    viewOnly?: boolean;
 }
 
 export default function ExtractionPreviewModal({
@@ -27,7 +28,8 @@ export default function ExtractionPreviewModal({
     nodeCount,
     isLoading = false,
     onConfirm,
-    onDiscard
+    onDiscard,
+    viewOnly = false
 }: ExtractionPreviewModalProps) {
     if (!isOpen) return null;
 
@@ -37,7 +39,7 @@ export default function ExtractionPreviewModal({
             backgroundColor: 'rgba(0,0,0,0.6)',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             zIndex: 60
-        }} onClick={onClose}>
+        }}>
             <div
                 className="card"
                 style={{
@@ -60,9 +62,9 @@ export default function ExtractionPreviewModal({
                     paddingBottom: '1rem'
                 }}>
                     <div>
-                        <h2 style={{ margin: 0, fontSize: '1.25rem' }}>추출 미리보기</h2>
+                        <h2 style={{ margin: 0, fontSize: '1.25rem' }}>{viewOnly ? 'Triple List' : 'Extraction Preview'}</h2>
                         <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                            {nodeCount}개 노드에서 {triples.length}개 트리플 추출됨
+                            {triples.length} triples extracted from {nodeCount} nodes
                         </p>
                     </div>
                     <button className="btn" onClick={onClose} style={{ padding: '0.5rem' }}>
@@ -85,7 +87,7 @@ export default function ExtractionPreviewModal({
                             color: 'var(--text-secondary)'
                         }}>
                             <AlertCircle size={32} style={{ marginBottom: '0.5rem', opacity: 0.5 }} />
-                            <p>추출된 트리플이 없습니다.</p>
+                            <p>No triples extracted.</p>
                         </div>
                     ) : (
                         <table style={{
@@ -95,14 +97,14 @@ export default function ExtractionPreviewModal({
                         }}>
                             <thead>
                                 <tr style={{
-                                    backgroundColor: '#f8fafc',
+                                    backgroundColor: '#eff6ff',
                                     position: 'sticky',
                                     top: 0
                                 }}>
                                     <th style={{ padding: '0.75rem', textAlign: 'left', borderBottom: '1px solid var(--border)' }}>#</th>
-                                    <th style={{ padding: '0.75rem', textAlign: 'left', borderBottom: '1px solid var(--border)' }}>주어 (Subject)</th>
-                                    <th style={{ padding: '0.75rem', textAlign: 'left', borderBottom: '1px solid var(--border)' }}>관계 (Predicate)</th>
-                                    <th style={{ padding: '0.75rem', textAlign: 'left', borderBottom: '1px solid var(--border)' }}>목적어 (Object)</th>
+                                    <th style={{ padding: '0.75rem', textAlign: 'left', borderBottom: '1px solid var(--border)' }}>Subject</th>
+                                    <th style={{ padding: '0.75rem', textAlign: 'left', borderBottom: '1px solid var(--border)' }}>Predicate</th>
+                                    <th style={{ padding: '0.75rem', textAlign: 'left', borderBottom: '1px solid var(--border)' }}>Object</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -130,33 +132,45 @@ export default function ExtractionPreviewModal({
                     borderTop: '1px solid var(--border)',
                     paddingTop: '1rem'
                 }}>
-                    <button
-                        className="btn"
-                        onClick={onDiscard}
-                        disabled={isLoading}
-                        style={{ minWidth: '100px' }}
-                    >
-                        취소
-                    </button>
-                    <button
-                        className="btn btn-primary"
-                        onClick={onConfirm}
-                        disabled={isLoading || triples.length === 0}
-                        style={{
-                            minWidth: '100px',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            gap: '0.5rem'
-                        }}
-                    >
-                        {isLoading ? '저장 중...' : (
-                            <>
-                                <Check size={16} />
-                                저장
-                            </>
-                        )}
-                    </button>
+                    {viewOnly ? (
+                        <button
+                            className="btn btn-primary"
+                            onClick={onClose}
+                            style={{ minWidth: '100px' }}
+                        >
+                            Close
+                        </button>
+                    ) : (
+                        <>
+                            <button
+                                className="btn"
+                                onClick={onDiscard}
+                                disabled={isLoading}
+                                style={{ minWidth: '100px' }}
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                className="btn btn-primary"
+                                onClick={onConfirm}
+                                disabled={isLoading || triples.length === 0}
+                                style={{
+                                    minWidth: '100px',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    gap: '0.5rem'
+                                }}
+                            >
+                                {isLoading ? 'Saving...' : (
+                                    <>
+                                        <Check size={16} />
+                                        Save
+                                    </>
+                                )}
+                            </button>
+                        </>
+                    )}
                 </div>
             </div>
         </div>

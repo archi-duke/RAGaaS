@@ -51,7 +51,7 @@ export default function KnowledgeBaseDetail() {
     const [useRelationFilter, setUseRelationFilter] = useState(true);
     const [useSchemaMode, setUseSchemaMode] = useState(true); // Default ON for promoted KBs
     const [useDynamicSchema, setUseDynamicSchema] = useState(false); // Dynamic Schema for non-promoted KBs
-    const [useRawLog, setUseRawLog] = React.useState(false);
+    const [useRawLog, setUseRawLog] = React.useState(true);
 
     // Brute Force State (for 2-stage)
     const [bruteForceTopK, setBruteForceTopK] = useState(1);
@@ -98,6 +98,7 @@ export default function KnowledgeBaseDetail() {
     // Resizable Panel State
     const [chatPanelWidth, setChatPanelWidth] = useState(50); // percentage
     const [isResizing, setIsResizing] = useState(false);
+    const [wsConnected, setWsConnected] = useState(false);
 
     const handleResizerMouseDown = (e: React.MouseEvent) => {
         e.preventDefault();
@@ -133,13 +134,33 @@ export default function KnowledgeBaseDetail() {
         loadSettings();
 
         // WebSocket connection for real-time document status updates
-        const ws = new WebSocket(`ws://localhost:8000/api/ws/${id}`);
+        // WebSocket connection for real-time document status updates
+        // Use current page's host/port (simplest and most robust for proxy setups)
+        // Note: For local dev (port 3000), we proxy /api calls via Vite config, 
+        // but for WS we might need direct connection to 8000 if proxy isn't set up for WS.
+        // Assuming production/docker uses Nginx/proxy on same port.
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+
+        let wsUrl;
+        if (window.location.port === '3000' || window.location.port === '5173') {
+            // Local Dev: Connect directly to backend port 8000
+            wsUrl = `${protocol}//${window.location.hostname}:8000/api/ws/${id}`;
+        } else {
+            // Production/Docker: Use same host:port as page
+            wsUrl = `${protocol}//${window.location.host}/api/ws/${id}`;
+        }
+
+        console.log(`[WebSocket] Connecting to: ${wsUrl}`);
+
+        console.log(`[WebSocket] Connecting to: ${wsUrl}`);
+        const ws = new WebSocket(wsUrl);
 
         ws.onopen = () => {
             console.log('Connected to WebSocket');
+            setWsConnected(true);
         };
 
-        ws.onmessage = (event) => {
+        ws.onmessage = async (event) => {
             console.log("WS Received:", event.data);
             const data = JSON.parse(event.data);
             if (data.type === 'document_status_update') {
@@ -147,19 +168,30 @@ export default function KnowledgeBaseDetail() {
                 if (data.status === 'deleted') {
                     setDocuments((prevDocs) => prevDocs.filter((doc) => doc.id !== data.doc_id));
                 } else {
-                    setDocuments((prevDocs) =>
-                        prevDocs.map((doc) =>
-                            doc.id === data.doc_id
-                                ? { ...doc, status: data.status }
-                                : doc
-                        )
-                    );
+                    setDocuments((prevDocs) => {
+                        const exists = prevDocs.some(doc => doc.id === data.doc_id);
+                        if (exists) {
+                            return prevDocs.map((doc) =>
+                                doc.id === data.doc_id
+                                    ? { ...doc, status: data.status, pipeline_status: data.pipeline_status }
+                                    : doc
+                            );
+                        } else {
+                            // New document detected (upload or processing started)
+                            // We need to fetch the full doc details to add it to the list
+                            // Check if we are already fetching to avoid race conditions?
+                            // For simplicity, trigger a reload of this specific doc or full list
+                            loadDocs(); // Easiest way to ensure consistency
+                            return prevDocs;
+                        }
+                    });
                 }
             }
         };
 
         ws.onclose = () => {
             console.log('Disconnected from WebSocket');
+            setWsConnected(false);
         };
 
         ws.onerror = (error) => {
@@ -173,7 +205,7 @@ export default function KnowledgeBaseDetail() {
 
     const loadSettings = () => {
         try {
-            // KB별 설정 저장을 위해 KB ID를 키에 포함
+            // Include KB ID in key to save settings per KB
             const settingsKey = `retrievalSettings_${id}`;
             const saved = localStorage.getItem(settingsKey);
             if (saved) {
@@ -237,7 +269,7 @@ export default function KnowledgeBaseDetail() {
             useSchemaMode,
             useDynamicSchema
         };
-        // KB별 설정 저장
+        // Save settings per KB
         const settingsKey = `retrievalSettings_${id}`;
         localStorage.setItem(settingsKey, JSON.stringify(settings));
         console.log(`[KB ${id}] Settings saved:`, { enableInverseSearch, inverseExtractionMode });
@@ -270,46 +302,8 @@ export default function KnowledgeBaseDetail() {
         useDynamicSchema
     ]);
 
-    const loadKB = async () => {
-        try {
-            const response = await kbApi.get(id!);
-            const kbData = response.data;
-            setKb(kbData);
+    // loadKB has been moved below
 
-            // KB에 graph_backend가 설정되어 있으면 그래프 검색 자동 활성화
-            // (단, 사용자가 저장한 설정이 없을 때만)
-            const settingsKey = `retrievalSettings_${id}`;
-            const saved = localStorage.getItem(settingsKey);
-            const isGraphRAG = kbData.graph_backend === 'neo4j' || kbData.graph_backend === 'ontology';
-
-            if (!saved) {
-                // 저장된 설정이 없으면 KB의 graph_backend에 맞게 기본값 설정
-                if (isGraphRAG) {
-                    console.log(`[KB ${id}] Auto-enabling graph search (graph_backend: ${kbData.graph_backend})`);
-                    setEnableGraphSearch(true);
-                    setSearchStrategy('hybrid_graph');
-                } else {
-                    setEnableGraphSearch(false);
-                    setSearchStrategy('ann');
-                }
-            } else {
-                // 저장된 설정이 있어도 현재 KB의 graph_backend와 호환되지 않으면 조정
-                const savedSettings = JSON.parse(saved);
-                if (savedSettings.searchStrategy === 'hybrid_graph' && !isGraphRAG) {
-                    // Graph가 없는 KB인데 hybrid_graph가 설정되어 있으면 ann으로 변경
-                    console.log(`[KB ${id}] Resetting searchStrategy from hybrid_graph to ann (no graph backend)`);
-                    setSearchStrategy('ann');
-                    setEnableGraphSearch(false);
-                } else if (isGraphRAG && !savedSettings.enableGraphSearch) {
-                    // Graph KB인데 그래프 검색이 비활성화되어 있으면 활성화
-                    console.log(`[KB ${id}] Graph KB detected, enabling graph search`);
-                    setEnableGraphSearch(true);
-                }
-            }
-        } catch (error) {
-            console.error('Failed to load KB:', error);
-        }
-    };
 
     const handlePromote = async () => {
         if (!id) return;
@@ -343,22 +337,59 @@ export default function KnowledgeBaseDetail() {
     const loadDocs = async () => {
         try {
             const response = await docApi.list(id!);
-            setDocuments(response.data);
+            // Defensive: Ensure response.data is an array
+            const docList = Array.isArray(response.data) ? response.data : [];
+            setDocuments(docList);
         } catch (error) {
             console.error('Failed to load documents:', error);
+            // Set empty array on error to prevent crashes
+            setDocuments([]);
         }
     };
 
-    // Auto-refresh documents if any are processing
+    // Auto-refresh documents if any are processing or deleting
+    // This acts as a fallback in case WebSocket messages are missed
     useEffect(() => {
-        const hasProcessing = documents.some(doc => doc.status === 'processing');
-        if (hasProcessing) {
-            const timer = setTimeout(() => {
-                loadDocs();
-            }, 3000);
+        // Defensive: Ensure documents is an array before calling .some()
+        const safeDocList = Array.isArray(documents) ? documents : [];
+        const hasProcessing = safeDocList.some(doc => doc.status === 'processing');
+        const hasDeleting = safeDocList.some(doc => doc.status === 'deleting');
+
+        if (hasProcessing || hasDeleting) {
+            const timer = setTimeout(async () => {
+                try {
+                    const response = await docApi.list(id!);
+                    // Defensive: Ensure response.data is an array
+                    const serverDocs = Array.isArray(response.data) ? response.data : [];
+                    const serverDocIds = new Set(serverDocs.map((d: any) => d.id));
+
+                    // Remove documents that no longer exist on server (deleted)
+                    setDocuments(prev => {
+                        const safePrev = Array.isArray(prev) ? prev : [];
+                        const filtered = safePrev.filter(doc => {
+                            // Keep doc if it exists on server, or if it's not in deleting state
+                            if (serverDocIds.has(doc.id)) {
+                                // Update status from server
+                                const serverDoc = serverDocs.find((sd: any) => sd.id === doc.id);
+                                return { ...doc, ...serverDoc };
+                            }
+                            // Document not on server - remove it (was deleted)
+                            console.log(`[Auto-refresh] Document ${doc.id} removed (no longer on server)`);
+                            return false;
+                        });
+
+                        // Merge with server docs to get any new ones
+                        return serverDocs;
+                    });
+                } catch (error) {
+                    console.error('Auto-refresh failed:', error);
+                    // Set empty array on error
+                    setDocuments([]);
+                }
+            }, hasDeleting ? 1500 : 3000); // Faster refresh for deleting status
             return () => clearTimeout(timer);
         }
-    }, [documents]);
+    }, [documents, id]);
 
     const handleViewChunks = async (doc: any) => {
         setSelectedDoc(doc);
@@ -376,23 +407,94 @@ export default function KnowledgeBaseDetail() {
 
     const confirmDelete = async () => {
         if (!deleteDocId) return;
+
+        const docIdToDelete = deleteDocId;
+        setDeleteDocId(null); // Close modal immediately
+
         try {
-            await docApi.delete(id!, deleteDocId);
+            // [IMMEDIATE UI FEEDBACK] Update local state first
+            setDocuments(prev => prev.map(doc =>
+                doc.id === docIdToDelete
+                    ? { ...doc, status: 'deleting' as const }
+                    : doc
+            ));
 
-            // Optimistic update: Remove from local state immediately
-            setDocuments(prevDocs => prevDocs.filter(doc => doc.id !== deleteDocId));
+            // Call delete API - backend will broadcast via WebSocket
+            await docApi.delete(id!, docIdToDelete);
 
-            setDeleteDocId(null);
-
-            // Re-fetch to confirm state (slightly delayed to ensure DB consistency)
-            setTimeout(() => loadDocs(), 500);
+            // WebSocket will handle final status updates:
+            // 1. Backend sends 'deleting' status immediately (from document.py)
+            // 2. Backend sends 'deleted' status when cleanup completes (from cleanup_service.py)
+            // 3. Frontend removes document when status === 'deleted' (see WebSocket handler)
         } catch (error) {
             console.error('Failed to delete document:', error);
-            alert('Failed to delete document');
-            loadDocs(); // Revert on failure
+            // Revert by reloading from server
+            loadDocs();
         }
     };
 
+
+    const [error, setError] = useState<string | null>(null);
+
+    // ... (existing code)
+
+    const loadKB = async () => {
+        try {
+            setError(null);
+            const response = await kbApi.get(id!);
+            const kbData = response.data;
+            setKb(kbData);
+
+            // ... (settings logic) ...
+
+            const settingsKey = `retrievalSettings_${id}`;
+            const saved = localStorage.getItem(settingsKey);
+            const isGraphRAG = kbData.graph_backend === 'neo4j' || kbData.graph_backend === 'ontology';
+
+            if (!saved) {
+                if (isGraphRAG) {
+                    console.log(`[KB ${id}] Auto-enabling graph search (graph_backend: ${kbData.graph_backend})`);
+                    setEnableGraphSearch(true);
+                    setSearchStrategy('hybrid_graph');
+                } else {
+                    setEnableGraphSearch(false);
+                    setSearchStrategy('ann');
+                }
+            } else {
+                const savedSettings = JSON.parse(saved);
+                if (savedSettings.searchStrategy === 'hybrid_graph' && !isGraphRAG) {
+                    console.log(`[KB ${id}] Resetting searchStrategy from hybrid_graph to ann (no graph backend)`);
+                    setSearchStrategy('ann');
+                    setEnableGraphSearch(false);
+                } else if (isGraphRAG && !savedSettings.enableGraphSearch) {
+                    console.log(`[KB ${id}] Graph KB detected, enabling graph search`);
+                    setEnableGraphSearch(true);
+                }
+            }
+        } catch (error: any) {
+            console.error('Failed to load KB:', error);
+            setError(error.response?.status === 404 ? 'Knowledge Base not found.' : 'Failed to load Knowledge Base.');
+        }
+    };
+
+    // ... (other functions) ...
+
+    if (error) {
+        return (
+            <div style={{ padding: '4rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+                <HelpCircle size={48} style={{ marginBottom: '1rem', opacity: 0.5 }} />
+                <h2 style={{ fontSize: '1.5rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '0.5rem' }}>
+                    {error}
+                </h2>
+                <p style={{ marginBottom: '2rem' }}>
+                    The Knowledge Base you are looking for does not exist or has been deleted.
+                </p>
+                <Link to="/" className="btn btn-primary">
+                    Go to Dashboard
+                </Link>
+            </div>
+        );
+    }
 
     if (!kb) {
         return (
@@ -468,7 +570,7 @@ export default function KnowledgeBaseDetail() {
             {/* Config Summary Card removed as per design request */}.
 
             {/* Tabs */}
-            <div className="tabs" style={{ marginBottom: '5px' }}>
+            <div className="tabs" style={{ marginBottom: '5px', display: 'flex', alignItems: 'center' }}>
                 <button
                     className={clsx('tab', activeTab === 'documents' && 'active')}
                     onClick={() => setActiveTab('documents')}
@@ -504,6 +606,22 @@ export default function KnowledgeBaseDetail() {
                         Settings
                     </button>
                 )}
+
+                {/* WebSocket Status Indicator */}
+                <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '6px', marginRight: '10px' }}>
+                    <span style={{
+                        width: '10px',
+                        height: '10px',
+                        borderRadius: '50%',
+                        backgroundColor: wsConnected ? '#22c55e' : '#ef4444',
+                        display: 'inline-block',
+                        boxShadow: wsConnected ? '0 0 5px #22c55e' : 'none',
+                        transition: 'background-color 0.3s ease'
+                    }}></span>
+                    <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                        {wsConnected ? 'Live' : 'Disconnect'}
+                    </span>
+                </div>
             </div>
 
             {/* Tab Content */}
@@ -898,20 +1016,19 @@ export default function KnowledgeBaseDetail() {
                                                         <button
                                                             onClick={() => {
                                                                 const newState = !info.expanded;
-                                                                // 상태 관리가 로컬 데이터 구조 안에 없으므로, 간단하게 alert나 별도 state를 써야 하나
-                                                                // 여기서는 간단히 title로 전체 목록을 보여주거나, 별도 선택된 클래스 State를 두는 게 좋음.
-                                                                // 하지만 편의상 즉시 확인을 위해 Alert 또는 콘솔을 사용하거나, 
-                                                                // 본문의 요구사항(클릭하면 목록 보여줘)을 만족하기 위해 selectedClass State를 추가해야 함.
-                                                                // 임시로 이 컴포넌트 상단에 state 추가가 불가능하므로(tool limit), 
-                                                                // 간단한 토글 UI를 인라인으로 구현하기 어려움.
-                                                                // -> selectedSchemaClass 상태를 추가하는 별도 tool call이 필요함.
-                                                                // 일단 여기서는 클릭 시 해당 버튼 아래에 목록이 펼쳐지도록 CSS/State 없이 처리하기 어려우므로,
-                                                                // 가장 쉬운 방법: 브라우저 기본 동작(title)은 이미 있고,
-                                                                // 'selectedClass' state를 사용하는 방식으로 변경해야 함.
+                                                                // Since state management isn't in the local data structure, we should use alert or separate state.
+                                                                // Here, it's better to show the full list via title or have a separate selected class state.
+                                                                // To satisfy requirements (show list on click), a selectedClass state should be added.
+                                                                // Adding state at the top isn't possible here (tool limit), 
+                                                                // and implementing a toggle UI inline is difficult.
+                                                                // -> Need a separate tool call to add selectedSchemaClass state.
+                                                                // For now, it's hard to expand the list below the button without CSS/State.
+                                                                // Easiest way: Browser default behavior (title) exists, 
+                                                                // and we should switch to using 'selectedClass' state.
                                                             }}
-                                                            // 임시: 클릭하면 상세 모달을 띄우는 로직 대신, 간단히 콘솔 로그나 커스텀 툴팁을 띄울 수 없으니
-                                                            // 일단 태그 자체에 title로 맛보기 보여줌.
-                                                            // 하지만 사용자가 '클릭하면 보여줘'라고 했으므로 interaction이 필요함.
+                                                            // Temporary: Instead of opening a detail modal on click, we show a preview in the title tag 
+                                                            // since we can't easily pop up custom tooltips.
+                                                            // However, since the user asked for 'show on click', interaction is needed.
                                                             style={{
                                                                 fontSize: '0.8rem',
                                                                 padding: '2px 8px',
@@ -953,9 +1070,34 @@ export default function KnowledgeBaseDetail() {
             )}
 
             {activeTab === 'settings' && (
-                <div className="card">
-                    <h3>Knowledge Base Settings</h3>
-                    <p>Settings implementation pending...</p>
+                <div style={{ padding: '1rem', overflow: 'auto' }}>
+                    <div className="card" style={{ maxWidth: '600px', margin: '0 auto' }}>
+                        <h3>Knowledge Base Settings</h3>
+
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', marginTop: '1.5rem' }}>
+                            {/* Execution Log Setting */}
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <div>
+                                    <h4 style={{ margin: '0 0 0.5rem 0', fontSize: '0.95rem' }}>Show Execution Logs</h4>
+                                    <p style={{ margin: 0, fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                                        Display detailed execution traces and debug information in the Playground.
+                                    </p>
+                                </div>
+                                <label className="switch">
+                                    <input
+                                        type="checkbox"
+                                        checked={useRawLog}
+                                        onChange={(e) => setUseRawLog(e.target.checked)}
+                                    />
+                                    <span className="slider round"></span>
+                                </label>
+                            </div>
+                        </div>
+
+                        <div style={{ marginTop: '2rem', paddingTop: '1rem', borderTop: '1px solid var(--border)', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                            More settings coming soon...
+                        </div>
+                    </div>
                 </div>
             )}
 

@@ -4,7 +4,6 @@ from .graph_backends import GraphBackendFactory
 from app.core.fuseki import fuseki_client
 from app.core.neo4j_client import neo4j_client
 from app.core.config import settings
-from app.core.milvus import create_collection
 from openai import AsyncOpenAI
 import json
 import logging
@@ -467,7 +466,10 @@ class GraphRetrievalStrategy(RetrievalStrategy):
             return []
 
     async def _fetch_chunks(self, kb_id: str, chunk_ids: List[str], query: str, top_k: int) -> List[Dict[str, Any]]:
-        collection = create_collection(kb_id)
+        # Get existing collection
+        collection_name = f"kb_{kb_id.replace('-', '_')}"
+        from pymilvus import Collection
+        collection = Collection(collection_name)
         collection.load()
         
         # Limit to avoid huge query

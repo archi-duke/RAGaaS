@@ -27,11 +27,20 @@ class Document(DocumentBase):
     extractor_type: Optional[str] = None
     max_paths: Optional[int] = None
     enable_text_cleaning: Optional[bool] = False
-    enable_subject_restoration: Optional[bool] = True
-    enable_inference: Optional[bool] = False
+    enable_subject_restoration: Optional[bool] = False
     generate_inverse: Optional[bool] = False
     extraction_examples: Optional[str] = None
     custom_prompt: Optional[str] = None
+    # Entity Normalization Settings
+    enable_entity_normalization: Optional[bool] = False
+    normalization_algorithm: Optional[str] = "embedding"
+    normalization_threshold: Optional[float] = 0.85
+    max_sample_size: Optional[int] = 50000
+    enable_normalization_confirmation: Optional[bool] = False
+    
+    # Pipeline State (for Resuming)
+    pipeline_status: Optional[str] = None
+    pipeline_metadata: Optional[dict] = None
 
     class Config:
         from_attributes = True

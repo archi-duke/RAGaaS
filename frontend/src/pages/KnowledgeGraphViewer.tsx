@@ -189,10 +189,10 @@ const GraphViewer: React.FC = () => {
                 // Use mode directly as isSchemaMode state might not be updated yet
                 if (mode === 'schema') {
                     // Fetch schema data
-                    response = await fetch(`/api/retrieval/graph/schema?kb_id=${kbId}&backend=${resolvedBackend}`);
+                    response = await fetch(`/api/graph/schema?kb_id=${kbId}&backend=${resolvedBackend}`);
                 } else {
                     // Fetch entity expansion data
-                    response = await fetch(`/api/retrieval/graph/expand?kb_id=${kbId}&entity=${encodeURIComponent(entity || '')}&backend=${resolvedBackend}`);
+                    response = await fetch(`/api/graph/expand?kb_id=${kbId}&entity=${encodeURIComponent(entity || '')}&backend=${resolvedBackend}`);
                 }
 
                 if (!response.ok) {
@@ -394,10 +394,10 @@ const GraphViewer: React.FC = () => {
 
             // In schema mode, clicking a class node fetches its instances
             if (isSchemaMode && node.isClass) {
-                apiUrl = `/api/retrieval/graph/schema/instances?kb_id=${kbId}&class_uri=${encodeURIComponent(node.id)}&limit=20`;
+                apiUrl = `/api/graph/schema/instances?kb_id=${kbId}&class_uri=${encodeURIComponent(node.id)}&limit=20`;
             } else {
                 // Normal entity expansion
-                apiUrl = `/api/retrieval/graph/expand?kb_id=${kbId}&entity=${encodeURIComponent(node.label)}&backend=${backendType}`;
+                apiUrl = `/api/graph/expand?kb_id=${kbId}&entity=${encodeURIComponent(node.label)}&backend=${backendType}`;
             }
 
             const response = await fetch(apiUrl);

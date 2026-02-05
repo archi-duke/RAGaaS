@@ -2,7 +2,7 @@
 Ingest API Router
 """
 from fastapi import APIRouter, HTTPException, BackgroundTasks
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional, Dict, Any, List
 from enum import Enum
 import uuid
@@ -52,12 +52,22 @@ class ChunkingConfig(BaseModel):
 class GraphConfig(BaseModel):
     """Graph Extraction Configuration"""
     extractor_type: GraphExtractorType = GraphExtractorType.NONE
-    max_paths_per_chunk: int = Field(default=10, ge=1, le=50)
-    max_triplets_per_chunk: int = Field(default=20, ge=1, le=100)
+    max_paths_per_chunk: int = Field(default=10, ge=0, le=50)  # ge=0으로 변경
+    max_triplets_per_chunk: int = Field(default=20, ge=0, le=100)  # ge=0으로 변경
     num_workers: int = Field(default=4, ge=1, le=16)
     allowed_entity_types: Optional[List[str]] = None
     allowed_relation_types: Optional[List[str]] = None
     generate_inverse_relations: bool = True
+    
+    @field_validator('max_paths_per_chunk', 'max_triplets_per_chunk')
+    @classmethod
+    def validate_graph_limits(cls, v, info):
+        """extractor_type이 NONE이 아닐 때는 최소값 1 이상 요구"""
+        # info.data에서 extractor_type 확인
+        extractor_type = info.data.get('extractor_type')
+        if extractor_type and extractor_type != GraphExtractorType.NONE and v < 1:
+            raise ValueError(f'must be at least 1 when extractor_type is not NONE')
+        return v
 
 
 class IngestRequest(BaseModel):
@@ -73,7 +83,13 @@ class IngestRequest(BaseModel):
     enable_inference: bool = False  # Rule-based relationship inference
     extraction_examples_yaml: Optional[str] = None
     custom_prompt: Optional[str] = None
+    enable_entity_normalization: bool = False  # Merge similar entities
+    normalization_algorithm: str = "embedding"  # embedding | string | llm
+    normalization_threshold: float = 0.85
+    enable_normalization_confirmation: bool = False  # User review before applying
     callback_url: Optional[str] = None
+    sampling_size: Optional[int] = None # For Doc2Graph Dictionary (Phase 1)
+    entity_dictionary: Optional[Dict[str, Any]] = None # Pre-computed dictionary
 
 
 class IngestResponse(BaseModel):
@@ -96,6 +112,26 @@ class JobStatusResponse(BaseModel):
     error: Optional[str] = None
 
 
+async def send_pipeline_status(callback_url: str, job_id: str, doc_id: str, kb_id: str, status: str):
+    """Helper to send granular pipeline status to backend"""
+    if not callback_url: return
+    import httpx
+    try:
+        # ✅ COMPLETED 상태일 때는 status를 'completed'로 전송
+        overall_status = "completed" if status == "COMPLETED" else "processing"
+        
+        async with httpx.AsyncClient() as client:
+            await client.post(callback_url, json={
+                "job_id": job_id,
+                "doc_id": doc_id,
+                "kb_id": kb_id,
+                "status": overall_status,
+                "pipeline_status": status
+            })
+    except Exception as e:
+        print(f"[Callback] Failed to send status {status}: {e}")
+
+
 async def process_ingest_job(job_id: str, request: IngestRequest):
     """Process ingestion job in background"""
     try:
@@ -104,20 +140,13 @@ async def process_ingest_job(job_id: str, request: IngestRequest):
         jobs[job_id]["updated_at"] = datetime.utcnow().isoformat()
         
         # 1. Read file (PDF or Text)
-        file_path = request.file_path
-        if file_path.lower().endswith('.pdf'):
-            from pypdf import PdfReader
-            import io
-            with open(file_path, "rb") as f:
-                pdf = PdfReader(io.BytesIO(f.read()))
-                text = ""
-                for page in pdf.pages:
-                    text += (page.extract_text() or "") + "\n"
-            print(f"[IngestJob] Read PDF: {len(text)} chars")
-        else:
-            with open(file_path, "r", encoding="utf-8") as f:
-                text = f.read()
-            print(f"[IngestJob] Read text file: {len(text)} chars")
+        from app.utils.file_utils import read_text_file
+        text = await read_text_file(request.file_path)
+        
+        if not text:
+            raise ValueError(f"Could not read content from {request.file_path}")
+        
+        print(f"[IngestJob] Read file: {len(text)} chars")
         
         # 1.5 Subject Restoration (Optional)
         if request.enable_subject_restoration:
@@ -128,7 +157,7 @@ async def process_ingest_job(job_id: str, request: IngestRequest):
         jobs[job_id]["progress"] = 10
 
         
-        # 2. Convert chunking config
+        # 2. Prepare configs
         chunking_config = {
             "chunk_size": request.chunking.chunk_size,
             "chunk_overlap": request.chunking.chunk_overlap,
@@ -138,7 +167,6 @@ async def process_ingest_job(job_id: str, request: IngestRequest):
             "breakpoint_threshold": request.chunking.breakpoint_threshold,
         }
         
-        # 3. Convert graph config
         graph_config = {
             "max_paths_per_chunk": request.graph.max_paths_per_chunk,
             "max_triplets_per_chunk": request.graph.max_triplets_per_chunk,
@@ -147,9 +175,10 @@ async def process_ingest_job(job_id: str, request: IngestRequest):
             "allowed_relation_types": request.graph.allowed_relation_types,
         }
         
-        jobs[job_id]["progress"] = 20
-        
-        # 4. Run pipeline
+        # 3. Process with IngestPipeline (Now handles dictionary + chunks + triples in order)
+        async def pipeline_callback(status):
+            await send_pipeline_status(request.callback_url, job_id, request.doc_id, request.kb_id, status)
+
         result = await ingest_pipeline.process(
             text=text,
             chunking_strategy=request.chunking.strategy,
@@ -158,10 +187,36 @@ async def process_ingest_job(job_id: str, request: IngestRequest):
             graph_config=graph_config,
             enable_text_cleaning=request.enable_text_cleaning,
             extraction_examples_yaml=request.extraction_examples_yaml,
-            custom_prompt=request.custom_prompt
+            custom_prompt=request.custom_prompt,
+            enable_entity_normalization=request.enable_entity_normalization,
+            normalization_algorithm=request.normalization_algorithm,
+            normalization_threshold=request.normalization_threshold,
+            entity_dictionary=request.entity_dictionary,
+            sampling_size=request.sampling_size,
+            kb_id=request.kb_id,  # ✅ 추가
+            doc_id=request.doc_id,  # ✅ 추가
+            job_id=job_id,
+            status_callback=pipeline_callback
         )
         
+        if not result or jobs.get(job_id, {}).get("status") == JobStatus.CANCELLED:
+            return
+        
+        # ✅ 임시 파일 저장: 메타데이터 (통계 정보)
+        from app.utils.temp_storage import temp_storage
+        await temp_storage.save_metadata(request.kb_id, request.doc_id, {
+            "node_count": result["node_count"],
+            "triple_count": result["triple_count"],
+            "stats": result.get("stats", [])
+        })
+        
         jobs[job_id]["progress"] = 80
+        if jobs[job_id]["status"] == JobStatus.CANCELLED:
+             print(f"[IngestJob] Job {job_id} cancelled before saving.")
+             return
+        
+        # ✅ STORING 상태 전송 (DB 저장 시작)
+        await send_pipeline_status(request.callback_url, job_id, request.doc_id, request.kb_id, "STORING")
         
         # 5. Save (Milvus, Neo4j/Fuseki)
         print(f"[IngestJob] Saving to databases for doc {request.doc_id}...")
@@ -193,6 +248,11 @@ async def process_ingest_job(job_id: str, request: IngestRequest):
         
         # Graph: Save triples (Neo4j or Fuseki) - Optional storage
         if result["triples"]:
+            # ✅ Save to File System for Frontend / Backend access
+            from app.utils.temp_storage import temp_storage
+            await temp_storage.save_triples(request.kb_id, request.doc_id, result["triples"])
+            print(f"[IngestJob] Saved {len(result['triples'])} triples to file system.")
+
             if request.graph_store == "fuseki":
                 print(f"[IngestJob] Saving to Fuseki for doc {request.doc_id}...")
                 await fuseki_connector.insert_triples(
@@ -248,6 +308,9 @@ async def process_ingest_job(job_id: str, request: IngestRequest):
         }
         jobs[job_id]["updated_at"] = datetime.utcnow().isoformat()
         print(f"[IngestJob] ✅ Job {job_id} COMPLETED for doc {request.doc_id}")
+        
+        # ✅ COMPLETED 상태 전송 (완료)
+        await send_pipeline_status(request.callback_url, job_id, request.doc_id, request.kb_id, "COMPLETED")
 
 
         
@@ -299,7 +362,7 @@ async def create_ingest_job(
     
     return IngestResponse(
         job_id=job_id,
-        status=JobStatus.PENDING,
+        status=jobs[job_id]["status"],
         message="Ingest job created successfully",
     )
 
@@ -316,22 +379,32 @@ async def get_job_status(job_id: str):
 
 @router.post("/jobs/{job_id}/cancel")
 async def cancel_job(job_id: str):
-    """Cancel job"""
-    if job_id not in jobs:
+    """Cancel job. Supports both official job_id and doc_id (for cleanup flows)."""
+    target_job_id = None
+    
+    if job_id in jobs:
+        target_job_id = job_id
+    else:
+        # Try to find by doc_id
+        for jid, job in jobs.items():
+            if job.get("doc_id") == job_id:
+                target_job_id = jid
+                break
+    
+    if not target_job_id:
         raise HTTPException(status_code=404, detail="Job not found")
     
-    job = jobs[job_id]
+    job = jobs[target_job_id]
     
     if job["status"] in [JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED]:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Cannot cancel job with status: {job['status']}"
-        )
+         # Already finished, just return ok
+         return {"message": f"Job already in state: {job['status']}", "job_id": target_job_id}
     
-    jobs[job_id]["status"] = JobStatus.CANCELLED
-    jobs[job_id]["updated_at"] = datetime.utcnow().isoformat()
+    jobs[target_job_id]["status"] = JobStatus.CANCELLED
+    jobs[target_job_id]["updated_at"] = datetime.utcnow().isoformat()
+    print(f"[Ingest] Job {target_job_id} (doc {job.get('doc_id')}) marked as CANCELLED")
     
-    return {"message": "Job cancelled", "job_id": job_id}
+    return {"message": "Job cancelled", "job_id": target_job_id}
 
 
 @router.get("/jobs")
@@ -372,6 +445,13 @@ class PreviewRequest(BaseModel):
     enable_subject_restoration: bool = True  # Restore omitted subjects in Korean text
     extraction_examples_yaml: Optional[str] = None
     custom_prompt: Optional[str] = None
+    enable_entity_normalization: bool = False
+    normalization_algorithm: str = "embedding"
+    normalization_threshold: float = 0.85
+    enable_normalization_confirmation: bool = False
+    sampling_size: Optional[int] = None  # For Doc2Graph Dictionary (Phase 1)
+    entity_dictionary: Optional[Dict[str, Any]] = None # Pre-computed dictionary
+    callback_url: Optional[str] = None # For granular status updates
 
 
 class PreviewResponse(BaseModel):
@@ -381,6 +461,7 @@ class PreviewResponse(BaseModel):
     doc_id: str
     node_count: int
     triples: List[Dict[str, Any]]
+    stats: Optional[List[Dict[str, Any]]] = None
     message: str
 
 
@@ -388,6 +469,9 @@ class ConfirmRequest(BaseModel):
     """Confirm Request - Save previewed data"""
     enable_inference: bool = False
     callback_url: Optional[str] = None
+    # For crash recovery:
+    kb_id: Optional[str] = None
+    doc_id: Optional[str] = None
 
 
 @router.post("/preview", response_model=PreviewResponse)
@@ -401,20 +485,13 @@ async def create_preview(request: PreviewRequest):
         print(f"[Preview] Starting preview {preview_id} for doc {request.doc_id}")
         
         # 1. Read file
-        file_path = request.file_path
-        if file_path.lower().endswith('.pdf'):
-            from pypdf import PdfReader
-            import io
-            with open(file_path, "rb") as f:
-                pdf = PdfReader(io.BytesIO(f.read()))
-                text = ""
-                for page in pdf.pages:
-                    text += (page.extract_text() or "") + "\n"
-            print(f"[Preview] Read PDF: {len(text)} chars")
-        else:
-            with open(file_path, "r", encoding="utf-8") as f:
-                text = f.read()
-            print(f"[Preview] Read text file: {len(text)} chars")
+        from app.utils.file_utils import read_text_file
+        text = await read_text_file(request.file_path)
+        
+        if not text:
+            raise ValueError(f"Original file not found at {request.file_path}")
+        
+        print(f"[Preview] Read file: {len(text)} chars")
         
         # 1.5 Subject Restoration (Optional)
         if request.enable_subject_restoration:
@@ -439,8 +516,11 @@ async def create_preview(request: PreviewRequest):
             "allowed_entity_types": request.graph.allowed_entity_types,
             "allowed_relation_types": request.graph.allowed_relation_types,
         }
-        
-        # 3. Run pipeline (same as regular ingest)
+
+        # 3. Process with IngestPipeline (Multi-phase: Dictionary -> Chunks -> Triples)
+        async def pipeline_callback(status):
+            await send_pipeline_status(request.callback_url, preview_id, request.doc_id, request.kb_id, status)
+
         result = await ingest_pipeline.process(
             text=text,
             chunking_strategy=request.chunking.strategy,
@@ -449,7 +529,15 @@ async def create_preview(request: PreviewRequest):
             graph_config=graph_config,
             enable_text_cleaning=request.enable_text_cleaning,
             extraction_examples_yaml=request.extraction_examples_yaml,
-            custom_prompt=request.custom_prompt
+            custom_prompt=request.custom_prompt,
+            enable_entity_normalization=request.enable_entity_normalization,
+            normalization_algorithm=request.normalization_algorithm,
+            normalization_threshold=request.normalization_threshold,
+            entity_dictionary=request.entity_dictionary,
+            sampling_size=request.sampling_size,
+            kb_id=request.kb_id,  # ✅ 추가
+            doc_id=request.doc_id,  # ✅ 추가
+            status_callback=pipeline_callback
         )
         
         print(f"[Preview] Extracted {len(result['triples'])} triples, {result['node_count']} nodes")
@@ -467,7 +555,36 @@ async def create_preview(request: PreviewRequest):
             "node_count": result["node_count"],
             "triple_count": result["triple_count"],
             "created_at": datetime.utcnow().isoformat(),
+            "normalization_suggestions": result.get("normalization_suggestions"),
+            "enable_entity_normalization": request.enable_entity_normalization,
+            "enable_normalization_confirmation": request.enable_normalization_confirmation,
+            "stats": result.get("stats"),
         }
+        
+        # ✅ Save to Temp Storage (Persistence for Recovery)
+        from app.utils.temp_storage import temp_storage
+        
+        # Convert nodes to dicts for saving
+        chunks_dict = [
+            {
+                "content": node.get_content(),
+                "metadata": node.metadata, 
+                "node_id": node.node_id
+            } 
+            for node in result["nodes"]
+        ]
+        
+        await temp_storage.save_chunks(request.kb_id, request.doc_id, chunks_dict)
+        await temp_storage.save_triples(request.kb_id, request.doc_id, result["triples"])
+        await temp_storage.save_embeddings(request.kb_id, request.doc_id, result["embeddings"])
+        # Save metadata including preview_id and graph_store settings for recovery
+        await temp_storage.save_metadata(request.kb_id, request.doc_id, {
+             "preview_id": preview_id,
+             "node_count": result["node_count"],
+             "triple_count": result["triple_count"],
+             "graph_store": request.graph_store,
+             "generate_inverse_relations": request.graph.generate_inverse_relations
+        })
         
         return PreviewResponse(
             preview_id=preview_id,
@@ -475,6 +592,7 @@ async def create_preview(request: PreviewRequest):
             doc_id=request.doc_id,
             node_count=result["node_count"],
             triples=result["triples"],
+            stats=result.get("stats"),
             message=f"Preview generated. {result['node_count']} nodes, {len(result['triples'])} triples extracted.",
         )
         
@@ -492,8 +610,78 @@ async def confirm_preview(
     background_tasks: BackgroundTasks
 ):
     """Confirm and save previewed data to database."""
+    
+    # [Recovery Logic] If cache missed (e.g. restart), try to load from temp storage
     if preview_id not in preview_cache:
-        raise HTTPException(status_code=404, detail="Preview not found or expired")
+        if request.kb_id and request.doc_id:
+            print(f"[Confirm] Cache miss for {preview_id}. Attempting recovery from disk for doc {request.doc_id}...")
+            try:
+                from app.utils.temp_storage import temp_storage
+                from llama_index.core.schema import TextNode
+                
+                # Check if files exist
+                triples_path = temp_storage.get_file_path(request.kb_id, request.doc_id, "triples.json")
+                chunks_path = temp_storage.get_file_path(request.kb_id, request.doc_id, "chunks.json")
+                embeddings_path = temp_storage.get_file_path(request.kb_id, request.doc_id, "embeddings.json")
+                
+                if triples_path.exists() and chunks_path.exists():
+                    # Load all data using new methods
+                    triples_data = await temp_storage.load_triples(request.kb_id, request.doc_id)
+                    chunks_raw = await temp_storage.load_chunks(request.kb_id, request.doc_id)
+                    embeddings_data = await temp_storage.load_embeddings(request.kb_id, request.doc_id)
+                    metadata = await temp_storage.load_metadata(request.kb_id, request.doc_id)
+                    
+                    if not triples_data or not chunks_raw:
+                        raise ValueError("Failed to load triples or chunks")
+                    
+                    # Reconstruct nodes
+                    nodes = []
+                    embeddings = embeddings_data or {}
+                    
+                    for c in chunks_raw:
+                        # Reconstruct TextNode
+                        node = TextNode(
+                            text=c.get("content", ""),
+                            id_=c.get("node_id") or c.get("id"),
+                            metadata=c.get("metadata", {})
+                        )
+                        # Attach embedding if available
+                        if node.node_id in embeddings:
+                            node.embedding = embeddings[node.node_id]
+                        nodes.append(node)
+                    
+                    # Get graph_store settings from metadata (with fallback)
+                    graph_store = metadata.get("graph_store", "neo4j") if metadata else "neo4j"
+                    generate_inverse = metadata.get("generate_inverse_relations", True) if metadata else True
+                            
+                    # Reconstruct Cache
+                    preview_cache[preview_id] = {
+                        "preview_id": preview_id,
+                        "kb_id": request.kb_id,
+                        "doc_id": request.doc_id,
+                        "graph_store": graph_store,
+                        "generate_inverse_relations": generate_inverse,
+                        "nodes": nodes,
+                        "embeddings": embeddings, 
+                        "triples": triples_data,
+                        "node_count": len(nodes),
+                        "triple_count": len(triples_data),
+                        "created_at": datetime.utcnow().isoformat(),
+                        "normalization_suggestions": None,
+                        "enable_entity_normalization": False,
+                        "enable_normalization_confirmation": False,
+                        "stats": None
+                    }
+                    print(f"[Confirm] ✅ Successfully recovered preview data from disk ({len(nodes)} nodes, {len(triples_data)} triples, {len(embeddings)} embeddings).")
+                else:
+                    print(f"[Confirm] ❌ Recovery failed: Temp files not found (triples: {triples_path.exists()}, chunks: {chunks_path.exists()}).")
+            except Exception as e:
+                import traceback
+                print(f"[Confirm] ❌ Recovery error: {e}")
+                traceback.print_exc()
+        
+    if preview_id not in preview_cache:
+        raise HTTPException(status_code=404, detail="Preview not found or expired (Logic: Server Restarted?)")
     
     cached = preview_cache[preview_id]
     
@@ -545,6 +733,9 @@ async def _save_preview_data(
         
         kb_id = cached["kb_id"]
         doc_id = cached["doc_id"]
+        
+        # [New] Send STORING status
+        await send_pipeline_status(callback_url, job_id, doc_id, kb_id, "STORING")
         
         # 1. Save to Milvus
         print(f"[Confirm] Saving {cached['node_count']} chunks to Milvus...")
@@ -602,6 +793,9 @@ async def _save_preview_data(
         
         print(f"[Confirm] ✅ Preview {preview_id} saved successfully")
         
+        # ✅ COMPLETED 상태 전송 (완료)
+        await send_pipeline_status(callback_url, job_id, doc_id, kb_id, "COMPLETED")
+        
         # Callback
         if callback_url:
             import httpx
@@ -640,6 +834,81 @@ async def discard_preview(preview_id: str):
         "doc_id": cached["doc_id"],
         "message": "Preview discarded successfully.",
     }
+
+
+
+# ============================================================
+# Dictionary Preview Endpoint (Doc2Graph Phase 1 Only)
+# ============================================================
+
+class DictionaryPreviewResponse(BaseModel):
+    """Dictionary Preview Response"""
+    preview_id: str
+    kb_id: str
+    doc_id: str
+    entity_count: int
+    dictionary: Dict[str, Dict[str, Any]]
+    message: str
+
+
+@router.post("/preview-dictionary", response_model=DictionaryPreviewResponse)
+async def create_dictionary_preview(request: PreviewRequest):
+    """Build and return Global Entity Dictionary only (Doc2Graph Phase 1).
+    This skips the triple extraction phase.
+    """
+    import time
+    start_total = time.time()
+    preview_id = str(uuid.uuid4())
+    
+    try:
+        print(f"[PreviewDict] Starting dictionary build {preview_id} for doc {request.doc_id}")
+        
+        t0 = time.time()
+        from app.utils.file_utils import read_text_file
+        text = await read_text_file(request.file_path)
+        
+        if not text:
+            raise ValueError(f"Could not read content from {request.file_path}")
+            
+        t1 = time.time()
+        print(f"[Timer] File Read: {t1 - t0:.4f}s ({len(text)} chars)")
+        
+        # 3. Build Dictionary
+        from app.core.dictionary_builder import DictionaryBuilder
+        
+        print(f"[PreviewDict] Using optimized Doc2Graph builder on {len(text)} chars...")
+        
+        dict_builder = DictionaryBuilder(ingest_pipeline.llm)
+        
+        # Use window_size=5000 (default) or from request if provided
+        sampling_size = request.sampling_size if request.sampling_size and request.sampling_size > 0 else 5000
+        
+        if request.callback_url:
+            await send_pipeline_status(request.callback_url, preview_id, request.doc_id, request.kb_id, "EXTRACTING_ENTITIES")
+
+        t2 = time.time()
+        entity_dictionary = await dict_builder.build_from_text(text, sampling_size=sampling_size)
+        t3 = time.time()
+        print(f"[Timer] Dictionary Build (Total): {t3 - t2:.4f}s")
+        
+        print(f"[PreviewDict] Dictionary built with {len(entity_dictionary)} entities.")
+        
+        print(f"[Timer] Total Request Time: {t3 - start_total:.4f}s")
+        
+        return DictionaryPreviewResponse(
+            preview_id=preview_id,
+            kb_id=request.kb_id,
+            doc_id=request.doc_id,
+            entity_count=len(entity_dictionary),
+            dictionary=entity_dictionary,
+            message=f"Entity Dictionary built successfully with {len(entity_dictionary)} canonical entities."
+        )
+        
+    except Exception as e:
+        import traceback
+        print(f"[PreviewDict] ❌ Dictionary build failed: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ============================================================
@@ -703,7 +972,7 @@ async def extract_from_chunk(request: ChunkExtractRequest):
         }
         
         # Extract triples using pipeline
-        triples = ingest_pipeline.extract_graph(
+        triples = await ingest_pipeline.extract_graph(
             nodes=[temp_node],
             extractor_type=extractor_type,
             config=graph_config,
@@ -747,3 +1016,84 @@ async def extract_from_chunk(request: ChunkExtractRequest):
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
+
+# ============================================================
+# Save Chunk Triples Endpoint
+# ============================================================
+
+class SaveChunkTriplesRequest(BaseModel):
+    """Save Chunk Triples Request"""
+    kb_id: str
+    chunk_id: str
+    triples: List[Dict[str, Any]]
+
+
+class SaveChunkTriplesResponse(BaseModel):
+    """Save Chunk Triples Response"""
+    kb_id: str
+    chunk_id: str
+    triple_count: int
+    message: str
+
+
+@router.post("/save-chunk-triples", response_model=SaveChunkTriplesResponse)
+async def save_chunk_triples(request: SaveChunkTriplesRequest):
+    """Save selected triples from chunk extraction to the triple store.
+    
+    This endpoint allows users to selectively save triples that were extracted
+    from a single chunk during the Extract Test feature.
+    """
+    try:
+        print(f"[SaveChunkTriples] Saving {len(request.triples)} triples for chunk {request.chunk_id} in KB {request.kb_id}")
+        
+        # Format triples with chunk_id as source_node_id
+        formatted_triples = []
+        for triple in request.triples:
+            formatted_triple = {
+                "subject": triple.get("subject"),
+                "predicate": triple.get("predicate"),
+                "object": triple.get("object"),
+                "source_node_id": request.chunk_id,  # Link triple to chunk
+                "confidence": triple.get("confidence", 0.8),
+            }
+            formatted_triples.append(formatted_triple)
+        
+        # Try to save to Fuseki (default)
+        try:
+            # We need to query which graph backend the KB uses
+            # For now, we'll try Fuseki first, then fall back to Neo4j
+            print(f"[SaveChunkTriples] Attempting to save to Fuseki...")
+            await fuseki_connector.insert_triples(
+                kb_id=request.kb_id,
+                doc_id=f"manual_{request.chunk_id}",  # Create a pseudo doc_id
+                triples=formatted_triples,
+                generate_inverse=False  # User already selected the triples they want
+            )
+            print(f"[SaveChunkTriples] ✅ Saved {len(formatted_triples)} triples to Fuseki")
+            
+        except Exception as fuseki_error:
+            print(f"[SaveChunkTriples] Fuseki failed: {fuseki_error}, trying Neo4j...")
+            try:
+                await neo4j_connector.insert_triples(
+                    kb_id=request.kb_id,
+                    doc_id=f"manual_{request.chunk_id}",
+                    triples=formatted_triples,
+                    generate_inverse=False
+                )
+                print(f"[SaveChunkTriples] ✅ Saved {len(formatted_triples)} triples to Neo4j")
+            except Exception as neo4j_error:
+                print(f"[SaveChunkTriples] Both Fuseki and Neo4j failed")
+                raise Exception(f"Failed to save to both backends. Fuseki: {fuseki_error}, Neo4j: {neo4j_error}")
+        
+        return SaveChunkTriplesResponse(
+            kb_id=request.kb_id,
+            chunk_id=request.chunk_id,
+            triple_count=len(formatted_triples),
+            message=f"Successfully saved {len(formatted_triples)} triples for chunk {request.chunk_id}"
+        )
+        
+    except Exception as e:
+        import traceback
+        print(f"[SaveChunkTriples] ❌ Save failed: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))

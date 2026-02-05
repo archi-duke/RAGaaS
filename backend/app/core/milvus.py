@@ -9,6 +9,19 @@ def connect_milvus():
     )
 
 def create_collection(kb_id: str, metric_type: str = "COSINE", index_type: str = "IVF_FLAT"):
+    # Ensure Milvus connection is active (auto-reconnect if needed)
+    try:
+        # Try to list collections as a connection health check
+        utility.list_collections()
+    except Exception as e:
+        print(f"[Milvus] Connection lost or not established: {e}. Reconnecting...")
+        try:
+            connections.disconnect(alias="default")
+        except:
+            pass
+        connect_milvus()
+        print("[Milvus] Reconnected successfully")
+    
     collection_name = f"kb_{kb_id.replace('-', '_')}"
     
     if utility.has_collection(collection_name):
@@ -25,6 +38,10 @@ def create_collection(kb_id: str, metric_type: str = "COSINE", index_type: str =
                 current_type = idx.params.get("index_type")
                 if current_type != index_type:
                     print(f"Index type mismatch: {current_type} vs {index_type}. Recreating index.")
+                    try:
+                        col.release()
+                    except:
+                        pass
                     col.drop_index()
                 else:
                     return col
