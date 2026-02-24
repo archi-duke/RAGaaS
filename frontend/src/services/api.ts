@@ -80,6 +80,21 @@ export const docApi = {
     },
 
     delete: (kbId: string, docId: string) => api.delete(`/knowledge-bases/${kbId}/documents/${docId}`),
+    uploadText: (kbId: string, title: string, content: string, config?: any) => {
+        const payload: any = { title, content };
+        if (config) {
+            payload.chunking_config = JSON.stringify(config);
+            if (config.enable_text_cleaning !== undefined) payload.enable_text_cleaning = config.enable_text_cleaning;
+            if (config.enable_subject_restoration !== undefined) payload.enable_subject_restoration = config.enable_subject_restoration;
+            if (config.extraction_examples_yaml) payload.extraction_examples_yaml = config.extraction_examples_yaml;
+            if (config.enable_entity_normalization !== undefined) payload.enable_entity_normalization = config.enable_entity_normalization;
+            if (config.normalization_algorithm) payload.normalization_algorithm = config.normalization_algorithm;
+            if (config.normalization_threshold !== undefined) payload.normalization_threshold = config.normalization_threshold;
+            if (config.enable_normalization_confirmation !== undefined) payload.enable_normalization_confirmation = config.enable_normalization_confirmation;
+        }
+        return api.post(`/knowledge-bases/${kbId}/documents/upload-text`, payload);
+    },
+
     getChunks: (kbId: string, docId: string) => api.get(`/knowledge-bases/${kbId}/documents/${docId}/chunks`),
     updateChunk: (kbId: string, docId: string, chunkId: string, content: string) => {
         const formData = new FormData();
