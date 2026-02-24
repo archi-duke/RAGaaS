@@ -1,3 +1,0 @@
-This is a test document to verify the granular status display.
-It contains some entities like Apple, Google, and Samsung.
-We want to see if the status changes from Processing to Entities... to Entities.
