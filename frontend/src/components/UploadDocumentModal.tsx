@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, FileText } from 'lucide-react';
+import { Upload, FileText, Type } from 'lucide-react';
 import { docApi, kbApi } from '../services/api';
 import MessageDialog from './MessageDialog';
 import PromptDialog from './PromptDialog';
@@ -23,44 +23,19 @@ const LabelWithTooltip = ({ label, tooltip }: { label: string, tooltip: string }
                 onMouseLeave={() => setShow(false)}
             >
                 <div style={{
-                    width: '14px',
-                    height: '14px',
-                    borderRadius: '50%',
-                    border: '1px solid #94a3b8',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontSize: '9px',
-                    color: '#94a3b8',
-                    fontWeight: 'bold',
-                    flexShrink: 0,
-                    lineHeight: 1
+                    width: '14px', height: '14px', borderRadius: '50%', border: '1px solid #94a3b8',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    fontSize: '9px', color: '#94a3b8', fontWeight: 'bold', flexShrink: 0, lineHeight: 1
                 }}>i</div>
                 {show && (
                     <div style={{
-                        position: 'absolute',
-                        bottom: '120%',
-                        left: '0',
-                        backgroundColor: '#333',
-                        color: '#fff',
-                        padding: '0.5rem 0.75rem',
-                        borderRadius: '4px',
-                        fontSize: '0.75rem',
-                        whiteSpace: 'normal',
-                        width: '200px',
-                        zIndex: 100,
-                        boxShadow: '0 2px 8px rgba(0,0,0,0.2)',
-                        pointerEvents: 'none'
+                        position: 'absolute', bottom: '120%', left: '0',
+                        backgroundColor: '#333', color: '#fff', padding: '0.5rem 0.75rem',
+                        borderRadius: '4px', fontSize: '0.75rem', whiteSpace: 'normal',
+                        width: '200px', zIndex: 100, boxShadow: '0 2px 8px rgba(0,0,0,0.2)', pointerEvents: 'none'
                     }}>
                         {tooltip}
-                        <div style={{
-                            position: 'absolute',
-                            top: '100%',
-                            left: '10px',
-                            borderWidth: '5px',
-                            borderStyle: 'solid',
-                            borderColor: '#333 transparent transparent transparent'
-                        }}></div>
+                        <div style={{ position: 'absolute', top: '100%', left: '10px', borderWidth: '5px', borderStyle: 'solid', borderColor: '#333 transparent transparent transparent' }}></div>
                     </div>
                 )}
             </div>
@@ -68,8 +43,13 @@ const LabelWithTooltip = ({ label, tooltip }: { label: string, tooltip: string }
     );
 };
 
+type InputTab = 'file' | 'text';
+
 export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadComplete }: UploadDocumentModalProps) {
+    const [inputTab, setInputTab] = useState<InputTab>('file');
     const [file, setFile] = useState<File | null>(null);
+    const [textTitle, setTextTitle] = useState('');
+    const [textContent, setTextContent] = useState('');
     const [isUploading, setIsUploading] = useState(false);
     const [kbConfig, setKbConfig] = useState<any>(null);
 
@@ -77,10 +57,7 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
     const [showPromptModal, setShowPromptModal] = useState(false);
 
     const [messageDialog, setMessageDialog] = useState<{ isOpen: boolean; title: string; message: string; type: 'info' | 'success' | 'error' }>({
-        isOpen: false,
-        title: '',
-        message: '',
-        type: 'info'
+        isOpen: false, title: '', message: '', type: 'info'
     });
 
     const [graphParams, setGraphParams] = useState({
@@ -108,32 +85,26 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
 
     const [strategy, setStrategy] = useState('fixed_size');
     const [chunkingConfig, setChunkingConfig] = useState({
-        chunk_size: 300,
-        chunk_overlap: 20,
-        window_size: 3,
-        chunk_sizes: [2048, 512, 128],
-        parent_overlap: 0,
-        child_overlap: 100,
-        target_size: 800,
-        llm_auto_size: false,
+        chunk_size: 300, chunk_overlap: 20, window_size: 3,
+        chunk_sizes: [2048, 512, 128], parent_overlap: 0, child_overlap: 100,
+        target_size: 800, llm_auto_size: false,
     });
 
     useEffect(() => {
         if (isOpen) {
             setFile(null);
+            setTextTitle('');
+            setTextContent('');
+            setInputTab('file');
             setIsUploading(false);
-            if (kbId) {
-                loadKbConfig();
-            }
+            if (kbId) loadKbConfig();
         }
     }, [isOpen, kbId]);
 
     const loadKbConfig = async () => {
         try {
             const res = await kbApi.get(kbId);
-            const data = res.data;
-            setKbConfig(data);
-
+            setKbConfig(res.data);
             try {
                 const promptRes = await kbApi.getExtractionPrompt();
                 const serverPrompt = promptRes.data?.content;
@@ -151,34 +122,27 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
     if (!isOpen) return null;
 
     const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        if (e.target.files && e.target.files[0]) {
-            setFile(e.target.files[0]);
-        }
+        if (e.target.files && e.target.files[0]) setFile(e.target.files[0]);
     };
 
-    const handleUpload = async () => {
-        if (!file) return;
+    const isFileReady = inputTab === 'file' ? !!file : (textTitle.trim().length > 0 && textContent.trim().length > 0);
 
+    const handleUpload = async () => {
+        if (!isFileReady) return;
         setIsUploading(true);
         try {
-            const config = {
-                ...graphParams,
-                chunking_strategy: strategy,
-                chunking_config: chunkingConfig,
-            };
+            const config = { ...graphParams, chunking_strategy: strategy, chunking_config: chunkingConfig };
 
-            await docApi.upload(kbId, file, config);
+            if (inputTab === 'file') {
+                await docApi.upload(kbId, file!, config);
+            } else {
+                await docApi.uploadText(kbId, textTitle.trim(), textContent, config);
+            }
             onUploadComplete();
             onClose();
-
         } catch (err) {
             console.error(err);
-            setMessageDialog({
-                isOpen: true,
-                title: 'Upload Failed',
-                message: 'An error occurred while uploading. Please try again.',
-                type: 'error'
-            });
+            setMessageDialog({ isOpen: true, title: 'Upload Failed', message: 'An error occurred while uploading. Please try again.', type: 'error' });
         } finally {
             setIsUploading(false);
         }
@@ -186,38 +150,38 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
 
     const isGraphEnabled = kbConfig && kbConfig.graph_backend && kbConfig.graph_backend !== 'none';
 
+    const tabStyle = (active: boolean): React.CSSProperties => ({
+        display: 'flex', alignItems: 'center', gap: '0.4rem',
+        padding: '0.5rem 1rem', cursor: 'pointer', fontSize: '0.87rem', fontWeight: 600,
+        borderBottom: active ? '2px solid var(--primary)' : '2px solid transparent',
+        color: active ? 'var(--primary)' : '#64748b',
+        background: 'none', border: 'none', borderBottom: active ? '2px solid var(--primary)' : '2px solid transparent',
+        transition: 'color 0.15s, border-color 0.15s', whiteSpace: 'nowrap',
+    });
+
     return (
         <>
             <div style={{
                 position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
                 backgroundColor: 'rgba(0,0,0,0.5)',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                zIndex: 50
+                display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50
             }} onClick={onClose}>
-
                 <div className="card" style={{
-                    width: '100%',
-                    maxWidth: '800px',
-                    maxHeight: '90vh',
-                    overflow: 'hidden',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    padding: 0
+                    width: '100%', maxWidth: '800px', maxHeight: '90vh',
+                    overflow: 'hidden', display: 'flex', flexDirection: 'column', padding: 0
                 }} onClick={(e) => e.stopPropagation()}>
+
+                    {/* Header */}
                     <div style={{
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        padding: '1.5rem',
-                        borderBottom: '1px solid #e2e8f0',
-                        backgroundColor: 'white'
+                        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                        padding: '1.5rem', borderBottom: '1px solid #e2e8f0', backgroundColor: 'white'
                     }}>
                         <h2 style={{ margin: 0, fontSize: '1.25rem' }}>Upload Document</h2>
                         <div style={{ display: 'flex', gap: '1rem' }}>
                             <button
                                 className="btn btn-primary"
                                 onClick={handleUpload}
-                                disabled={!file || isUploading}
+                                disabled={!isFileReady || isUploading}
                             >
                                 {isUploading ? 'Uploading...' : 'Process Document'}
                             </button>
@@ -225,45 +189,91 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                         </div>
                     </div>
 
-                    <div style={{
-                        padding: '1.5rem',
-                        overflowY: 'auto',
-                        flex: 1
-                    }}>
-                        <div style={{ marginBottom: '2rem' }}>
-                            <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 500 }}>Select File</label>
-                            <div
-                                style={{
-                                    border: '2px dashed var(--border)',
-                                    borderRadius: '8px',
-                                    padding: '2rem',
-                                    textAlign: 'center',
-                                    cursor: 'pointer',
-                                    background: '#fafafa',
-                                }}
-                                onClick={() => fileInputRef.current?.click()}
-                            >
-                                <input
-                                    type="file"
-                                    ref={fileInputRef}
-                                    style={{ display: 'none' }}
-                                    onChange={handleFileChange}
-                                    accept=".txt,.pdf,.md"
-                                />
-                                {file ? (
-                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', color: 'var(--primary)' }}>
-                                        <FileText size={24} />
-                                        <span style={{ fontWeight: 500 }}>{file.name}</span>
-                                    </div>
-                                ) : (
-                                    <div style={{ color: 'var(--text-secondary)' }}>
-                                        <Upload size={32} style={{ marginBottom: '0.5rem' }} />
-                                        <p style={{ margin: 0 }}>Click to upload PDF, TXT, or MD</p>
-                                    </div>
-                                )}
+                    <div style={{ padding: '1.5rem', overflowY: 'auto', flex: 1 }}>
+                        {/* Input Type Tabs */}
+                        <div style={{ marginBottom: '1.5rem' }}>
+                            <div style={{
+                                display: 'flex', borderBottom: '1px solid #e2e8f0', marginBottom: '1.25rem'
+                            }}>
+                                <button id="tab-select-file" style={tabStyle(inputTab === 'file')} onClick={() => setInputTab('file')}>
+                                    <Upload size={14} />
+                                    Select File
+                                </button>
+                                <button id="tab-enter-content" style={tabStyle(inputTab === 'text')} onClick={() => setInputTab('text')}>
+                                    <Type size={14} />
+                                    Enter Content
+                                </button>
                             </div>
+
+                            {/* File Upload Panel */}
+                            {inputTab === 'file' && (
+                                <div
+                                    style={{
+                                        border: '2px dashed var(--border)', borderRadius: '8px',
+                                        padding: '2rem', textAlign: 'center', cursor: 'pointer', background: '#fafafa',
+                                    }}
+                                    onClick={() => fileInputRef.current?.click()}
+                                >
+                                    <input
+                                        type="file" ref={fileInputRef} style={{ display: 'none' }}
+                                        onChange={handleFileChange} accept=".txt,.pdf,.md"
+                                    />
+                                    {file ? (
+                                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', color: 'var(--primary)' }}>
+                                            <FileText size={24} />
+                                            <span style={{ fontWeight: 500 }}>{file.name}</span>
+                                        </div>
+                                    ) : (
+                                        <div style={{ color: 'var(--text-secondary)' }}>
+                                            <Upload size={32} style={{ marginBottom: '0.5rem' }} />
+                                            <p style={{ margin: 0 }}>Click to upload PDF, TXT, or MD</p>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+
+                            {/* Text Input Panel */}
+                            {inputTab === 'text' && (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                                    <div>
+                                        <label style={{ display: 'block', marginBottom: '0.3rem', fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)' }}>
+                                            Document Title <span style={{ color: '#ef4444' }}>*</span>
+                                        </label>
+                                        <input
+                                            id="text-doc-title"
+                                            type="text"
+                                            className="input"
+                                            placeholder="e.g. Company Policy 2024"
+                                            value={textTitle}
+                                            onChange={(e) => setTextTitle(e.target.value)}
+                                            style={{ width: '100%' }}
+                                        />
+                                        <p style={{ margin: '0.25rem 0 0', fontSize: '0.75rem', color: '#94a3b8' }}>
+                                            Will be saved as <code>{textTitle.trim() ? textTitle.trim().replace(/[^\w\s-]/g, '').replace(/\s+/g, '_') + '.txt' : 'text_document.txt'}</code>
+                                        </p>
+                                    </div>
+                                    <div>
+                                        <label style={{ display: 'block', marginBottom: '0.3rem', fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)' }}>
+                                            Content <span style={{ color: '#ef4444' }}>*</span>
+                                        </label>
+                                        <textarea
+                                            id="text-doc-content"
+                                            className="input"
+                                            placeholder="Paste or type your document content here..."
+                                            value={textContent}
+                                            onChange={(e) => setTextContent(e.target.value)}
+                                            rows={10}
+                                            style={{ width: '100%', resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.6 }}
+                                        />
+                                        <p style={{ margin: '0.25rem 0 0', fontSize: '0.75rem', color: '#94a3b8' }}>
+                                            {textContent.length.toLocaleString()} characters
+                                        </p>
+                                    </div>
+                                </div>
+                            )}
                         </div>
 
+                        {/* Chunking Strategy */}
                         <div style={{ marginBottom: '2rem' }}>
                             <label style={{ display: 'block', marginBottom: '0.8rem', fontWeight: 600, color: '#334155' }}>Chunking Strategy</label>
                             <div style={{ marginBottom: '1rem' }}>
@@ -271,16 +281,7 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                                     className="input"
                                     value={strategy}
                                     onChange={(e) => setStrategy(e.target.value)}
-                                    style={{
-                                        width: '100%',
-                                        padding: '0.75rem',
-                                        borderRadius: '8px',
-                                        border: '1px solid #e2e8f0',
-                                        backgroundColor: '#fff',
-                                        fontSize: '0.95rem',
-                                        color: '#1e293b',
-                                        cursor: 'pointer'
-                                    }}
+                                    style={{ width: '100%', padding: '0.75rem', borderRadius: '8px', border: '1px solid #e2e8f0', backgroundColor: '#fff', fontSize: '0.95rem', color: '#1e293b', cursor: 'pointer' }}
                                 >
                                     {[
                                         { id: 'fixed_size', name: 'Fixed Size (Standard)' },
@@ -289,9 +290,7 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                                         { id: 'context_aware', name: 'Context Aware (LLM-based)' }
                                     ]
                                         .filter(s => !(isGraphEnabled && s.id === 'context_aware'))
-                                        .map(s => (
-                                            <option key={s.id} value={s.id}>{s.name}</option>
-                                        ))}
+                                        .map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
                                 </select>
                             </div>
 
@@ -300,16 +299,12 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
                                         <div>
                                             <LabelWithTooltip label="Chunk Size" tooltip="Characters per chunk" />
-                                            <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '0.4rem', lineHeight: 1.3 }}>
-                                                Maximum characters per chunk. Determines the primary size of information retrieval units.
-                                            </div>
+                                            <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '0.4rem', lineHeight: 1.3 }}>Maximum characters per chunk.</div>
                                             <input type="number" className="input" value={chunkingConfig.chunk_size} onChange={(e) => setChunkingConfig({ ...chunkingConfig, chunk_size: parseInt(e.target.value) })} />
                                         </div>
                                         <div>
                                             <LabelWithTooltip label="Overlap" tooltip="Character overlap" />
-                                            <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '0.4rem', lineHeight: 1.3 }}>
-                                                Shared characters between chunks to maintain context across boundaries.
-                                            </div>
+                                            <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '0.4rem', lineHeight: 1.3 }}>Shared characters between chunks.</div>
                                             <input type="number" className="input" value={chunkingConfig.chunk_overlap} onChange={(e) => setChunkingConfig({ ...chunkingConfig, chunk_overlap: parseInt(e.target.value) })} />
                                         </div>
                                     </div>
@@ -317,18 +312,14 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                                 {strategy === 'sliding_window' && (
                                     <div>
                                         <LabelWithTooltip label="Window Size" tooltip="Number of sentences around" />
-                                        <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '0.4rem', lineHeight: 1.3 }}>
-                                            Number of surrounding sentences to include around each target sentence for enriched context.
-                                        </div>
+                                        <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '0.4rem', lineHeight: 1.3 }}>Number of surrounding sentences per chunk.</div>
                                         <input type="number" className="input" value={chunkingConfig.window_size} onChange={(e) => setChunkingConfig({ ...chunkingConfig, window_size: parseInt(e.target.value) })} />
                                     </div>
                                 )}
                                 {strategy === 'hierarchical' && (
                                     <div>
-                                        <LabelWithTooltip label="Levels (Large->Small)" tooltip="e.g., 2048, 512, 128" />
-                                        <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '0.4rem', lineHeight: 1.3 }}>
-                                            Recursive chunking structure. Allows retrieving small chunks while maintaining broad parent context.
-                                        </div>
+                                        <LabelWithTooltip label="Levels (Large→Small)" tooltip="e.g., 2048, 512, 128" />
+                                        <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '0.4rem', lineHeight: 1.3 }}>Recursive chunking structure.</div>
                                         <div style={{ display: 'flex', gap: '0.5rem' }}>
                                             {chunkingConfig.chunk_sizes.map((size, idx) => (
                                                 <input key={idx} type="number" className="input" value={size}
@@ -345,13 +336,8 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                                     <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
                                         <div>
                                             <LabelWithTooltip label="Target Chunk Size" tooltip="Desired characters per chunk" />
-                                            <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '0.4rem', lineHeight: 1.3 }}>
-                                                LLM will intelligently split text at semantic boundaries while aiming for this character count. (Recommended: 500-1000)
-                                            </div>
-                                            <input
-                                                type="number"
-                                                className="input"
-                                                value={chunkingConfig.target_size}
+                                            <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '0.4rem', lineHeight: 1.3 }}>LLM will split at semantic boundaries.</div>
+                                            <input type="number" className="input" value={chunkingConfig.target_size}
                                                 onChange={(e) => setChunkingConfig({ ...chunkingConfig, target_size: parseInt(e.target.value) })}
                                                 disabled={chunkingConfig.llm_auto_size}
                                                 style={{ opacity: chunkingConfig.llm_auto_size ? 0.5 : 1 }}
@@ -359,17 +345,11 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                                         </div>
                                         <div>
                                             <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
-                                                <input
-                                                    type="checkbox"
-                                                    checked={chunkingConfig.llm_auto_size}
+                                                <input type="checkbox" checked={chunkingConfig.llm_auto_size}
                                                     onChange={(e) => setChunkingConfig({ ...chunkingConfig, llm_auto_size: e.target.checked })}
-                                                    style={{ width: '1.1rem', height: '1.1rem' }}
-                                                />
+                                                    style={{ width: '1.1rem', height: '1.1rem' }} />
                                                 <span style={{ fontSize: '0.9rem', fontWeight: 500 }}>Let LLM decide chunk size automatically</span>
                                             </label>
-                                            <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '0.3rem', marginLeft: '1.6rem', lineHeight: 1.3 }}>
-                                                LLM will determine optimal split points based on semantic coherence without size constraints.
-                                            </div>
                                         </div>
                                     </div>
                                 )}
@@ -403,7 +383,6 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                 onSave={(prompt) => setGraphParams(prev => ({ ...prev, custom_prompt: prompt }))}
                 mode="extraction_prompt"
             />
-
             <MessageDialog
                 isOpen={messageDialog.isOpen}
                 title={messageDialog.title}

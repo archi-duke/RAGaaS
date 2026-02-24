@@ -5,6 +5,7 @@ from datetime import datetime
 import logging
 import os
 import json
+import re
 
 from app.models.document import Document as DocModel, DocumentStatus
 from app.models.knowledge_base import KnowledgeBase as KBModel
@@ -14,6 +15,171 @@ from app.core.websocket_manager import manager
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+class TextUploadRequest(BaseModel):
+    title: str
+    content: str
+    chunking_config: Optional[str] = None
+    enable_text_cleaning: bool = False
+    enable_subject_restoration: bool = True
+    extraction_examples_yaml: Optional[str] = None
+    enable_entity_normalization: bool = False
+    normalization_algorithm: str = "embedding"
+    normalization_threshold: float = 0.85
+    enable_normalization_confirmation: bool = False
+
+
+@router.post("/{kb_id}/documents/upload-text", response_model=Document)
+async def upload_text_document(
+    kb_id: str,
+    background_tasks: BackgroundTasks,
+    body: TextUploadRequest,
+):
+    """직접 입력된 텍스트 내용을 문서로 처리합니다."""
+    kb = await KBModel.get(kb_id)
+    if not kb:
+        raise HTTPException(status_code=404, detail="Knowledge Base not found")
+
+    # 파일명 생성: 제목 기반, 특수문자 제거
+    safe_title = re.sub(r'[^\w\s-]', '', body.title.strip()).strip()
+    safe_title = re.sub(r'[\s]+', '_', safe_title) or "text_document"
+    filename = f"{safe_title}.txt"
+
+    # 기존 문서 덮어쓰기 체크
+    existing_doc = await DocModel.find_one(DocModel.kb_id == kb_id, DocModel.filename == filename)
+    pipeline_metadata = {}
+
+    if existing_doc:
+        doc = existing_doc
+        doc.status = DocumentStatus.PROCESSING.value
+        doc.updated_at = datetime.utcnow()
+        doc.pipeline_metadata = pipeline_metadata
+    else:
+        doc = DocModel(
+            kb_id=kb_id,
+            filename=filename,
+            file_type="txt",
+            status=DocumentStatus.PROCESSING.value,
+            pipeline_status="UPLOADED",
+            pipeline_metadata=pipeline_metadata
+        )
+        await doc.insert()
+
+    # 텍스트를 파일로 저장
+    shared_path = settings.SHARED_STORAGE_PATH
+    kb_path = os.path.join(shared_path, kb_id)
+    os.makedirs(kb_path, exist_ok=True)
+    file_path = os.path.join(kb_path, f"{doc.id}_{filename}")
+
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.write(body.content)
+
+    # Config 처리
+    final_config = kb.chunking_config.copy() if kb.chunking_config else {}
+    if body.chunking_config:
+        try:
+            parsed = json.loads(body.chunking_config)
+            final_config.update(parsed)
+            nested = parsed.get("chunking_config") or {}
+            for k, v in nested.items():
+                if k not in final_config or final_config.get(k) is None:
+                    final_config[k] = v
+        except Exception:
+            logger.error("Failed to parse chunking_config override")
+
+    chunking_cfg = {
+        "strategy": final_config.get("chunking_strategy") or final_config.get("strategy") or kb.chunking_strategy or "fixed_size",
+        "chunk_size": final_config.get("chunk_size") or 300,
+        "chunk_overlap": final_config.get("chunk_overlap") or 20,
+        "window_size": final_config.get("window_size") or 3,
+        "chunk_sizes": final_config.get("chunk_sizes") or [2048, 512, 128],
+        "buffer_size": final_config.get("buffer_size") or 1,
+        "breakpoint_threshold": final_config.get("breakpoint_threshold") or 95,
+    }
+
+    if not kb.enable_graph_rag:
+        graph_config = {
+            "extractor_type": "none",
+            "max_paths_per_chunk": 0,
+            "max_triplets_per_chunk": 0,
+            "num_workers": 1,
+            "generate_inverse_relations": False,
+        }
+        final_enable_entity_normalization = False
+        final_enable_normalization_confirmation = False
+    else:
+        graph_config = {
+            "extractor_type": final_config.get("extractor_type", "simple"),
+            "max_paths_per_chunk": final_config.get("max_paths_per_chunk", 10),
+            "max_triplets_per_chunk": final_config.get("max_triplets_per_chunk", 20),
+            "num_workers": final_config.get("num_workers", 4),
+            "generate_inverse_relations": final_config.get("generate_inverse_relations", True),
+        }
+        final_enable_entity_normalization = body.enable_entity_normalization
+        final_enable_normalization_confirmation = body.enable_normalization_confirmation
+
+    doc.extractor_type = graph_config.get("extractor_type")
+    doc.max_paths = graph_config.get("max_paths_per_chunk")
+    doc.enable_text_cleaning = body.enable_text_cleaning
+    doc.enable_subject_restoration = body.enable_subject_restoration
+    doc.generate_inverse = graph_config.get("generate_inverse_relations")
+    doc.extraction_examples = body.extraction_examples_yaml
+    doc.enable_entity_normalization = final_enable_entity_normalization
+    doc.normalization_algorithm = body.normalization_algorithm
+    doc.normalization_threshold = body.normalization_threshold
+    doc.enable_normalization_confirmation = final_enable_normalization_confirmation
+    doc.custom_prompt = final_config.get("custom_prompt")
+    doc.file_path = file_path
+    await doc.save()
+
+    graph_extraction_prompt = doc.custom_prompt
+
+    callback_base = os.getenv("CALLBACK_BASE_URL", "http://127.0.0.1:8000")
+    callback_url = f"{callback_base.rstrip('/')}/api/knowledge-bases/ingest/callback"
+
+    async def call_ingest_service():
+        try:
+            from app.services.ingestion.ingest_client import ingest_client
+            await ingest_client.create_ingest_job(
+                kb_id=kb_id,
+                doc_id=str(doc.id),
+                file_path=file_path,
+                chunking_config=chunking_cfg,
+                graph_config=graph_config,
+                graph_store="fuseki" if kb.graph_backend == "ontology" else "neo4j",
+                enable_text_cleaning=body.enable_text_cleaning,
+                enable_subject_restoration=body.enable_subject_restoration,
+                extraction_examples_yaml=body.extraction_examples_yaml,
+                custom_prompt=graph_extraction_prompt,
+                enable_entity_normalization=final_enable_entity_normalization,
+                normalization_algorithm=body.normalization_algorithm,
+                normalization_threshold=body.normalization_threshold,
+                enable_normalization_confirmation=final_enable_normalization_confirmation,
+                callback_url=callback_url,
+                entity_dictionary=None,
+                sampling_size=50000,
+            )
+        except Exception as e:
+            logger.error(f"[Ingest Text] Service call failed: {e}")
+            doc.status = DocumentStatus.ERROR.value
+            await doc.save()
+
+    background_tasks.add_task(call_ingest_service)
+    await doc.save()
+
+    await manager.broadcast(kb_id, {
+        "type": "document_status_update",
+        "doc_id": str(doc.id),
+        "status": doc.status,
+        "pipeline_status": doc.pipeline_status
+    })
+
+    doc_dict = doc.dict()
+    doc_dict['id'] = str(doc.id)
+    doc_dict['file_path'] = file_path
+    return Document(**doc_dict)
+
 
 @router.post("/{kb_id}/documents", response_model=Document)
 async def upload_document(
@@ -391,13 +557,26 @@ async def get_pipeline_data(kb_id: str, doc_id: str):
 @router.get("/{kb_id}/documents/{doc_id}/chunks")
 async def get_document_chunks(kb_id: str, doc_id: str):
     """Retrieve all chunks for a specific document from Milvus."""
-    from pymilvus import Collection, utility
-    
+    from pymilvus import Collection, utility, connections
+    from app.core.milvus import connect_milvus
+
     # Verify document exists
     doc = await DocModel.find_one(DocModel.id == doc_id, DocModel.kb_id == kb_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
-    
+
+    # Ensure Milvus connection is active
+    try:
+        utility.list_collections()
+    except Exception as e:
+        logger.warning(f"[Chunks] Milvus not connected ({e}), reconnecting...")
+        try:
+            connections.disconnect(alias="default")
+        except Exception:
+            pass
+        connect_milvus()
+        logger.info("[Chunks] Milvus reconnected")
+
     try:
         # Query Milvus for chunks belonging to this document
         collection_name = f"kb_{kb_id.replace('-', '_')}"
