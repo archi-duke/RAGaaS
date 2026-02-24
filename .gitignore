@@ -71,3 +71,19 @@ backend/debug_*.py
 backend/check_*.py
 *.bak
 backend/debug_*.txt
+
+# Runtime data (uploads, DB files)
+data/uploads/
+backend/data/uploads/
+backend/data/entity_stores/
+rag_system.db
+
+# Legacy / broken files
+**/*.broken
+**/legacy/
+
+# Nohup / log outputs
+nohup.out
+backend.log
+ingest.log
+frontend.log
