@@ -7,8 +7,16 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 class DictionaryBuilder:
-    def __init__(self):
-        self.client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+    def __init__(self, llm_model_config: Optional[Dict[str, Any]] = None):
+        cfg = llm_model_config or {}
+        api_key = cfg.get("api_key") or settings.OPENAI_API_KEY
+        client_kwargs: dict = {"api_key": api_key}
+        if cfg.get("base_url"):
+            client_kwargs["base_url"] = cfg["base_url"]
+        if cfg.get("extra_headers"):
+            client_kwargs["default_headers"] = cfg["extra_headers"]
+        self.client = AsyncOpenAI(**client_kwargs)
+        self.model = cfg.get("model", "gpt-4o")
 
     async def extract_entity_candidates(self, texts: List[str], sampling_size: int = 30000) -> List[str]:
         """
@@ -43,7 +51,7 @@ class DictionaryBuilder:
         try:
             logger.info(f"[Pass 1] Extracting candidates from sample ({len(sample_text)} chars)...")
             response = await self.client.chat.completions.create(
-                model="gpt-4o", 
+                model=self.model,
                 messages=[{"role": "user", "content": prompt.format(text=sample_text)}],
                 temperature=0,
                 response_format={"type": "json_object"}
@@ -89,7 +97,7 @@ class DictionaryBuilder:
         try:
             logger.info(f"[Pass 2] Consolidating {len(candidates)} candidates...")
             response = await self.client.chat.completions.create(
-                model="gpt-4o",
+                model=self.model,
                 messages=[{"role": "user", "content": prompt.format(candidates=candidates_str)}],
                 temperature=0,
                 response_format={"type": "json_object"}

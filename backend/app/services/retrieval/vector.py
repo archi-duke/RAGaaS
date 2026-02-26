@@ -1,13 +1,14 @@
 from typing import List, Dict, Any
 from pymilvus import Collection
 
-from app.services.embedding import embedding_service
+from app.services.embedding import embedding_service as default_embedding_service
 from .base import RetrievalStrategy
 
 class VectorRetrievalStrategy(RetrievalStrategy):
     async def search(self, kb_id: str, query: str, top_k: int, **kwargs) -> List[Dict[str, Any]]:
         score_threshold = kwargs.get("score_threshold", 0.0)
         metric_type = kwargs.get("metric_type", "COSINE")
+        emb_service = kwargs.get("embedding_service", default_embedding_service)
         
         execution_logs = kwargs.get("execution_logs", [])
         
@@ -21,7 +22,7 @@ class VectorRetrievalStrategy(RetrievalStrategy):
 
         # 1. Embed query
         execution_logs.append(f"[Vector] Generating embedding for query: '{query}'")
-        query_vectors = await embedding_service.get_embeddings([query])
+        query_vectors = await emb_service.get_embeddings([query])
         query_vec = query_vectors[0]
         
         # 2. Search

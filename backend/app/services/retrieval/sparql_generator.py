@@ -88,7 +88,8 @@ You MUST respond in JSON format:
     ):
         self.llm_endpoint = llm_endpoint or "https://api.openai.com/v1/chat/completions"
         self.llm_model = llm_model
-        self.api_key = api_key or os.environ.get("OPENAI_API_KEY", "")
+        from app.core.config import settings as app_settings
+        self.api_key = api_key or os.environ.get("OPENAI_API_KEY", "") or app_settings.OPENAI_API_KEY
 
     def _format_prefixes(self) -> str:
         """Format standard prefixes as a string for inclusion in prompts."""

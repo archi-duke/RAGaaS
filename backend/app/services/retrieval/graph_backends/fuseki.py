@@ -16,12 +16,25 @@ class FusekiBackend(GraphBackend):
         try:
             from app.services.retrieval.sparql_generator import SPARQLGenerator
             from app.core.config import settings
+            self._SPARQLGenerator = SPARQLGenerator
             self.generator = SPARQLGenerator(api_key=settings.OPENAI_API_KEY)
             print("DEBUG: [Fuseki] Doc2Onto SPARQLGenerator initialized successfully")
         except ImportError as e:
             print(f"WARNING: [Fuseki] Could not import Doc2Onto SPARQLGenerator: {e}. Using fallback logic.")
+            self._SPARQLGenerator = None
         except Exception as e:
             print(f"WARNING: [Fuseki] Failed to initialize SPARQLGenerator: {e}")
+            self._SPARQLGenerator = None
+
+    async def _get_generator(self, llm_model_config: dict):
+        """llm_model_config로 SPARQLGenerator 동적 생성. 없으면 기본 generator 반환."""
+        if not llm_model_config or not self._SPARQLGenerator:
+            return self.generator
+        from app.core.models_resolver import resolve_model_config
+        from app.core.config import settings
+        resolved = await resolve_model_config(llm_model_config)
+        api_key = resolved.get("api_key") or settings.OPENAI_API_KEY
+        return self._SPARQLGenerator(api_key=api_key)
 
     def _extract_entities_from_question(self, query_text: str, existing_entities: List[str]) -> List[str]:
         """질문에서 핵심 엔티티 추출. 기존 entities가 있으면 우선 사용."""
@@ -326,7 +339,9 @@ class FusekiBackend(GraphBackend):
             trace_logs.append(msg)
 
         # 1. Try using SPARQLGenerator (LLM-based)
-        if self.generator and query_text:
+        llm_model_config = kwargs.get("llm_model_config") or {}
+        active_generator = await self._get_generator(llm_model_config)
+        if active_generator and query_text:
             try:
                 # Determine inverse relation mode
                 # Default: if not explicitly set, use 'auto'
@@ -703,7 +718,7 @@ class FusekiBackend(GraphBackend):
                 if not skip_llm_generation:
                     log_trace(f"[Fuseki] Calling LLM SPARQL Generator (skip_llm_generation={skip_llm_generation})")
                     print(f"[DEBUG] Calling SPARQLGenerator.generate() with inv_mode={inv_mode}", flush=True)
-                    gen_result = self.generator.generate(
+                    gen_result = active_generator.generate(
                         question=query_text,
                         context=f"Entities: {', '.join(entities)}",
                         mode="ontology",

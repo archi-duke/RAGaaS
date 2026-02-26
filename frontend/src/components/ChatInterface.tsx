@@ -1,7 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { Send, Loader2, RotateCcw } from 'lucide-react';
 import { retrievalApi } from '../services/api';
 import { useModelSettings } from '../hooks/useModelSettings';
+import ModelSelector from './ModelSelector';
 
 interface Message {
     role: 'user' | 'assistant';
@@ -89,8 +91,37 @@ export default function ChatInterface({
     const [messages, setMessages] = useState<Message[]>([]);
     const [input, setInput] = useState('');
     const [isLoading, setIsLoading] = useState(false);
-    const { settings } = useModelSettings();
+    const { settings, updateSetting } = useModelSettings();
     const messagesEndRef = useRef<HTMLDivElement>(null);
+
+    const [isChatPromptModalOpen, setIsChatPromptModalOpen] = useState(false);
+    const [tempChatPrompt, setTempChatPrompt] = useState('');
+    const [isLoadingChatPrompt, setIsLoadingChatPrompt] = useState(false);
+    const [chatPromptError, setChatPromptError] = useState('');
+
+    const openChatPromptEditor = () => {
+        setIsChatPromptModalOpen(true);
+        setTempChatPrompt('');
+        setChatPromptError('');
+        setIsLoadingChatPrompt(true);
+        retrievalApi.getChatPrompt()
+            .then(res => setTempChatPrompt(res.data.content ?? ''))
+            .catch(e => setChatPromptError(e.response?.data?.detail ?? 'Failed to load prompt'))
+            .finally(() => setIsLoadingChatPrompt(false));
+    };
+
+    const saveChatPrompt = async () => {
+        setIsLoadingChatPrompt(true);
+        setChatPromptError('');
+        try {
+            await retrievalApi.updateChatPrompt(tempChatPrompt);
+            setIsChatPromptModalOpen(false);
+        } catch (e: any) {
+            setChatPromptError(e.response?.data?.detail ?? 'Failed to save prompt');
+        } finally {
+            setIsLoadingChatPrompt(false);
+        }
+    };
 
     const scrollToBottom = () => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -266,6 +297,7 @@ export default function ChatInterface({
     };
 
     return (
+        <>
         <div className="card" style={{
             height: '100%',
             display: 'flex',
@@ -273,9 +305,22 @@ export default function ChatInterface({
             border: '1px solid var(--border)',
             borderRadius: '12px'
         }}>
-            <h3 style={{ margin: 0, padding: '5px', borderBottom: '1px solid var(--border)' }}>
-                Chat with Knowledge Base
-            </h3>
+            <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.5rem',
+                padding: '5px 8px',
+                borderBottom: '1px solid var(--border)',
+                flexWrap: 'wrap',
+            }}>
+                <h3 style={{ margin: 0, flexShrink: 0 }}>Chat with Knowledge Base</h3>
+                <ModelSelector
+                    type="llm"
+                    value={settings.chat_llm}
+                    onChange={(cfg) => updateSetting('chat_llm', cfg)}
+                    onEditPrompt={openChatPromptEditor}
+                />
+            </div>
 
             <div style={{
                 flex: 1,
@@ -437,5 +482,94 @@ export default function ChatInterface({
                 </div>
             </div>
         </div>
+
+        {isChatPromptModalOpen && createPortal(
+            <div style={{
+                position: 'fixed',
+                top: 0, left: 0, right: 0, bottom: 0,
+                backgroundColor: 'rgba(0, 0, 0, 0.5)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                zIndex: 10000
+            }}>
+                <div style={{
+                    backgroundColor: 'white',
+                    borderRadius: '12px',
+                    padding: '1.5rem',
+                    width: '700px',
+                    maxHeight: '80vh',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)'
+                }}>
+                    <h3 style={{ marginTop: 0, marginBottom: '0.4rem', fontSize: '1.1rem', fontWeight: 600 }}>
+                        Chat Answer Generation Prompt
+                    </h3>
+                    <p style={{ fontSize: '0.8rem', color: '#64748b', marginBottom: '0.75rem' }}>
+                        System prompt used by the LLM to generate answers from retrieved context. The user message will include Context and Question.
+                    </p>
+                    {chatPromptError && (
+                        <div style={{ color: '#ef4444', fontSize: '0.85rem', marginBottom: '0.5rem' }}>
+                            {chatPromptError}
+                        </div>
+                    )}
+                    <textarea
+                        value={tempChatPrompt}
+                        onChange={(e) => setTempChatPrompt(e.target.value)}
+                        style={{
+                            flex: 1,
+                            minHeight: '400px',
+                            width: '100%',
+                            background: '#1e293b',
+                            color: '#e2e8f0',
+                            padding: '1.25rem',
+                            borderRadius: '8px',
+                            fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+                            fontSize: '0.9rem',
+                            border: '1px solid #334155',
+                            resize: 'none',
+                            outline: 'none',
+                            lineHeight: '1.6'
+                        }}
+                        spellCheck={false}
+                        disabled={isLoadingChatPrompt}
+                        placeholder="Enter system prompt..."
+                    />
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', marginTop: '1rem' }}>
+                        <button
+                            onClick={() => setIsChatPromptModalOpen(false)}
+                            style={{
+                                padding: '0.5rem 1rem',
+                                backgroundColor: '#f1f5f9',
+                                border: '1px solid #e2e8f0',
+                                borderRadius: '6px',
+                                cursor: 'pointer',
+                                fontSize: '0.9rem'
+                            }}
+                        >
+                            Cancel
+                        </button>
+                        <button
+                            onClick={saveChatPrompt}
+                            disabled={isLoadingChatPrompt}
+                            style={{
+                                padding: '0.5rem 1rem',
+                                backgroundColor: '#3b82f6',
+                                color: 'white',
+                                border: 'none',
+                                borderRadius: '6px',
+                                cursor: isLoadingChatPrompt ? 'not-allowed' : 'pointer',
+                                fontSize: '0.9rem'
+                            }}
+                        >
+                            {isLoadingChatPrompt ? 'Saving...' : 'Save Changes'}
+                        </button>
+                    </div>
+                </div>
+            </div>,
+            document.body
+        )}
+        </>
     );
 }

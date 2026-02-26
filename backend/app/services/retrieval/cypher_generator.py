@@ -105,11 +105,8 @@ In this pattern:
         self.llm_endpoint = llm_endpoint or "https://api.openai.com/v1/chat/completions"
         self.llm_model = llm_model
         # RAGaaS 환경 변수 설정에 맞게 기본값 수정 가능
-        self.api_key = api_key or os.environ.get("OPENAI_API_KEY", "")
-
-        if not self.api_key:
-            # RAGaaS 실행 환경에서 OPENAI_API_KEY가 없을 경우 대비
-            pass
+        from app.core.config import settings as app_settings
+        self.api_key = api_key or os.environ.get("OPENAI_API_KEY", "") or app_settings.OPENAI_API_KEY
 
     def generate(self, question: str, context: Optional[str] = None, mode: str = "graph", custom_prompt: Optional[str] = None, inverse_search_mode: str = "auto", kb_id: Optional[str] = None, use_dynamic_schema: bool = False) -> Dict:
         """사용자 질문을 Cypher로 변환"""

@@ -1,16 +1,17 @@
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from pymilvus import Collection
-from app.services.embedding import embedding_service
+from app.services.embedding import embedding_service as default_embedding_service
 from .base import RetrievalStrategy
 import numpy as np
 from openai import AsyncOpenAI
 from app.core.config import settings
 
 class KeywordRetrievalStrategy(RetrievalStrategy):
-    async def extract_keywords_with_llm(self, query: str) -> str:
+    async def extract_keywords_with_llm(self, query: str, llm_model_config: Optional[dict] = None) -> str:
         """
         Extract meaningful keywords (nouns, roots) from query using LLM, removing particles.
         Returns a space-separated string of keywords.
+        llm_model_config: {model, api_key, base_url, extra_headers} - 없으면 env 기반 fallback
         """
         prompt = f"""
         Extract the core keywords from the following Korean query, removing particles (Josa) and functional words.
@@ -20,9 +21,26 @@ class KeywordRetrievalStrategy(RetrievalStrategy):
         Keywords:
         """
         try:
-            client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+            if llm_model_config:
+                from app.core.models_resolver import resolve_model_config
+                resolved = await resolve_model_config(llm_model_config)
+                api_key = resolved["api_key"]
+                model = resolved["model"]
+                base_url = resolved.get("base_url")
+                extra_headers = resolved.get("extra_headers") or {}
+            else:
+                api_key = settings.OPENAI_API_KEY
+                model = "gpt-3.5-turbo"
+                base_url = None
+                extra_headers = {}
+            client_kwargs: dict = {"api_key": api_key}
+            if base_url:
+                client_kwargs["base_url"] = base_url
+            if extra_headers:
+                client_kwargs["default_headers"] = extra_headers
+            client = AsyncOpenAI(**client_kwargs)
             response = await client.chat.completions.create(
-                model="gpt-3.5-turbo",
+                model=model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0,
                 max_tokens=50
@@ -43,8 +61,9 @@ class KeywordRetrievalStrategy(RetrievalStrategy):
         
         # LLM Keyword Extraction
         search_query = query
+        llm_model_config = kwargs.get("llm_model_config")
         if use_llm_extraction:
-            search_query = await self.extract_keywords_with_llm(query)
+            search_query = await self.extract_keywords_with_llm(query, llm_model_config=llm_model_config)
 
         # Get existing collection
         collection_name = f"kb_{kb_id.replace('-', '_')}"

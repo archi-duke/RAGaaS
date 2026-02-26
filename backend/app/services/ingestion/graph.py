@@ -20,10 +20,21 @@ logger = logging.getLogger(__name__)
 class GraphProcessor:
 
     def __init__(self):
-        self.client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
         self.namespace_entity = "http://rag.local/entity/"
         self.namespace_relation = "http://rag.local/relation/"
         self.namespace_source = "http://rag.local/source/"
+
+    def _get_llm_client(self, config: Dict[str, Any]) -> AsyncOpenAI:
+        """config의 llm_model_config 또는 env fallback으로 클라이언트를 반환."""
+        llm_cfg = config.get("llm_model_config") or {}
+        if llm_cfg.get("api_key"):
+            kwargs: dict = {"api_key": llm_cfg["api_key"]}
+            if llm_cfg.get("base_url"):
+                kwargs["base_url"] = llm_cfg["base_url"]
+            if llm_cfg.get("extra_headers"):
+                kwargs["default_headers"] = llm_cfg["extra_headers"]
+            return AsyncOpenAI(**kwargs)
+        return AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
 
     def _sanitize_uri(self, text: str) -> str:
         """Sanitize text to be used in URI."""
@@ -143,8 +154,10 @@ class GraphProcessor:
         
         try:
             print(f"[Graph] Single-Pass Extraction for chunk {chunk_id[:8]}...")
-            r1 = await self.client.chat.completions.create(
-                model="gpt-4o", # Use strong model for high-fidelity extraction
+            llm_client = self._get_llm_client(config)
+            llm_model = config.get("llm_model_config", {}).get("model", "gpt-4o")
+            r1 = await llm_client.chat.completions.create(
+                model=llm_model,
                 messages=[{"role": "user", "content": relation_prompt}],
                 temperature=0.1,
                 response_format={"type": "json_object"}

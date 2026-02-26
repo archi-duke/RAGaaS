@@ -141,6 +141,13 @@ async def upload_text_document(
     async def call_ingest_service():
         try:
             from app.services.ingestion.ingest_client import ingest_client
+            from app.services.embedding import get_embedding_service
+            emb_resolved = await get_embedding_service(kb)
+            embedding_model_cfg = {
+                "model": emb_resolved.model,
+                "api_key": emb_resolved.client.api_key,
+                "base_url": str(emb_resolved.client.base_url) if emb_resolved.client.base_url else None,
+            }
             await ingest_client.create_ingest_job(
                 kb_id=kb_id,
                 doc_id=str(doc.id),
@@ -159,6 +166,7 @@ async def upload_text_document(
                 callback_url=callback_url,
                 entity_dictionary=None,
                 sampling_size=50000,
+                embedding_model=embedding_model_cfg,
             )
         except Exception as e:
             logger.error(f"[Ingest Text] Service call failed: {e}")
@@ -327,6 +335,13 @@ async def upload_document(
     async def call_ingest_service():
         try:
             from app.services.ingestion.ingest_client import ingest_client
+            from app.services.embedding import get_embedding_service
+            emb_resolved = await get_embedding_service(kb)
+            embedding_model_cfg = {
+                "model": emb_resolved.model,
+                "api_key": emb_resolved.client.api_key,
+                "base_url": str(emb_resolved.client.base_url) if emb_resolved.client.base_url else None,
+            }
             await ingest_client.create_ingest_job(
                 kb_id=kb_id,
                 doc_id=str(doc.id),
@@ -345,6 +360,7 @@ async def upload_document(
                 callback_url=callback_url,
                 entity_dictionary=dict_data,
                 sampling_size=doc.max_sample_size,
+                embedding_model=embedding_model_cfg,
             )
         except Exception as e:
             logger.error(f"[Ingest] Service call failed: {e}")
