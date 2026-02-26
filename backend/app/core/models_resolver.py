@@ -32,9 +32,10 @@ async def resolve_model_config(config: Optional[dict], default_model: str = "gpt
     api_key = os.getenv("OPENAI_API_KEY")
     base_url = None
     model = default_model
+    extra_headers: Dict[str, str] = {}
 
     if not config:
-        return {"model": model, "api_key": api_key, "base_url": base_url}
+        return {"model": model, "api_key": api_key, "base_url": base_url, "extra_headers": extra_headers}
 
     model = config.get("model", model)
     provider = config.get("provider")
@@ -45,6 +46,7 @@ async def resolve_model_config(config: Optional[dict], default_model: str = "gpt
         custom = await CustomProvider.find_one({"provider_id": provider_id})
         if custom:
             base_url = custom.base_url
+            extra_headers = getattr(custom, "extra_headers", None) or {}
             try:
                 api_key = decrypt(custom.encrypted_key)
             except Exception as e:
@@ -66,4 +68,4 @@ async def resolve_model_config(config: Optional[dict], default_model: str = "gpt
     if config.get("base_url"):
         base_url = config.get("base_url")
 
-    return {"model": model, "api_key": api_key, "base_url": base_url}
+    return {"model": model, "api_key": api_key, "base_url": base_url, "extra_headers": extra_headers}

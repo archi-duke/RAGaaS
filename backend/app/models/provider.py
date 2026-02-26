@@ -1,4 +1,4 @@
-from typing import Optional, List
+from typing import Optional, List, Dict
 from datetime import datetime
 from beanie import Document
 from pydantic import BaseModel, Field
@@ -39,6 +39,7 @@ class CustomProvider(Document):
     encrypted_key: str                 # Fernet 암호화된 API Key
     model_list: List[str] = []         # 사용 가능한 모델 목록 (사용자 입력)
     provider_type: str = "both"        # "llm" | "embedding" | "both"
+    extra_headers: Dict[str, str] = {}  # 추가 HTTP 헤더 (예: {"X-API-Version": "2024-01-01"})
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -54,6 +55,7 @@ class CustomProviderCreate(BaseModel):
     api_key: str                       # plaintext — 백엔드에서 즉시 암호화
     model_list: List[str] = []
     provider_type: str = "both"
+    extra_headers: Optional[Dict[str, str]] = None  # 추가 HTTP 헤더
 
 
 class CustomProviderResponse(BaseModel):

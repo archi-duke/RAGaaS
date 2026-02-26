@@ -63,7 +63,27 @@ class ChatResponse(BaseModel):
     used_fallback: bool = False  # Fallback search was triggered due to error/no results
 
 
+from pathlib import Path
+
+_APP_ROOT = Path(__file__).resolve().parent.parent.parent
 RERANK_PROMPT_PATH = "/app/data/prompts/rerank_llm_prompt.txt"
+CHAT_PROMPT_PATH = _APP_ROOT / "data" / "prompts" / "chat_answer_prompt.txt"
+
+DEFAULT_CHAT_SYSTEM_PROMPT = (
+    "You are a helpful assistant that answers questions based on the provided context. "
+    "The context generally consists of Korean documents. "
+    "Regardless of the language of the system instructions, YOU MUST ANSWER IN KOREAN (한국어). "
+    "If multiple entities or items match the question, LIST ALL OF THEM. "
+    "When asked about 'participants' or 'users' of a skill/item, ALSO INCLUDE its 'creators', 'masters', or 'teachers' mentioned in the context. "
+    "If the context doesn't contain enough information to answer the question, say so. "
+    "Always cite which chunks you used (e.g., '[Chunk 1]에 따르면...')."
+)
+
+
+def _load_chat_system_prompt() -> str:
+    if CHAT_PROMPT_PATH.exists():
+        return CHAT_PROMPT_PATH.read_text(encoding="utf-8")
+    return DEFAULT_CHAT_SYSTEM_PROMPT
 
 
 class PromptUpdateRequest(BaseModel):
@@ -89,6 +109,21 @@ async def update_rerank_prompt(request: PromptUpdateRequest):
         return {"message": "Prompt updated successfully"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/settings/chat-prompt")
+async def get_chat_prompt():
+    """Get the current Chat answer generation system prompt"""
+    return {"content": _load_chat_system_prompt()}
+
+
+@router.put("/settings/chat-prompt")
+async def update_chat_prompt(request: PromptUpdateRequest):
+    """Update the Chat answer generation system prompt"""
+    CHAT_PROMPT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    CHAT_PROMPT_PATH.write_text(request.content, encoding="utf-8")
+    return {"message": "Chat prompt updated successfully"}
+
 
 @router.post("/{kb_id}/retrieve", response_model=List[RetrievalResult])
 async def retrieve_chunks(
@@ -357,9 +392,15 @@ async def chat_with_kb(
         api_key = resolved["api_key"]
         base_url = resolved["base_url"]
         model = resolved["model"]
+        extra_headers = resolved.get("extra_headers") or {}
         if not api_key:
             raise HTTPException(status_code=500, detail="LLM API key (OpenAI or Custom) not configured")
-        client = openai.OpenAI(api_key=api_key, base_url=base_url) if base_url else openai.OpenAI(api_key=api_key)
+        kwargs = {"api_key": api_key}
+        if base_url:
+            kwargs["base_url"] = base_url
+        if extra_headers:
+            kwargs["default_headers"] = extra_headers
+        client = openai.OpenAI(**kwargs)
         return client, model
 
     # 4. Generate LLM response based on retrieved chunks
@@ -403,19 +444,15 @@ async def chat_with_kb(
     
     client, llm_model = await get_openai_client(llm_config)
     
+    system_prompt = _load_chat_system_prompt()
+
     try:
         response = client.chat.completions.create(
             model=llm_model,
             messages=[
                 {
                     "role": "system",
-                    "content": "You are a helpful assistant that answers questions based on the provided context. "
-                               "The context generally consists of Korean documents. "
-                               "Regardless of the language of the system instructions, YOU MUST ANSWER IN KOREAN (한국어). "
-                               "If multiple entities or items match the question, LIST ALL OF THEM. "
-                               "When asked about 'participants' or 'users' of a skill/item, ALSO INCLUDE its 'creators', 'masters', or 'teachers' mentioned in the context. "
-                               "If the context doesn't contain enough information to answer the question, say so. "
-                               "Always cite which chunks you used (e.g., '[Chunk 1]에 따르면...')."
+                    "content": system_prompt
                 },
                 {
                     "role": "user",

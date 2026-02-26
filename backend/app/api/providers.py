@@ -193,6 +193,7 @@ class FetchModelsRequest(BaseModel):
     api_key: Optional[str] = None
     provider_id: Optional[str] = None
     model_type: Optional[str] = None  # "llm" | "embedding" | None (all)
+    extra_headers: Optional[dict] = None  # for direct call (base_url + api_key)
 
 
 @router.post("/fetch-models")
@@ -210,6 +211,7 @@ async def fetch_provider_models(payload: FetchModelsRequest):
     model_type = payload.model_type or "llm"
     use_stored_key = False
     is_builtin = provider_id in BUILTIN_IDS
+    custom_provider: Optional[CustomProvider] = None
 
     if provider_id:
         if is_builtin:
@@ -226,12 +228,12 @@ async def fetch_provider_models(payload: FetchModelsRequest):
                 raise HTTPException(status_code=500, detail="Failed to decrypt API key")
             use_stored_key = True
         else:
-            custom = await CustomProvider.find_one(CustomProvider.provider_id == provider_id)
-            if not custom:
+            custom_provider = await CustomProvider.find_one(CustomProvider.provider_id == provider_id)
+            if not custom_provider:
                 raise HTTPException(status_code=404, detail="Provider not found")
-            base_url = custom.base_url
+            base_url = custom_provider.base_url
             try:
-                api_key = decrypt(custom.encrypted_key)
+                api_key = decrypt(custom_provider.encrypted_key)
             except ValueError:
                 raise HTTPException(status_code=500, detail="Failed to decrypt API key")
             use_stored_key = True
@@ -241,6 +243,15 @@ async def fetch_provider_models(payload: FetchModelsRequest):
 
     url = f"{base_url.rstrip('/')}/models"
     url, headers = _build_auth(provider_id or "openai", api_key, url)
+
+    # extra_headers 병합: Custom 프로바이더(DB) 또는 직접 입력(payload)
+    extra = None
+    if custom_provider and getattr(custom_provider, "extra_headers", None):
+        extra = custom_provider.extra_headers
+    elif payload.extra_headers:
+        extra = payload.extra_headers
+    if extra:
+        headers = {**headers, **extra}
 
     try:
         async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
@@ -325,6 +336,7 @@ async def create_custom_provider(payload: CustomProviderCreate):
         encrypted_key=encrypted,
         model_list=payload.model_list,
         provider_type=payload.provider_type,
+        extra_headers=payload.extra_headers or {},
     )
     await provider.insert()
     logger.info(f"Custom provider registered: {provider.name} ({provider.provider_id})")
@@ -348,6 +360,7 @@ async def update_custom_provider(provider_id: str, payload: CustomProviderCreate
     provider.base_url = payload.base_url.rstrip("/")
     provider.model_list = payload.model_list
     provider.provider_type = payload.provider_type
+    provider.extra_headers = payload.extra_headers or {}
     provider.updated_at = datetime.utcnow()
     if payload.api_key.strip():
         provider.encrypted_key = encrypt(payload.api_key)
