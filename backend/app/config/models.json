@@ -1,0 +1,16 @@
+{
+    "providers": {
+        "openai": {
+            "name": "OpenAI",
+            "base_url": "https://api.openai.com/v1"
+        },
+        "anthropic": {
+            "name": "Anthropic",
+            "base_url": "https://api.anthropic.com/v1"
+        },
+        "google": {
+            "name": "Google",
+            "base_url": "https://generativelanguage.googleapis.com/v1beta/openai"
+        }
+    }
+}

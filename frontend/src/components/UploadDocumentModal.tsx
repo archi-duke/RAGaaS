@@ -4,6 +4,8 @@ import { docApi, kbApi } from '../services/api';
 import MessageDialog from './MessageDialog';
 import PromptDialog from './PromptDialog';
 import GraphExtractionSettings from './GraphExtractionSettings';
+import ModelSelector, { DEFAULT_LLM_CONFIG } from './ModelSelector';
+import { useModelSettings } from '../hooks/useModelSettings';
 
 interface UploadDocumentModalProps {
     isOpen: boolean;
@@ -59,6 +61,9 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
     const [messageDialog, setMessageDialog] = useState<{ isOpen: boolean; title: string; message: string; type: 'info' | 'success' | 'error' }>({
         isOpen: false, title: '', message: '', type: 'info'
     });
+
+    // 중앙 관리 모델 설정 (localStorage, 사용자별)
+    const { settings, updateSetting } = useModelSettings();
 
     const [graphParams, setGraphParams] = useState({
         extractor_type: 'simple' as 'simple' | 'dynamic' | 'schema',
@@ -131,7 +136,28 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
         if (!isFileReady) return;
         setIsUploading(true);
         try {
-            const config = { ...graphParams, chunking_strategy: strategy, chunking_config: chunkingConfig };
+            const config = {
+                ...graphParams,
+                chunking_strategy: strategy,
+                chunking_config: chunkingConfig,
+                // Ingest LLM (Chunk/Node Processing)
+                llm_provider: settings.ingest_llm.provider,
+                llm_model: settings.ingest_llm.model,
+                llm_base_url: settings.ingest_llm.base_url,
+                llm_provider_id: settings.ingest_llm.provider_id,
+                // Chunk Grouping LLM
+                chunk_grouping_llm_provider: settings.chunk_grouping_llm.provider,
+                chunk_grouping_llm_model: settings.chunk_grouping_llm.model,
+                chunk_grouping_llm_base_url: settings.chunk_grouping_llm.base_url,
+                // Subject Restoration LLM
+                subject_restoration_llm_provider: settings.subject_restoration_llm.provider,
+                subject_restoration_llm_model: settings.subject_restoration_llm.model,
+                subject_restoration_llm_base_url: settings.subject_restoration_llm.base_url,
+                // Noun Extraction LLM
+                noun_extraction_llm_provider: settings.noun_extraction_llm.provider,
+                noun_extraction_llm_model: settings.noun_extraction_llm.model,
+                noun_extraction_llm_base_url: settings.noun_extraction_llm.base_url,
+            };
 
             if (inputTab === 'file') {
                 await docApi.upload(kbId, file!, config);
@@ -153,9 +179,9 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
     const tabStyle = (active: boolean): React.CSSProperties => ({
         display: 'flex', alignItems: 'center', gap: '0.4rem',
         padding: '0.5rem 1rem', cursor: 'pointer', fontSize: '0.87rem', fontWeight: 600,
-        borderBottom: active ? '2px solid var(--primary)' : '2px solid transparent',
         color: active ? 'var(--primary)' : '#64748b',
-        background: 'none', border: 'none', borderBottom: active ? '2px solid var(--primary)' : '2px solid transparent',
+        background: 'none', border: 'none',
+        borderBottom: active ? '2px solid var(--primary)' : '2px solid transparent',
         transition: 'color 0.15s, border-color 0.15s', whiteSpace: 'nowrap',
     });
 
@@ -192,9 +218,7 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                     <div style={{ padding: '1.5rem', overflowY: 'auto', flex: 1 }}>
                         {/* Input Type Tabs */}
                         <div style={{ marginBottom: '1.5rem' }}>
-                            <div style={{
-                                display: 'flex', borderBottom: '1px solid #e2e8f0', marginBottom: '1.25rem'
-                            }}>
+                            <div style={{ display: 'flex', borderBottom: '1px solid #e2e8f0', marginBottom: '1.25rem' }}>
                                 <button id="tab-select-file" style={tabStyle(inputTab === 'file')} onClick={() => setInputTab('file')}>
                                     <Upload size={14} />
                                     Select File
@@ -274,7 +298,7 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                         </div>
 
                         {/* Chunking Strategy */}
-                        <div style={{ marginBottom: '2rem' }}>
+                        <div style={{ marginBottom: '10px' }}>
                             <label style={{ display: 'block', marginBottom: '0.8rem', fontWeight: 600, color: '#334155' }}>Chunking Strategy</label>
                             <div style={{ marginBottom: '1rem' }}>
                                 <select
@@ -294,56 +318,62 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                                 </select>
                             </div>
 
-                            <div style={{ padding: '1.25rem', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px' }}>
-                                {strategy === 'fixed_size' && (
-                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-                                        <div>
-                                            <LabelWithTooltip label="Chunk Size" tooltip="Characters per chunk" />
-                                            <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '0.4rem', lineHeight: 1.3 }}>Maximum characters per chunk.</div>
-                                            <input type="number" className="input" value={chunkingConfig.chunk_size} onChange={(e) => setChunkingConfig({ ...chunkingConfig, chunk_size: parseInt(e.target.value) })} />
+                            {/* Chunking params + LLMs side by side */}
+                            <div style={{ padding: '15px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', display: 'flex', gap: '1.5rem', alignItems: 'flex-start' }}>
+                                {/* Left: Chunking params */}
+                                <div style={{ flex: 1 }}>
+                                    {strategy === 'fixed_size' && (
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                                            <div>
+                                                <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.5rem', marginBottom: '0.3rem' }}>
+                                                    <label style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)' }}>Chunk Size</label>
+                                                    <span style={{ fontSize: '0.72rem', color: '#64748b' }}>Maximum characters per chunk.</span>
+                                                </div>
+                                                <input type="number" className="input" style={{ width: '100%' }} value={chunkingConfig.chunk_size} onChange={(e) => setChunkingConfig({ ...chunkingConfig, chunk_size: parseInt(e.target.value) })} />
+                                            </div>
+                                            <div>
+                                                <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.5rem', marginBottom: '0.3rem' }}>
+                                                    <label style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)' }}>Overlap</label>
+                                                    <span style={{ fontSize: '0.72rem', color: '#64748b' }}>Shared characters between chunks.</span>
+                                                </div>
+                                                <input type="number" className="input" style={{ width: '100%' }} value={chunkingConfig.chunk_overlap} onChange={(e) => setChunkingConfig({ ...chunkingConfig, chunk_overlap: parseInt(e.target.value) })} />
+                                            </div>
                                         </div>
+                                    )}
+                                    {strategy === 'sliding_window' && (
                                         <div>
-                                            <LabelWithTooltip label="Overlap" tooltip="Character overlap" />
-                                            <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '0.4rem', lineHeight: 1.3 }}>Shared characters between chunks.</div>
-                                            <input type="number" className="input" value={chunkingConfig.chunk_overlap} onChange={(e) => setChunkingConfig({ ...chunkingConfig, chunk_overlap: parseInt(e.target.value) })} />
+                                            <LabelWithTooltip label="Window Size" tooltip="Number of sentences around" />
+                                            <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '0.4rem', lineHeight: 1.3 }}>Number of surrounding sentences per chunk.</div>
+                                            <input type="number" className="input" value={chunkingConfig.window_size} onChange={(e) => setChunkingConfig({ ...chunkingConfig, window_size: parseInt(e.target.value) })} />
                                         </div>
-                                    </div>
-                                )}
-                                {strategy === 'sliding_window' && (
-                                    <div>
-                                        <LabelWithTooltip label="Window Size" tooltip="Number of sentences around" />
-                                        <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '0.4rem', lineHeight: 1.3 }}>Number of surrounding sentences per chunk.</div>
-                                        <input type="number" className="input" value={chunkingConfig.window_size} onChange={(e) => setChunkingConfig({ ...chunkingConfig, window_size: parseInt(e.target.value) })} />
-                                    </div>
-                                )}
-                                {strategy === 'hierarchical' && (
-                                    <div>
-                                        <LabelWithTooltip label="Levels (Large→Small)" tooltip="e.g., 2048, 512, 128" />
-                                        <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '0.4rem', lineHeight: 1.3 }}>Recursive chunking structure.</div>
-                                        <div style={{ display: 'flex', gap: '0.5rem' }}>
-                                            {chunkingConfig.chunk_sizes.map((size, idx) => (
-                                                <input key={idx} type="number" className="input" value={size}
-                                                    onChange={(e) => {
-                                                        const newSizes = [...chunkingConfig.chunk_sizes];
-                                                        newSizes[idx] = parseInt(e.target.value);
-                                                        setChunkingConfig({ ...chunkingConfig, chunk_sizes: newSizes });
-                                                    }} />
-                                            ))}
-                                        </div>
-                                    </div>
-                                )}
-                                {strategy === 'context_aware' && (
-                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                                    )}
+                                    {strategy === 'hierarchical' && (
                                         <div>
-                                            <LabelWithTooltip label="Target Chunk Size" tooltip="Desired characters per chunk" />
-                                            <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '0.4rem', lineHeight: 1.3 }}>LLM will split at semantic boundaries.</div>
-                                            <input type="number" className="input" value={chunkingConfig.target_size}
-                                                onChange={(e) => setChunkingConfig({ ...chunkingConfig, target_size: parseInt(e.target.value) })}
-                                                disabled={chunkingConfig.llm_auto_size}
-                                                style={{ opacity: chunkingConfig.llm_auto_size ? 0.5 : 1 }}
-                                            />
+                                            <LabelWithTooltip label="Levels (Large→Small)" tooltip="e.g., 2048, 512, 128" />
+                                            <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '0.4rem', lineHeight: 1.3 }}>Recursive chunking structure.</div>
+                                            <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                                {chunkingConfig.chunk_sizes.map((size, idx) => (
+                                                    <input key={idx} type="number" className="input" value={size}
+                                                        onChange={(e) => {
+                                                            const newSizes = [...chunkingConfig.chunk_sizes];
+                                                            newSizes[idx] = parseInt(e.target.value);
+                                                            setChunkingConfig({ ...chunkingConfig, chunk_sizes: newSizes });
+                                                        }} />
+                                                ))}
+                                            </div>
                                         </div>
-                                        <div>
+                                    )}
+                                    {strategy === 'context_aware' && (
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                                            <div>
+                                                <LabelWithTooltip label="Target Chunk Size" tooltip="Desired characters per chunk" />
+                                                <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '0.4rem', lineHeight: 1.3 }}>LLM will split at semantic boundaries.</div>
+                                                <input type="number" className="input" value={chunkingConfig.target_size}
+                                                    onChange={(e) => setChunkingConfig({ ...chunkingConfig, target_size: parseInt(e.target.value) })}
+                                                    disabled={chunkingConfig.llm_auto_size}
+                                                    style={{ opacity: chunkingConfig.llm_auto_size ? 0.5 : 1 }}
+                                                />
+                                            </div>
                                             <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
                                                 <input type="checkbox" checked={chunkingConfig.llm_auto_size}
                                                     onChange={(e) => setChunkingConfig({ ...chunkingConfig, llm_auto_size: e.target.checked })}
@@ -351,8 +381,40 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                                                 <span style={{ fontSize: '0.9rem', fontWeight: 500 }}>Let LLM decide chunk size automatically</span>
                                             </label>
                                         </div>
+                                    )}
+                                </div>
+
+                                {/* Right: LLMs */}
+                                <div style={{
+                                    flex: 1,
+                                    borderLeft: '1px solid #e2e8f0',
+                                    paddingLeft: '1.5rem',
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    gap: '0.75rem'
+                                }}>
+                                    <div style={{ fontWeight: 600, fontSize: '0.85rem', color: '#334155', marginBottom: '0.25rem' }}>LLMs</div>
+
+                                    {/* Chunk/Node Processing */}
+                                    <div>
+                                        <div style={{ fontSize: '0.72rem', color: '#64748b', marginBottom: '0.3rem' }}>Chunk/Node Processing</div>
+                                        <ModelSelector
+                                            type="llm"
+                                            value={settings.ingest_llm}
+                                            onChange={(cfg) => updateSetting('ingest_llm', cfg)}
+                                        />
                                     </div>
-                                )}
+
+                                    {/* Chunk Grouping */}
+                                    <div>
+                                        <div style={{ fontSize: '0.72rem', color: '#64748b', marginBottom: '0.3rem' }}>Chunk Grouping</div>
+                                        <ModelSelector
+                                            type="llm"
+                                            value={settings.chunk_grouping_llm}
+                                            onChange={(cfg) => updateSetting('chunk_grouping_llm', cfg)}
+                                        />
+                                    </div>
+                                </div>
                             </div>
                         </div>
 
@@ -363,6 +425,10 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                                 onManageExamples={() => setShowExampleModal(true)}
                                 onEditPrompt={() => setShowPromptModal(true)}
                                 showEntitySample={true}
+                                subjectRestorationLlm={settings.subject_restoration_llm}
+                                nounExtractionLlm={settings.noun_extraction_llm}
+                                onSubjectRestorationLlmChange={(cfg) => updateSetting('subject_restoration_llm', cfg)}
+                                onNounExtractionLlmChange={(cfg) => updateSetting('noun_extraction_llm', cfg)}
                             />
                         )}
                     </div>

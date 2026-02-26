@@ -17,8 +17,12 @@ class KnowledgeBase(Document):
     promotion_metadata: Dict[str, Any] = {}
     sparql_prompt_template: Optional[str] = None
     pipeline_config: Dict[str, Any] = Field(default_factory=lambda: {"stages": []})
+    # LLM / Embedding model settings
+    embedding_provider: str = "openai"
+    embedding_model: str = "text-embedding-3-small"
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
+
 
     class Settings:
         name = "knowledge_bases"

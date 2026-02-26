@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from app.schemas import RetrievalRequest, RetrievalResult
 from app.services.retrieval import retrieval_factory, reranking_service
 from typing import List, Optional, Dict
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import openai
 import os
 import time
@@ -43,8 +43,14 @@ class ChatRequest(BaseModel):
     # Pipeline configuration (optional - if provided, uses pipeline executor)
     pipeline: Optional[dict] = None
     
+    # Model configurations for dynamic model selection
+    pipeline_model_config: Optional[dict] = None         # Default chat LLM (backend 필드명)
+    frontend_model_config: Optional[dict] = Field(None, alias="model_config") # 프론트엔드 호환용
+    model_config_keyword: Optional[dict] = None
+
     class Config:
-        extra = "ignore"
+        extra = "allow"
+        populate_by_name = True
 
 class ChatResponse(BaseModel):
     answer: str
@@ -344,6 +350,18 @@ async def chat_with_kb(
     with open("backend_debug.log", "a") as f:
         f.write(f"Strategy: {request.strategy}, Final Results: {len(results) if results else 0}\\n")
     
+    async def get_openai_client(config: Optional[dict]):
+        """ModelConfig를 기반으로 OpenAI 호환 클라이언트 생성."""
+        from app.core.models_resolver import resolve_model_config
+        resolved = await resolve_model_config(config)
+        api_key = resolved["api_key"]
+        base_url = resolved["base_url"]
+        model = resolved["model"]
+        if not api_key:
+            raise HTTPException(status_code=500, detail="LLM API key (OpenAI or Custom) not configured")
+        client = openai.OpenAI(api_key=api_key, base_url=base_url) if base_url else openai.OpenAI(api_key=api_key)
+        return client, model
+
     # 4. Generate LLM response based on retrieved chunks
     if not results:
         return ChatResponse(
@@ -379,17 +397,15 @@ async def chat_with_kb(
     ])
     
     context = "\n\n".join(context_parts)
+
+    # LLM 모델 설정: model_config (프론트) / pipeline_model_config (백엔드) 호환
+    llm_config = request.pipeline_model_config or request.frontend_model_config
     
-    # Call OpenAI API
-    openai_api_key = os.getenv("OPENAI_API_KEY")
-    if not openai_api_key:
-        raise HTTPException(status_code=500, detail="OpenAI API key not configured")
-    
-    client = openai.OpenAI(api_key=openai_api_key)
+    client, llm_model = await get_openai_client(llm_config)
     
     try:
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model=llm_model,
             messages=[
                 {
                     "role": "system",
@@ -409,9 +425,7 @@ async def chat_with_kb(
             temperature=0.3,
             max_tokens=1000
         )
-        
         answer = response.choices[0].message.content
-        
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to generate response: {str(e)}")
     

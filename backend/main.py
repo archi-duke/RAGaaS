@@ -42,6 +42,9 @@ app.include_router(retrieval.router, prefix="/api/knowledge-bases", tags=["Retri
 from app.api import graph_viewer
 app.include_router(graph_viewer.router, prefix="/api/graph", tags=["Graph Viewer"])
 
+from app.api import providers
+app.include_router(providers.router, prefix="/api", tags=["providers"])
+
 @app.websocket("/api/ws/{kb_id}")
 async def websocket_endpoint(websocket: WebSocket, kb_id: str):
     await manager.connect(websocket, kb_id)

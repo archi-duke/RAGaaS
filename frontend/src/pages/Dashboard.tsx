@@ -22,6 +22,8 @@ interface KnowledgeBase {
 export default function Dashboard() {
     const [kbs, setKbs] = useState<KnowledgeBase[]>([]);
     const [isModalOpen, setIsModalOpen] = useState(false);
+    const [isLoading, setIsLoading] = useState(true);
+    const [loadError, setLoadError] = useState<string | null>(null);
 
     const [deleteKbId, setDeleteKbId] = useState<string | null>(null);
 
@@ -30,11 +32,22 @@ export default function Dashboard() {
     }, []);
 
     const loadKbs = async () => {
+        setIsLoading(true);
+        setLoadError(null);
         try {
             const res = await kbApi.list();
-            setKbs(res.data);
-        } catch (err) {
-            console.error(err);
+            setKbs(Array.isArray(res.data) ? res.data : []);
+        } catch (err: unknown) {
+            const msg = err && typeof err === 'object' && 'response' in err
+                ? (err as { response?: { status?: number; data?: unknown } }).response?.status === 404
+                    ? 'API endpoint not found. Check backend URL.'
+                    : `Failed to load: ${String((err as { response?: { data?: unknown } }).response?.data ?? (err instanceof Error ? err.message : err))}`
+                : String(err);
+            setLoadError(msg);
+            console.error('KB list load error:', err);
+            setKbs([]);
+        } finally {
+            setIsLoading(false);
         }
     };
 
@@ -70,6 +83,23 @@ export default function Dashboard() {
                 </button>
             </div>
 
+            {loadError && (
+                <div style={{
+                    padding: '1rem 1.5rem',
+                    background: '#fef2f2',
+                    color: '#b91c1c',
+                    borderRadius: '8px',
+                    marginBottom: '1.5rem',
+                    fontSize: '0.875rem'
+                }}>
+                    {loadError}
+                </div>
+            )}
+            {isLoading ? (
+                <div style={{ color: 'var(--text-secondary)', padding: '2rem', textAlign: 'center' }}>
+                    Loading...
+                </div>
+            ) : (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(350px, 1fr))', gap: '1.5rem' }}>
                 {kbs.map((kb) => (
                     <Link to={`/kb/${kb.id}`} key={kb.id} style={{ textDecoration: 'none', color: 'inherit' }}>
@@ -242,6 +272,7 @@ export default function Dashboard() {
                     </Link>
                 ))}
             </div>
+            )}
 
             <CreateKnowledgeBaseModal
                 isOpen={isModalOpen}

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { X, FileText, Settings, Check, Info } from 'lucide-react';
 import { kbApi } from '../services/api';
+import ModelSelector, { DEFAULT_EMBEDDING_CONFIG, type ModelConfig } from './ModelSelector';
 
 interface CreateKnowledgeBaseModalProps {
     isOpen: boolean;
@@ -62,6 +63,7 @@ export default function CreateKnowledgeBaseModal({ isOpen, onClose, onCreateComp
     const [enableGraphRag, setEnableGraphRag] = useState(false);
     const [graphBackend, setGraphBackend] = useState<'ontology' | 'neo4j'>('ontology');
     const [isCreating, setIsCreating] = useState(false);
+    const [embeddingModel, setEmbeddingModel] = useState<ModelConfig>(DEFAULT_EMBEDDING_CONFIG);
 
     if (!isOpen) return null;
 
@@ -76,8 +78,11 @@ export default function CreateKnowledgeBaseModal({ isOpen, onClose, onCreateComp
                 chunking_strategy: 'fixed_size',
                 chunking_config: {},
                 metric_type: 'COSINE',
-                graph_backend: enableGraphRag ? graphBackend : 'none'
-            });
+                graph_backend: enableGraphRag ? graphBackend : 'none',
+                embedding_provider: embeddingModel.provider,
+                embedding_model: embeddingModel.model,
+                embedding_base_url: embeddingModel.base_url,
+            } as any);
             onCreateComplete();
             onClose();
             // Reset form
@@ -217,6 +222,19 @@ export default function CreateKnowledgeBaseModal({ isOpen, onClose, onCreateComp
                         )}
                     </div>
 
+                    {/* Embedding Model Settings */}
+                    <div style={{ marginBottom: '1.5rem', background: '#faf5ff', padding: '1rem', borderRadius: '8px', border: '1px solid #e9d5ff' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem', color: '#7c3aed', fontWeight: 600, fontSize: '0.9rem' }}>
+                            <span>🔢</span>
+                            <span>Embedding Model</span>
+                            <span style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 400 }}>- KB 생성 시 고정. 변경 시 재인덱싱 필요</span>
+                        </div>
+                        <ModelSelector
+                            type="embedding"
+                            value={embeddingModel}
+                            onChange={setEmbeddingModel}
+                        />
+                    </div>
 
                     <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '1rem' }}>
                         <button type="button" className="btn" onClick={onClose} disabled={isCreating}>Cancel</button>
