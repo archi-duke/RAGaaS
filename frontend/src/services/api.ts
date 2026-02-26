@@ -178,6 +178,9 @@ export const retrievalApi = {
         // Pipeline Configuration
         pipeline?: { stages: any[] };
     }) => api.post(`knowledge-bases/${kbId}/chat`, data),
+    getChatPrompt: () => api.get('knowledge-bases/settings/chat-prompt'),
+    updateChatPrompt: (content: string) =>
+        api.put('knowledge-bases/settings/chat-prompt', { content }),
 };
 
 // Ingest Service API (runs on port 8001)
@@ -267,6 +270,7 @@ export const providerApi = {
         api_key: string;
         model_list: string[];
         provider_type: string;
+        extra_headers?: Record<string, string>;
     }) => api.post('providers/custom', data),
 
     /** Custom 프로바이더 수정 */
@@ -276,6 +280,7 @@ export const providerApi = {
         api_key: string;
         model_list: string[];
         provider_type: string;
+        extra_headers?: Record<string, string>;
     }) => api.put(`providers/custom/${providerId}`, data),
 
     /** Custom 프로바이더 삭제 */
@@ -292,7 +297,7 @@ export const providerApi = {
      * - base_url + api_key: 직접 입력 (캐시 갱신 안 함)
      * 반환: { models, models_changed, cached }
      */
-    fetchModels: (data: { base_url?: string; api_key?: string; provider_id?: string; model_type?: string }) =>
+    fetchModels: (data: { base_url?: string; api_key?: string; provider_id?: string; model_type?: string; extra_headers?: Record<string, string> }) =>
         api.post('providers/fetch-models', data),
 };
 

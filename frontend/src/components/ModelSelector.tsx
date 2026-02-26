@@ -177,7 +177,7 @@ export default function ModelSelector({ type, value, onChange, disabled, valueEm
 
     const CUSTOM_OPTION = '__custom__';
     const [customForm, setCustomForm] = useState({
-        name: '', base_url: '', api_key: '', model_list_text: '',
+        name: '', base_url: '', api_key: '', extra_headers_text: '', model_list_text: '',
         provider_type: 'both' as ProviderType,
     });
     const [showKey, setShowKey]     = useState(false);
@@ -272,7 +272,7 @@ export default function ModelSelector({ type, value, onChange, disabled, valueEm
     // ── 프로바이더 선택 ───────────────────────────────────────────────────────
     const handleProviderChange = (providerKey: string) => {
         if (providerKey === CUSTOM_OPTION) {
-            setCustomForm({ name: '', base_url: '', api_key: '', model_list_text: '', provider_type: 'both' });
+            setCustomForm({ name: '', base_url: '', api_key: '', extra_headers_text: '', model_list_text: '', provider_type: 'both' });
             setSaveError('');
             setFetchError('');
             setShowModelPicker(false);
@@ -306,6 +306,21 @@ export default function ModelSelector({ type, value, onChange, disabled, valueEm
         setIsOpen(false);
     };
 
+    /** Parse extra_headers_text "Header-Name: value" per line into Record */
+    const parseExtraHeaders = (text: string): Record<string, string> => {
+        const out: Record<string, string> = {};
+        for (const line of text.split('\n')) {
+            const t = line.trim();
+            if (!t) continue;
+            const idx = t.indexOf(':');
+            if (idx <= 0) continue;
+            const key = t.slice(0, idx).trim();
+            const val = t.slice(idx + 1).trim();
+            if (key) out[key] = val;
+        }
+        return out;
+    };
+
     // ── Custom 저장 ───────────────────────────────────────────────────────────
     const handleSaveCustom = async () => {
         if (!customForm.name.trim() || !customForm.base_url.trim() || !customForm.api_key.trim()) {
@@ -317,12 +332,14 @@ export default function ModelSelector({ type, value, onChange, disabled, valueEm
         try {
             const model_list = customForm.model_list_text
                 .split('\n').map(s => s.trim()).filter(Boolean);
+            const extra_headers = parseExtraHeaders(customForm.extra_headers_text);
             const res = await providerApi.createCustom({
                 name: customForm.name.trim(),
                 base_url: customForm.base_url.trim(),
                 api_key: customForm.api_key,
                 model_list,
                 provider_type: customForm.provider_type,
+                ...(Object.keys(extra_headers).length > 0 && { extra_headers }),
             });
             await loadProviders();
             setSelectedProvider(res.data.provider_id);
@@ -360,9 +377,11 @@ export default function ModelSelector({ type, value, onChange, disabled, valueEm
         setFetchError('');
         setShowModelPicker(false);
         try {
+            const extra_headers = parseExtraHeaders(customForm.extra_headers_text);
             const res = await providerApi.fetchModels({
                 base_url: customForm.base_url.trim(),
                 api_key: customForm.api_key,
+                ...(Object.keys(extra_headers).length > 0 && { extra_headers }),
             });
             const models: string[] = res.data.models;
             setFetchedModels(models);
@@ -709,6 +728,23 @@ export default function ModelSelector({ type, value, onChange, disabled, valueEm
                                         style={{ position: 'absolute', right: '7px', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', padding: 0, display: 'flex' }}>
                                         {showKey ? <EyeOff size={13} /> : <Eye size={13} />}
                                     </button>
+                                </div>
+                            </div>
+
+                            {/* Extra Headers (optional) */}
+                            <div>
+                                <div style={{ fontSize: '0.72rem', fontWeight: 500, color: '#475569', marginBottom: '3px' }}>
+                                    Extra Headers <span style={{ color: '#94a3b8', fontWeight: 400 }}>(optional)</span>
+                                </div>
+                                <textarea
+                                    className="input"
+                                    style={{ fontSize: '0.78rem', padding: '0.35rem 0.5rem', resize: 'vertical', minHeight: '48px' }}
+                                    placeholder={'Header-Name: value\nX-Custom-Header: my-value'}
+                                    value={customForm.extra_headers_text}
+                                    onChange={e => setCustomForm(p => ({ ...p, extra_headers_text: e.target.value }))}
+                                />
+                                <div style={{ fontSize: '0.65rem', color: '#94a3b8', marginTop: '2px' }}>
+                                    One per line: Header-Name: value
                                 </div>
                             </div>
 
