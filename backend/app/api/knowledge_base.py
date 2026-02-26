@@ -427,66 +427,54 @@ async def save_extraction_rules(data: dict = Body(...)):
 
 @router.get("/query-prompt/content")
 async def get_query_prompt_content(type: str = "ontology_minus"):
-    # Map input type to specific DB prompt name
-    # This prevents ambiguity when multiple prompts have the same 'type' (e.g., sparql)
+    """Return the actual prompt file used by the generator at runtime."""
+    prompts_dir = Path("data/prompts")
+
+    # Map to the actual txt files the generators read at runtime
+    file_priority_map: dict = {
+        "neo4j":         ["cypher_vibe_prompt.txt", "cypher_generation_prompt.txt"],
+        "ontology_plus": ["sparql_vibe_prompt.txt"],
+        "ontology_minus": ["sparql_vibe_prompt.txt"],
+    }
+
+    for fname in file_priority_map.get(type, ["sparql_vibe_prompt.txt"]):
+        fpath = prompts_dir / fname
+        if fpath.exists():
+            return {"content": fpath.read_text(encoding="utf-8")}
+
+    # Fallback: try DB
     p_name_map = {
         "neo4j": "cypher_generation_prompt",
         "ontology_plus": "sparql_ontology_prompt",
-        "ontology_minus": "sparql_generation_prompt"
+        "ontology_minus": "sparql_generation_prompt",
     }
-
     target_name = p_name_map.get(type, "sparql_generation_prompt")
-    
-    # Find prompt in DB by NAME
     prompt = await PromptTemplate.find_one(PromptTemplate.name == target_name)
-
-    if not prompt:
-        # Fallback logic if specific name not found
-        # Try finding by type as a backup (though less reliable)
-        p_type_map = {
-            "neo4j": "cypher",
-            "ontology_plus": "sparql",
-            "ontology_minus": "sparql"
-        }
-        target_type = p_type_map.get(type, "sparql")
-        prompt = await PromptTemplate.find_one(PromptTemplate.type == target_type)
-
     if prompt:
         return {"content": prompt.content}
-    
-    return {"content": "Prompt not found in DB. Please run migration script."}
+
+    return {"content": ""}
 
 @router.post("/query-prompt/save")
 async def save_query_prompt(data: dict = Body(...)):
+    """Save edited prompt back to the txt file actually used by the generator."""
     content = data.get("content", "")
     p_type = data.get("type", "ontology")
-    
+
     if not content:
         raise HTTPException(status_code=400, detail="Content is required")
-        
-    # Map p_type to DB type logic
-    db_type = "sparql"
-    name = "sparql_generation_prompt"
-    
-    if p_type == "neo4j":
-        db_type = "cypher"
-        name = "cypher_generation_prompt"
-    elif p_type == "ontology_plus":
-        db_type = "sparql"
-        name = "sparql_ontology_prompt"
-    else:
-        db_type = "sparql"
-        name = "sparql_generation_prompt"
-        
-    # Upsert
-    prompt = await PromptTemplate.find_one(PromptTemplate.name == name)
-    if prompt:
-        prompt.content = content
-        await prompt.save()
-    else:
-        prompt = PromptTemplate(name=name, content=content, type=db_type)
-        await prompt.insert()
-        
+
+    prompts_dir = Path("data/prompts")
+    file_map: dict = {
+        "neo4j":         "cypher_vibe_prompt.txt",
+        "ontology_plus": "sparql_vibe_prompt.txt",
+        "ontology_minus": "sparql_vibe_prompt.txt",
+    }
+    fname = file_map.get(p_type, "sparql_vibe_prompt.txt")
+    fpath = prompts_dir / fname
+    fpath.parent.mkdir(parents=True, exist_ok=True)
+    fpath.write_text(content, encoding="utf-8")
+
     return {"ok": True}
 
 @router.get("/extraction-prompt/content")

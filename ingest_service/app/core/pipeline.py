@@ -354,24 +354,45 @@ class IngestPipeline:
     """LlamaIndex-based Ingestion Pipeline"""
     
     def __init__(self):
-        # Initialize LLM and Embedding
-        self.llm = OpenAI(
+        # Initialize default LLM and Embedding
+        self.default_llm = OpenAI(
             model=settings.OPENAI_MODEL,
             api_key=settings.OPENAI_API_KEY
         )
-        self.embed_model = OpenAIEmbedding(
+        self.default_embed_model = OpenAIEmbedding(
             model=settings.EMBEDDING_MODEL,
             api_key=settings.OPENAI_API_KEY
         )
         
-        # Set global settings
-        LlamaSettings.llm = self.llm
-        LlamaSettings.embed_model = self.embed_model
+        # Set global settings (default)
+        LlamaSettings.llm = self.default_llm
+        LlamaSettings.embed_model = self.default_embed_model
+
+    def _get_llm(self, config: Optional[Dict[str, Any]]):
+        if not config:
+            return self.default_llm
+        
+        return OpenAI(
+            model=config.get("model", settings.OPENAI_MODEL),
+            api_key=config.get("api_key", settings.OPENAI_API_KEY),
+            base_url=config.get("base_url")
+        )
+
+    def _get_embedding_model(self, config: Optional[Dict[str, Any]]):
+        if not config:
+            return self.default_embed_model
+        
+        return OpenAIEmbedding(
+            model=config.get("model", settings.EMBEDDING_MODEL),
+            api_key=config.get("api_key", settings.OPENAI_API_KEY),
+            base_url=config.get("base_url")
+        )
     
     def get_node_parser(
         self,
         strategy: ChunkingStrategy,
-        config: Dict[str, Any]
+        config: Dict[str, Any],
+        llm: Any = None
     ):
         """Return Node Parser based on chunking strategy"""
         
@@ -400,7 +421,7 @@ class IngestPipeline:
             llm_auto_size = config.get("llm_auto_size", False)
             
             return ContextAwareNodeParser(
-                llm=self.llm,
+                llm=llm or self.default_llm,
                 target_size=target_size,
                 llm_auto_size=llm_auto_size
             )
@@ -429,7 +450,8 @@ class IngestPipeline:
     def get_graph_extractor(
         self,
         extractor_type: GraphExtractorType,
-        config: Dict[str, Any]
+        config: Dict[str, Any],
+        llm: Any = None
     ):
         """Return Extractor based on graph extractor type"""
         
@@ -438,7 +460,7 @@ class IngestPipeline:
         
         elif extractor_type == GraphExtractorType.SIMPLE:
             return SimpleLLMPathExtractor(
-                llm=self.llm,
+                llm=llm or self.default_llm,
                 max_paths_per_chunk=config.get("max_paths_per_chunk", 10),
                 num_workers=config.get("num_workers", 4),
             )
@@ -448,7 +470,7 @@ class IngestPipeline:
             allowed_relation_types = config.get("allowed_relation_types", None)
             
             return DynamicLLMPathExtractor(
-                llm=self.llm,
+                llm=llm or self.default_llm,
                 max_triplets_per_chunk=config.get("max_triplets_per_chunk", 20),
                 num_workers=config.get("num_workers", 4),
                 allowed_entity_types=allowed_entity_types,
@@ -462,7 +484,7 @@ class IngestPipeline:
             schema = config.get("kg_validation_schema", None)
             
             return SchemaLLMPathExtractor(
-                llm=self.llm,
+                llm=llm or self.default_llm,
                 possible_entities=entities,
                 possible_relations=relations,
                 kg_validation_schema=schema,
@@ -477,7 +499,8 @@ class IngestPipeline:
         self,
         text: str,
         strategy: ChunkingStrategy,
-        config: Dict[str, Any]
+        config: Dict[str, Any],
+        llm: Any = None
     ) -> List[BaseNode]:
         """Chunk documents and return list of nodes"""
         
@@ -489,7 +512,7 @@ class IngestPipeline:
         document = Document(text=text)
         
         # Get appropriate parser
-        parser = self.get_node_parser(strategy, config)
+        parser = self.get_node_parser(strategy, config, llm=llm)
         
         # Parse into nodes
         nodes = parser.get_nodes_from_documents([document])
@@ -563,9 +586,10 @@ class IngestPipeline:
         nodes: List[BaseNode],
         extractor_type: GraphExtractorType,
         config: Dict[str, Any],
-        examples: Optional[str] = None,
+        extraction_examples_yaml: Optional[str] = None,
         custom_prompt: Optional[str] = None,
-        entity_dictionary: Optional[Dict[str, Dict[str, Any]]] = None
+        entity_dictionary: Optional[Dict[str, Dict[str, Any]]] = None,
+        llm: Any = None
     ) -> List[Dict[str, Any]]:
         """Extract graph triples from nodes in parallel"""
         if extractor_type == GraphExtractorType.NONE:
@@ -592,7 +616,7 @@ class IngestPipeline:
 
                     # Prompt building
                     # The examples are now directly embedded into the prompt string if provided
-                    examples_prompt_part = f"\n[Reference Examples (Few-Shot)]\n{examples}\n" if examples else ""
+                    examples_prompt_part = f"\n[Reference Examples (Few-Shot)]\n{extraction_examples_yaml}\n" if extraction_examples_yaml else ""
 
                     if custom_prompt:
                         # Use safe replacement to avoid conflicts with JSON braces in prompt
@@ -616,7 +640,8 @@ Triplets:"""
                     if (idx + 1) % 5 == 0 or idx == 0:
                         print(f"[Pipeline] Processing chunk {idx+1}/{len(nodes)}...")
                         
-                    response = await self.llm.acomplete(prompt)
+                    active_llm = llm or self.default_llm
+                    response = await active_llm.acomplete(prompt)
                     response_text = response.text.strip()
                     print(f"[Pipeline] Raw Extraction Response (Node {idx}): {response_text[:300]}...") # Debug log
                     
@@ -724,7 +749,11 @@ Triplets:"""
         kb_id: Optional[str] = None,  # ✅ 추가: 임시 파일 저장용
         doc_id: Optional[str] = None,  # ✅ 추가: 임시 파일 저장용
         job_id: Optional[str] = None, # For cancellation checks
-        status_callback: Optional[any] = None # Async function(status: str)
+        status_callback: Optional[any] = None, # Async function(status: str)
+        # Model configurations
+        ingest_llm: Optional[Dict[str, Any]] = None,
+        chunk_grouping_llm: Optional[Dict[str, Any]] = None,
+        embedding_model: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """Execute the entire ingestion process in Doc2Graph order with timing stats."""
         import time
@@ -734,6 +763,11 @@ Triplets:"""
         stats = []
 
         graph_config = graph_config or {}
+        
+        # Prepare Instances
+        active_ingest_llm = self._get_llm(ingest_llm)
+        active_chunk_llm = self._get_llm(chunk_grouping_llm)
+        active_embed_model = self._get_embedding_model(embedding_model)
         
         # 0. Text Cleaning
         t0 = time.time()
@@ -753,7 +787,7 @@ Triplets:"""
                 
             print(f"[Pipeline] Phase 1: Building Global Entity Dictionary...")
             from app.core.dictionary_builder import DictionaryBuilder
-            dict_builder = DictionaryBuilder(self.llm)
+            dict_builder = DictionaryBuilder(active_ingest_llm)
             effective_sampling_size = sampling_size if sampling_size else 10000
             entity_dictionary = await dict_builder.build_from_text(text, sampling_size=effective_sampling_size)
             
@@ -779,7 +813,7 @@ Triplets:"""
         else:
             print(f"[Pipeline] Phase 2: Chunking document for Triple Extraction...")
         
-        nodes = self.chunk_document(text, chunking_strategy, chunking_config)
+        nodes = self.chunk_document(text, chunking_strategy, chunking_config, llm=active_chunk_llm)
         stats.append({"step": f"Step 2: Text Chunking ({len(nodes)} chunks)", "duration": round(time.time() - t2, 2)})
 
         # PHASE 3: Triple Extraction & Embeddings
@@ -788,7 +822,7 @@ Triplets:"""
         print(f"[Pipeline] Phase 3: Generating embeddings...")
         embeddings = []
         for i, node in enumerate(nodes):
-            embedding = await self.embed_model.aget_text_embedding(node.get_content())
+            embedding = await active_embed_model.aget_text_embedding(node.get_content())
             embeddings.append(embedding)
         
         triples = []
@@ -802,9 +836,10 @@ Triplets:"""
                 nodes, 
                 graph_extractor_type, 
                 graph_config, 
-                extraction_examples_yaml, 
-                custom_prompt,
-                entity_dictionary=entity_dictionary 
+                extraction_examples_yaml=extraction_examples_yaml,
+                custom_prompt=custom_prompt,
+                entity_dictionary=entity_dictionary,
+                llm=active_ingest_llm
             )
             
             # ✅ 트리플 추출 완료 상태 전송

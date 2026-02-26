@@ -90,6 +90,10 @@ class IngestRequest(BaseModel):
     callback_url: Optional[str] = None
     sampling_size: Optional[int] = None # For Doc2Graph Dictionary (Phase 1)
     entity_dictionary: Optional[Dict[str, Any]] = None # Pre-computed dictionary
+    # Model configurations
+    ingest_llm: Optional[Dict[str, Any]] = None
+    chunk_grouping_llm: Optional[Dict[str, Any]] = None
+    embedding_model: Optional[Dict[str, Any]] = None
 
 
 class IngestResponse(BaseModel):
@@ -196,7 +200,11 @@ async def process_ingest_job(job_id: str, request: IngestRequest):
             kb_id=request.kb_id,  # ✅ 추가
             doc_id=request.doc_id,  # ✅ 추가
             job_id=job_id,
-            status_callback=pipeline_callback
+            status_callback=pipeline_callback,
+            # Model configurations
+            ingest_llm=request.ingest_llm,
+            chunk_grouping_llm=request.chunk_grouping_llm,
+            embedding_model=request.embedding_model
         )
         
         if not result or jobs.get(job_id, {}).get("status") == JobStatus.CANCELLED:
@@ -452,6 +460,10 @@ class PreviewRequest(BaseModel):
     sampling_size: Optional[int] = None  # For Doc2Graph Dictionary (Phase 1)
     entity_dictionary: Optional[Dict[str, Any]] = None # Pre-computed dictionary
     callback_url: Optional[str] = None # For granular status updates
+    # Model configurations
+    ingest_llm: Optional[Dict[str, Any]] = None
+    chunk_grouping_llm: Optional[Dict[str, Any]] = None
+    embedding_model: Optional[Dict[str, Any]] = None
 
 
 class PreviewResponse(BaseModel):
@@ -537,7 +549,11 @@ async def create_preview(request: PreviewRequest):
             sampling_size=request.sampling_size,
             kb_id=request.kb_id,  # ✅ 추가
             doc_id=request.doc_id,  # ✅ 추가
-            status_callback=pipeline_callback
+            status_callback=pipeline_callback,
+            # Model configurations
+            ingest_llm=request.ingest_llm,
+            chunk_grouping_llm=request.chunk_grouping_llm,
+            embedding_model=request.embedding_model
         )
         
         print(f"[Preview] Extracted {len(result['triples'])} triples, {result['node_count']} nodes")

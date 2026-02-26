@@ -474,6 +474,8 @@ export default function KnowledgeBaseDetail() {
         } catch (error: any) {
             console.error('Failed to load KB:', error);
             setError(error.response?.status === 404 ? 'Knowledge Base not found.' : 'Failed to load Knowledge Base.');
+        } finally {
+            // setIsLoading(false); // If we had a global isLoading for KB
         }
     };
 

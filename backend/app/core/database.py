@@ -4,6 +4,7 @@ from app.core.config import settings
 from app.models.knowledge_base import KnowledgeBase
 from app.models.prompt import PromptTemplate
 from app.models.document import Document
+from app.models.provider import CustomProvider, BuiltinProviderConfig
 
 # Client 인스턴스를 전역으로 유지할 수도 있음 (선택사항)
 client: AsyncIOMotorClient = None
@@ -18,8 +19,9 @@ async def init_db():
         document_models=[
             KnowledgeBase,
             PromptTemplate,
-            Document
-            # TripleChunkMapping removed - source_node_id is stored directly in Neo4j/Fuseki
+            Document,
+            CustomProvider,
+            BuiltinProviderConfig,
         ]
     )
 

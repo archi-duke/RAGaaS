@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { Plus, X, ChevronLeft, ChevronRight, GripVertical, Download, Check } from 'lucide-react';
+import ModelSelector, { DEFAULT_LLM_CONFIG, DEFAULT_EMBEDDING_CONFIG, type ModelConfig } from './ModelSelector';
+import { useModelSettings } from '../hooks/useModelSettings';
 
 // Stage type definitions
 export type StageType = 'ann' | 'bm25' | 'brute_force' | 'graph' | 'rerank' | 'ner_filter';
@@ -36,7 +38,7 @@ const FILTER_STAGES: { type: StageType; label: string; category: 'filter' }[] = 
 ];
 
 const DEFAULT_PARAMS: Record<StageType, Record<string, any>> = {
-    ann: { top_k: 10, threshold: 0.5, index_type: 'IVF_FLAT' },
+    ann: { top_k: 10, threshold: 0.5, index_type: 'IVF_FLAT', embedding_model: DEFAULT_EMBEDDING_CONFIG },
     bm25: { top_k: 50, use_multi_pos: true },
     brute_force: { top_k: 3, threshold: 1.5 },
     graph: {
@@ -50,9 +52,20 @@ const DEFAULT_PARAMS: Record<StageType, Record<string, any>> = {
         use_dynamic_schema: false,
         enable_entity_expansion: false,
         merge_mode: 'union',
-        custom_query_prompt: ''
+        custom_query_prompt: '',
+        model_type: 'llm' as 'llm' | 'embedding',
+        llm_model: DEFAULT_LLM_CONFIG,
+        embedding_model: DEFAULT_EMBEDDING_CONFIG,
     },
-    rerank: { top_k: 5, threshold: 0.0, use_llm: false, llm_strategy: 'full' },
+    rerank: {
+        top_k: 5,
+        threshold: 0.0,
+        use_llm: false,
+        llm_strategy: 'full',
+        model_type: 'llm' as 'llm' | 'embedding',
+        llm_model: DEFAULT_LLM_CONFIG,
+        embedding_model: DEFAULT_EMBEDDING_CONFIG,
+    },
     ner_filter: { penalty: 0.3, tokenizer: 'regex', mode: 'nnp' },
 };
 
@@ -63,9 +76,15 @@ const cardStyle: React.CSSProperties = {
     borderRadius: '12px',
     padding: '0.75rem 0.75rem 0.65rem 0.75rem',
     minWidth: '180px',
-    height: '157px',
+    height: '160px',
     boxSizing: 'border-box',
     position: 'relative',
+};
+
+// LLM 사용 스테이지
+const cardStyleLLM: React.CSSProperties = {
+    ...cardStyle,
+    height: '160px',
 };
 
 const addButtonStyle: React.CSSProperties = {
@@ -92,6 +111,7 @@ export default function PipelineBuilder({
     const [showDropdown, setShowDropdown] = useState(false);
     const [isLoading, setIsLoading] = useState(true);
     const [copied, setCopied] = useState(false);
+    const { settings } = useModelSettings();
 
     const handleCopyPipeline = () => {
         const config: PipelineConfig = { stages };
@@ -131,9 +151,8 @@ export default function PipelineBuilder({
                     if (config.stages && config.stages.length > 0) {
                         // Adjust graph stage parameters based on promotion status
                         const adjustedStages = config.stages.map((stage: PipelineStage) => {
+                            const params = { ...stage.params };
                             if (stage.type === 'graph') {
-                                const params = { ...stage.params };
-
                                 // If not promoted (Schema None), ensure filters are enabled
                                 if (!isOntologyPromoted) {
                                     params.use_relation_filter = true;
@@ -145,7 +164,12 @@ export default function PipelineBuilder({
                                         params.use_schema_mode = true;
                                     }
                                 }
-
+                                // Graph 필터는 기본 LLM
+                                params.model_type = 'llm';
+                                return { ...stage, params };
+                            }
+                            if (stage.type === 'rerank') {
+                                params.model_type = 'llm';
                                 return { ...stage, params };
                             }
                             return stage;
@@ -221,28 +245,42 @@ export default function PipelineBuilder({
         }
     };
 
+    const openGraphPromptEditor = (index: number) => {
+        setEditingPromptStage(index);
+        setTempPrompt('');
+        setPromptError('');
+        loadGraphDefaultPrompt();
+    };
+
     const handleSavePrompt = async () => {
-        if (editingPromptStage === -1) {
-            // Global Rerank Prompt
-            setIsLoadingPrompt(true);
-            setPromptError('');
-            try {
+        setIsLoadingPrompt(true);
+        setPromptError('');
+        try {
+            if (editingPromptStage === -1) {
+                // Global Rerank Prompt → txt file
                 const response = await fetch('/api/knowledge-bases/settings/rerank-prompt', {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ content: tempPrompt })
                 });
-                if (!response.ok) throw new Error('Failed to save global prompt');
-                setEditingPromptStage(null);
-            } catch (e: any) {
-                setPromptError(e.message || 'Failed to save prompt');
-            } finally {
-                setIsLoadingPrompt(false);
+                if (!response.ok) throw new Error('Failed to save rerank prompt');
+            } else if (editingPromptStage !== null) {
+                // Graph Query Prompt → txt file (used by generator at runtime)
+                const backendType = graphBackend === 'neo4j'
+                    ? 'neo4j'
+                    : (isOntologyPromoted ? 'ontology_plus' : 'ontology_minus');
+                const response = await fetch('/api/knowledge-bases/query-prompt/save', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ content: tempPrompt, type: backendType })
+                });
+                if (!response.ok) throw new Error('Failed to save query prompt');
             }
-        } else if (editingPromptStage !== null) {
-            // Stage-specific Custom Prompt (Graph, etc.)
-            handleParamChange(editingPromptStage, 'custom_query_prompt', tempPrompt);
             setEditingPromptStage(null);
+        } catch (e: any) {
+            setPromptError(e.message || 'Failed to save prompt');
+        } finally {
+            setIsLoadingPrompt(false);
         }
     };
     // --- End Prompt Functions ---
@@ -250,9 +288,19 @@ export default function PipelineBuilder({
     const handleAddStage = (type: StageType) => {
         const params = { ...DEFAULT_PARAMS[type] };
 
-        // For graph stage: set use_schema_mode based on promotion status
+        // Use centralized model settings for new stages
+        if (type === 'ann') {
+            // Check if user has a custom ingest_llm or if we should have a 'default_embedding' in settings
+            // For now, use DEFAULT_EMBEDDING_CONFIG or if we want to be more specific, 
+            // we could add ingest_embedding to useModelSettings. 
+            // But let's use the current settings for now.
+        }
         if (type === 'graph') {
             params.use_schema_mode = isOntologyPromoted ?? false;
+            params.llm_model = settings.graph_query_llm;
+        }
+        if (type === 'rerank') {
+            params.llm_model = settings.chat_llm; // or a dedicated rerank_llm if we add one
         }
 
         const newStage: PipelineStage = {
@@ -289,11 +337,22 @@ export default function PipelineBuilder({
         const stageInfo = [...SEARCH_STAGES, ...FILTER_STAGES].find(s => s.type === stage.type);
         const isSearch = SEARCH_STAGES.some(s => s.type === stage.type);
 
+        const usesLLM =
+            stage.type === 'graph' ||
+            (stage.type === 'rerank' && stage.params.use_llm);
+
+        const baseStyle = usesLLM ? cardStyleLLM : cardStyle;
+        const cardStyles: React.CSSProperties = {
+            ...baseStyle,
+            paddingBottom: stage.type === 'graph' ? 0 : '0.65rem',
+            width: 'fit-content',
+            minWidth: '180px',
+            flexShrink: 0,
+            ...(stage.type === 'graph' && { height: 'auto', minHeight: '160px' }),
+        };
+
         return (
-            <div key={index} style={{
-                ...cardStyle,
-                paddingBottom: stage.type === 'graph' ? '0.35rem' : '0.65rem'
-            }}>
+            <div key={index} style={cardStyles}>
                 {/* Header */}
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.15rem' }}>
@@ -446,7 +505,7 @@ export default function PipelineBuilder({
         switch (stage.type) {
             case 'ann':
                 return (
-                    <div style={{ display: 'flex', flexDirection: 'row', gap: '0.5rem', alignItems: 'flex-start' }}>
+                    <div style={{ display: 'flex', flexDirection: 'row', gap: '0.3rem', alignItems: 'flex-start' }}>
                         <ParamSlider
                             label="Top K"
                             value={params.top_k}
@@ -479,24 +538,26 @@ export default function PipelineBuilder({
 
             case 'bm25':
                 return (
-                    <div style={{ display: 'flex', flexDirection: 'row', gap: '0.5rem', alignItems: 'flex-start' }}>
+                    <div style={{ display: 'flex', flexDirection: 'row', gap: '0.3rem', alignItems: 'flex-start' }}>
                         <ParamSlider
                             label="Top K"
                             value={params.top_k}
                             min={1} max={100}
                             onChange={(v) => handleParamChange(index, 'top_k', v)}
                         />
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', paddingTop: '0.25rem' }}>
-                            <ParamSelect
-                                label="Tokenizer"
-                                minWidth="80px"
-                                value={params.tokenizer || 'kiwi'}
-                                options={[
-                                    { value: 'kiwi', label: 'Kiwi' },
-                                    { value: 'spacy', label: 'spaCy' }
-                                ]}
-                                onChange={(v) => handleParamChange(index, 'tokenizer', v)}
-                            />
+                            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '0.3rem', paddingTop: '0.25rem', minWidth: 0 }}>
+                            <div style={{ display: 'flex', alignItems: 'center' }}>
+                                <ParamSelect
+                                    label="Tokenizer"
+                                    minWidth="80px"
+                                    value={params.tokenizer || 'kiwi'}
+                                    options={[
+                                        { value: 'kiwi', label: 'Kiwi' },
+                                        { value: 'spacy', label: 'spaCy' }
+                                    ]}
+                                    onChange={(v) => handleParamChange(index, 'tokenizer', v)}
+                                />
+                            </div>
                             <ParamCheckbox
                                 label="Multi-POS"
                                 checked={params.use_multi_pos}
@@ -508,7 +569,7 @@ export default function PipelineBuilder({
 
             case 'brute_force':
                 return (
-                    <div style={{ display: 'flex', flexDirection: 'row', gap: '0.5rem', alignItems: 'flex-start' }}>
+                    <div style={{ display: 'flex', flexDirection: 'row', gap: '0.3rem', alignItems: 'flex-start' }}>
                         <ParamSlider
                             label="Top K"
                             value={params.top_k}
@@ -528,210 +589,185 @@ export default function PipelineBuilder({
                 const isAutoHops = params.is_auto_hops ?? true;
                 const showLatencyWarning = !isAutoHops && params.hops >= 4;
                 return (
-                    <div style={{ display: 'flex', flexDirection: 'row', gap: '0.5rem', alignItems: 'flex-start' }}>
-                        {/* Sliders Block */}
-                        <div style={{ display: 'flex', flexDirection: 'column', minWidth: '85px' }}>
-                            <div style={{ display: 'flex', flexDirection: 'row', gap: '0.5rem' }}>
-                                <ParamSlider
-                                    label="Hops"
-                                    value={isAutoHops ? 2 : params.hops}
-                                    min={1} max={5}
-                                    onChange={(v) => handleParamChange(index, 'hops', v)}
-                                    disabled={isAutoHops}
-                                />
-                                <ParamSlider
-                                    label="Top K"
-                                    value={params.top_k || 10}
-                                    min={1} max={50}
-                                    onChange={(v) => handleParamChange(index, 'top_k', v)}
-                                />
-                            </div>
-                            {showLatencyWarning && (
-                                <div style={{
-                                    color: '#c2410c',
-                                    fontSize: '0.65rem',
-                                    marginTop: '-16px',
-                                    paddingLeft: '4px',
-                                    whiteSpace: 'nowrap',
-                                    display: 'flex',
-                                    gap: '3px',
-                                    alignItems: 'center'
-                                }}>
-                                    <span style={{ flexShrink: 0 }}>⚠️</span>
-                                    <span>High latency</span>
+                    <>
+                        <div style={{ display: 'flex', flexDirection: 'row', gap: '0.3rem', alignItems: 'flex-start' }}>
+                            {/* 슬라이더: 왼쪽 고정 */}
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', flexShrink: 0 }}>
+                                <div style={{ display: 'flex', flexDirection: 'row', gap: '0.3rem' }}>
+                                    <ParamSlider
+                                        label="Hops"
+                                        value={isAutoHops ? 2 : params.hops}
+                                        min={1} max={5}
+                                        onChange={(v) => handleParamChange(index, 'hops', v)}
+                                        disabled={isAutoHops}
+                                    />
+                                    <ParamSlider
+                                        label="Top K"
+                                        value={params.top_k || 10}
+                                        min={1} max={50}
+                                        onChange={(v) => handleParamChange(index, 'top_k', v)}
+                                    />
                                 </div>
-                            )}
-                        </div>
-
-                        {/* Config Column (Checkboxes) */}
-                        <div style={{
-                            display: 'flex',
-                            flexDirection: 'column',
-                            gap: '0.4rem',
-                            paddingTop: '0.4rem',
-                            minWidth: '100px'
-                        }}>
-                            <ParamCheckbox
-                                label="Auto Hops"
-                                checked={isAutoHops}
-                                onChange={(v) => handleParamChange(index, 'is_auto_hops', v)}
-                            />
-                            <ParamCheckbox
-                                label="Rel Filter"
-                                checked={params.use_relation_filter}
-                                onChange={(v) => handleParamChange(index, 'use_relation_filter', v)}
-                                disabled={!!params.use_schema_mode}
-                            />
-                            <div style={{ marginLeft: '3px' }}>
-                                <ParamSelect
-                                    label="Inverse Search"
-                                    minWidth="80px"
-                                    disabled={!!params.use_schema_mode}
-                                    value={!params.enable_inverse ? 'none' : (params.inverse_mode || 'always')}
-                                    options={[
-                                        { value: 'none', label: 'None' },
-                                        { value: 'auto', label: 'Auto' },
-                                        { value: 'always', label: 'Always' }
-                                    ]}
-                                    onChange={(v) => {
-                                        const newStages = [...stages];
-                                        newStages[index] = {
-                                            ...newStages[index],
-                                            params: {
-                                                ...newStages[index].params,
-                                                enable_inverse: v !== 'none',
-                                                inverse_mode: v === 'none' ? (params.inverse_mode || 'always') : v
-                                            }
-                                        };
-                                        setStages(newStages);
-                                    }}
-                                />
+                                {showLatencyWarning && (
+                                    <div style={{
+                                        color: '#c2410c',
+                                        fontSize: '0.65rem',
+                                        marginTop: '-16px',
+                                        paddingLeft: '4px',
+                                        whiteSpace: 'nowrap',
+                                        display: 'flex',
+                                        gap: '3px',
+                                        alignItems: 'center'
+                                    }}>
+                                        <span style={{ flexShrink: 0 }}>⚠️</span>
+                                        <span>High latency</span>
+                                    </div>
+                                )}
+                            </div>
+                            {/* 슬라이더 옆: 2x2 체크박스 → Inverse Search → QueryLLM */}
+                            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '0.3rem', paddingBottom: 0, minWidth: 0 }}>
+                                {/* 1행: Auto Hops | Entity Expand */}
+                                <div style={{ display: 'flex', flexDirection: 'row', gap: '0.3rem', alignItems: 'center' }}>
+                                    <ParamCheckbox label="Auto Hops" checked={isAutoHops} onChange={(v) => handleParamChange(index, 'is_auto_hops', v)} />
+                                    <ParamCheckbox
+                                        label="Entity Expand"
+                                        checked={!!params.enable_entity_expansion}
+                                        onChange={(v) => handleParamChange(index, 'enable_entity_expansion', v)}
+                                        disabled={!!params.use_schema_mode}
+                                    />
+                                </div>
+                                {/* 2행: Rel Filter | Dynamic Schema */}
+                                <div style={{ display: 'flex', flexDirection: 'row', gap: '0.3rem', alignItems: 'center' }}>
+                                    <ParamCheckbox
+                                        label="Rel Filter"
+                                        checked={params.use_relation_filter}
+                                        onChange={(v) => handleParamChange(index, 'use_relation_filter', v)}
+                                        disabled={!!params.use_schema_mode}
+                                    />
+                                    {!isOntologyPromoted ? (
+                                        <ParamCheckbox
+                                            label="Dynamic Schema"
+                                            checked={params.use_dynamic_schema ?? false}
+                                            onChange={(v) => handleParamChange(index, 'use_dynamic_schema', v)}
+                                        />
+                                    ) : (
+                                        <div />
+                                    )}
+                                </div>
+                                {/* 3행: Inverse Search */}
+                                <div style={{ display: 'flex', alignItems: 'center' }}>
+                                    <ParamSelect
+                                        label="Inverse Search"
+                                        layout="inline"
+                                        minWidth="80px"
+                                        disabled={!!params.use_schema_mode}
+                                        value={!params.enable_inverse ? 'none' : (params.inverse_mode || 'always')}
+                                        options={[
+                                            { value: 'none', label: 'None' },
+                                            { value: 'auto', label: 'Auto' },
+                                            { value: 'always', label: 'Always' }
+                                        ]}
+                                        onChange={(v) => {
+                                            const newStages = [...stages];
+                                            newStages[index] = {
+                                                ...newStages[index],
+                                                params: {
+                                                    ...newStages[index].params,
+                                                    enable_inverse: v !== 'none',
+                                                    inverse_mode: v === 'none' ? (params.inverse_mode || 'always') : v
+                                                }
+                                            };
+                                            setStages(newStages);
+                                        }}
+                                    />
+                                </div>
+                                {/* 4행: Model (Graph는 기본 LLM) */}
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', flexWrap: 'wrap' }}>
+                                    <span style={{ fontSize: '0.7rem', color: '#475569', flexShrink: 0 }}>Model</span>
+                                    <ModelSelector
+                                        type="llm"
+                                        value={params.llm_model || DEFAULT_LLM_CONFIG}
+                                        onChange={(cfg) => handleParamChange(index, 'llm_model', cfg)}
+                                        onEditPrompt={() => openGraphPromptEditor(index)}
+                                    />
+                                </div>
                             </div>
                         </div>
-
-                        {/* Actions Column */}
-                        <div style={{
-                            paddingTop: '0.4rem',
-                            marginLeft: '0.4rem',
-                            display: 'flex',
-                            flexDirection: 'column',
-                            justifyContent: 'flex-start',
-                            gap: '0.4rem'
-                        }}>
-                            {/* Entity Expansion Checkbox */}
-                            <label style={{
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '0.3rem',
-                                fontSize: '0.7rem',
-                                color: params.use_schema_mode ? '#94a3b8' : '#475569',
-                                cursor: params.use_schema_mode ? 'not-allowed' : 'pointer',
-                                opacity: params.use_schema_mode ? 0.7 : 1
-                            }}>
-                                <input
-                                    type="checkbox"
-                                    checked={!!params.enable_entity_expansion}
-                                    disabled={!!params.use_schema_mode}
-                                    onChange={(e) => handleParamChange(index, 'enable_entity_expansion', e.target.checked)}
-                                    style={{
-                                        width: '14px',
-                                        height: '14px',
-                                        cursor: params.use_schema_mode ? 'not-allowed' : 'pointer'
-                                    }}
-                                />
-                                Entity Expand
-                            </label>
-
-                            {/* Query Prompt Button REMOVED */}
-
-                            {/* Dynamic Schema - only show when NOT promoted */}
-                            {!isOntologyPromoted && (
-                                <ParamCheckbox
-                                    label="Dynamic Schema"
-                                    checked={params.use_dynamic_schema ?? false}
-                                    onChange={(v) => handleParamChange(index, 'use_dynamic_schema', v)}
-                                />
-                            )}
-                        </div>
-                    </div>
+                    </>
                 );
 
-            case 'rerank':
+            case 'rerank': {
+                const llmMode: string = params.use_llm
+                    ? (params.llm_strategy || 'full')
+                    : 'none';
                 return (
-                    <div style={{ display: 'flex', flexDirection: 'row', gap: '0.5rem', alignItems: 'flex-start' }}>
-                        <ParamSlider
-                            label="Top K"
-                            value={params.top_k}
-                            min={1} max={20}
-                            onChange={(v) => handleParamChange(index, 'top_k', v)}
-                        />
-                        <ParamSlider
-                            label="Threshold"
-                            value={params.threshold}
-                            min={0} max={1} step={0.05}
-                            onChange={(v) => handleParamChange(index, 'threshold', v)}
-                        />
-                        <div style={{
-                            paddingTop: '0.5rem',
-                            paddingLeft: '0.5rem',
-                            display: 'flex',
-                            flexDirection: 'column',
-                            alignItems: 'flex-start',
-                            gap: '0.75rem'
-                        }}>
-                            <ParamCheckbox
-                                label="Use LLM"
-                                checked={params.use_llm}
-                                onChange={(v) => handleParamChange(index, 'use_llm', v)}
+                    <>
+                        <div style={{ display: 'flex', flexDirection: 'row', gap: '0.3rem', alignItems: 'flex-start' }}>
+                            <ParamSlider
+                                label="Top K"
+                                value={params.top_k}
+                                min={1} max={20}
+                                onChange={(v) => handleParamChange(index, 'top_k', v)}
                             />
-                            <div style={{ marginLeft: '0.3rem' }}>
-                                <ParamSelect
-                                    label="LLM Strategy"
-                                    minWidth="80px"
-                                    value={params.llm_strategy || 'full'}
-                                    options={[
-                                        { value: 'full', label: 'Full' },
-                                        { value: 'limited', label: 'Limited' }
-                                    ]}
-                                    onChange={(v) => handleParamChange(index, 'llm_strategy', v)}
-                                    disabled={!params.use_llm}
-                                />
+                            <ParamSlider
+                                label="Threshold"
+                                value={params.threshold}
+                                min={0} max={1} step={0.05}
+                                onChange={(v) => handleParamChange(index, 'threshold', v)}
+                            />
+                            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '0.3rem', paddingTop: '0.5rem', paddingLeft: '0.5rem', minWidth: 0 }}>
+                                <div style={{ display: 'flex', alignItems: 'center' }}>
+                                    <ParamSelect
+                                        label="LLM"
+                                        minWidth="80px"
+                                        value={llmMode}
+                                        options={[
+                                            { value: 'none', label: 'None' },
+                                            { value: 'full', label: 'Full' },
+                                            { value: 'limited', label: 'Limited' },
+                                        ]}
+                                        onChange={(v) => {
+                                            const newStages = [...stages];
+                                            newStages[index] = {
+                                                ...newStages[index],
+                                                params: {
+                                                    ...newStages[index].params,
+                                                    use_llm: v !== 'none',
+                                                    llm_strategy: v !== 'none' ? v : newStages[index].params.llm_strategy,
+                                                }
+                                            };
+                                            setStages(newStages);
+                                        }}
+                                    />
+                                </div>
+                                {/* Model Selector: LLM 드롭박스 바로 아래 */}
+                                {params.use_llm && (
+                                    <div style={{ display: 'flex', alignItems: 'center' }}>
+                                        <ModelSelector
+                                            type="llm"
+                                            value={params.llm_model || DEFAULT_LLM_CONFIG}
+                                            onChange={(cfg) => handleParamChange(index, 'llm_model', cfg)}
+                                            onEditPrompt={() => { setEditingPromptStage(-1); setTempPrompt(''); setPromptError(''); loadGlobalRerankPrompt(); }}
+                                        />
+                                    </div>
+                                )}
                             </div>
-                            {params.use_llm && (
-                                <button
-                                    onClick={() => {
-                                        setEditingPromptStage(-1); // -1 means global rerank prompt
-                                        loadGlobalRerankPrompt();
-                                    }}
-                                    style={{
-                                        marginTop: '0.5rem',
-                                        fontSize: '0.75rem',
-                                        padding: '0.3rem 0.6rem',
-                                        backgroundColor: '#f1f5f9',
-                                        color: '#475569',
-                                        border: '1px solid #e2e8f0',
-                                        borderRadius: '4px',
-                                        cursor: 'pointer'
-                                    }}
-                                >
-                                    Edit Prompt
-                                </button>
-                            )}
                         </div>
-                    </div>
+                    </>
                 );
+            }
 
             case 'ner_filter':
                 const isRegex = !params.tokenizer || params.tokenizer === 'regex';
                 return (
-                    <div style={{ display: 'flex', flexDirection: 'row', gap: '0.5rem', alignItems: 'flex-start' }}>
+                    <div style={{ display: 'flex', flexDirection: 'row', gap: '0.3rem', alignItems: 'flex-start' }}>
                         <ParamSlider
                             label="Penalty"
                             value={params.penalty}
                             min={0} max={1} step={0.05}
                             onChange={(v) => handleParamChange(index, 'penalty', v)}
                         />
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', paddingTop: '0.25rem', minWidth: '90px' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', paddingTop: '0.25rem', minWidth: '90px' }}>
                             <ParamSelect
                                 label="Engine"
                                 minWidth="90px"
@@ -763,6 +799,7 @@ export default function PipelineBuilder({
                 return null;
         }
     };
+
 
     return (
         <div className="card" style={{
@@ -948,13 +985,17 @@ export default function PipelineBuilder({
                         flexDirection: 'column',
                         boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)'
                     }}>
-                        <h3 style={{ marginTop: 0, marginBottom: '1rem', fontSize: '1.1rem', fontWeight: 600 }}>
-                            {editingPromptStage === -1 ? 'Edit Global Rerank Prompt' : 'Edit Stage Custom Prompt'}
+                        <h3 style={{ marginTop: 0, marginBottom: '0.4rem', fontSize: '1.1rem', fontWeight: 600 }}>
+                            {editingPromptStage === -1
+                                ? 'LLM Rerank Prompt'
+                                : (graphBackend === 'neo4j' ? 'Cypher Query Generation Prompt' : 'SPARQL Query Generation Prompt')}
                         </h3>
                         <p style={{ fontSize: '0.8rem', color: '#64748b', marginBottom: '0.75rem' }}>
                             {editingPromptStage === -1
-                                ? "Use {query} and {chunk_content} as placeholders."
-                                : "Add custom instructions for this search stage."}
+                                ? "System prompt for LLM-based reranking. Use {query} and {chunk_content} as placeholders."
+                                : graphBackend === 'neo4j'
+                                    ? "System prompt used by the LLM to generate Cypher queries for Neo4j graph search."
+                                    : "System prompt used by the LLM to generate SPARQL queries for ontology graph search."}
                         </p>
                         {promptError && (
                             <div style={{ color: '#ef4444', fontSize: '0.85rem', marginBottom: '0.5rem' }}>
@@ -1137,7 +1178,8 @@ function ParamCheckbox({
             fontSize: '0.8rem',
             cursor: disabled ? 'not-allowed' : 'pointer',
             color: '#475569',
-            opacity: disabled ? 0.6 : 1
+            opacity: disabled ? 0.6 : 1,
+            whiteSpace: 'nowrap'
         }}>
             <input
                 type="checkbox"
@@ -1156,7 +1198,8 @@ function ParamSelect({
     options,
     onChange,
     disabled,
-    minWidth = '130px'
+    minWidth = '130px',
+    layout = 'vertical'
 }: {
     label: string;
     value: string;
@@ -1164,6 +1207,8 @@ function ParamSelect({
     onChange: (v: string) => void;
     disabled?: boolean;
     minWidth?: string;
+    /** 'vertical' = label above dropdown, 'inline' = label left of dropdown */
+    layout?: 'vertical' | 'inline';
 }) {
     const [isOpen, setIsOpen] = React.useState(false);
     const containerRef = React.useRef<HTMLDivElement>(null);
@@ -1225,16 +1270,17 @@ function ParamSelect({
                 opacity: disabled ? 0.6 : 1
             }}
         >
-            {/* Label as Trigger Area */}
+            {/* Label + dropdown: vertical (label top) or inline (label left) */}
             <div
                 onClick={() => !disabled && setIsOpen(!isOpen)}
                 style={{
                     display: 'flex',
-                    flexDirection: 'column',
-                    gap: '2px'
+                    flexDirection: layout === 'inline' ? 'row' : 'column',
+                    alignItems: layout === 'inline' ? 'center' : 'stretch',
+                    gap: layout === 'inline' ? '0.4rem' : '2px'
                 }}
             >
-                <div style={{ fontSize: '0.7rem', color: '#64748b', fontWeight: 500 }}>{label}</div>
+                <div style={{ fontSize: '0.7rem', color: '#64748b', fontWeight: 500, flexShrink: 0 }}>{label}</div>
                 <div style={{
                     fontSize: '0.8rem',
                     color: '#1e293b',
@@ -1247,7 +1293,8 @@ function ParamSelect({
                     justifyContent: 'space-between',
                     alignItems: 'center',
                     boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
-                    transition: 'all 0.2s'
+                    transition: 'all 0.2s',
+                    minWidth: layout === 'inline' ? minWidth : undefined
                 }}>
                     <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {selectedOption.label}

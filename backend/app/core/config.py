@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     # OpenAI
     OPENAI_API_KEY: str = ""
 
+    # Encryption (for custom provider API keys)
+    # Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    ENCRYPTION_KEY: str = ""
+
     # Ingest Service (LlamaIndex based)
     INGEST_SERVICE_URL: str = "http://ingest-service:8001"
     # Shared storage for file exchange

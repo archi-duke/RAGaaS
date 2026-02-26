@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Send, Loader2, RotateCcw } from 'lucide-react';
 import { retrievalApi } from '../services/api';
+import { useModelSettings } from '../hooks/useModelSettings';
 
 interface Message {
     role: 'user' | 'assistant';
@@ -88,6 +89,7 @@ export default function ChatInterface({
     const [messages, setMessages] = useState<Message[]>([]);
     const [input, setInput] = useState('');
     const [isLoading, setIsLoading] = useState(false);
+    const { settings } = useModelSettings();
     const messagesEndRef = useRef<HTMLDivElement>(null);
 
     const scrollToBottom = () => {
@@ -210,6 +212,9 @@ export default function ChatInterface({
                 use_dynamic_schema: useDynamicSchema,
                 use_raw_log: useRawLog,
                 custom_query_prompt: customQueryPrompt, // Pass to API
+                // Model configurations
+                model_config: settings.chat_llm,
+                model_config_keyword: settings.keyword_llm,
                 // Pipeline Configuration (if set, backend will use pipeline executor)
                 pipeline: pipeline && pipeline.stages.length > 0 ? pipeline : undefined
             });

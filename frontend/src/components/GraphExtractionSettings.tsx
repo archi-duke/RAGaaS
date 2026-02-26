@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Database } from 'lucide-react';
+import ModelSelector, { DEFAULT_LLM_CONFIG, type ModelConfig } from './ModelSelector';
 
 interface GraphParams {
     extractor_type: 'simple' | 'dynamic' | 'schema';
@@ -27,8 +28,13 @@ interface GraphExtractionSettingsProps {
     onParamsChange: (params: GraphParams) => void;
     onManageExamples: () => void;
     onEditPrompt: () => void;
-    showEntitySample?: boolean; // Show Entity Sample slider (for upload mode)
-    showExtractorType?: boolean; // Show Extractor Type selector (for chunk detail mode)
+    showEntitySample?: boolean;
+    showExtractorType?: boolean;
+    // LLM model configs (from central settings)
+    subjectRestorationLlm?: ModelConfig;
+    nounExtractionLlm?: ModelConfig;
+    onSubjectRestorationLlmChange?: (cfg: ModelConfig) => void;
+    onNounExtractionLlmChange?: (cfg: ModelConfig) => void;
 }
 
 const LabelWithTooltip = ({ label, tooltip }: { label: string, tooltip: string }) => {
@@ -42,42 +48,21 @@ const LabelWithTooltip = ({ label, tooltip }: { label: string, tooltip: string }
                 onMouseLeave={() => setShow(false)}
             >
                 <div style={{
-                    width: '14px',
-                    height: '14px',
-                    borderRadius: '50%',
-                    border: '1px solid #94a3b8',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontSize: '9px',
-                    color: '#94a3b8',
-                    fontWeight: 'bold',
-                    flexShrink: 0,
-                    lineHeight: 1
+                    width: '14px', height: '14px', borderRadius: '50%', border: '1px solid #94a3b8',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    fontSize: '9px', color: '#94a3b8', fontWeight: 'bold', flexShrink: 0, lineHeight: 1
                 }}>i</div>
                 {show && (
                     <div style={{
-                        position: 'absolute',
-                        bottom: '120%',
-                        left: '0',
-                        backgroundColor: '#333',
-                        color: '#fff',
-                        padding: '0.5rem 0.75rem',
-                        borderRadius: '4px',
-                        fontSize: '0.75rem',
-                        whiteSpace: 'normal',
-                        width: '200px',
-                        zIndex: 100,
-                        boxShadow: '0 2px 8px rgba(0,0,0,0.2)',
-                        pointerEvents: 'none'
+                        position: 'absolute', bottom: '120%', left: '0',
+                        backgroundColor: '#333', color: '#fff', padding: '0.5rem 0.75rem',
+                        borderRadius: '4px', fontSize: '0.75rem', whiteSpace: 'normal',
+                        width: '200px', zIndex: 100, boxShadow: '0 2px 8px rgba(0,0,0,0.2)', pointerEvents: 'none'
                     }}>
                         {tooltip}
                         <div style={{
-                            position: 'absolute',
-                            top: '100%',
-                            left: '10px',
-                            borderWidth: '5px',
-                            borderStyle: 'solid',
+                            position: 'absolute', top: '100%', left: '10px',
+                            borderWidth: '5px', borderStyle: 'solid',
                             borderColor: '#333 transparent transparent transparent'
                         }}></div>
                     </div>
@@ -93,7 +78,11 @@ export default function GraphExtractionSettings({
     onManageExamples,
     onEditPrompt,
     showEntitySample = true,
-    showExtractorType = false
+    showExtractorType = false,
+    subjectRestorationLlm = DEFAULT_LLM_CONFIG,
+    nounExtractionLlm = DEFAULT_LLM_CONFIG,
+    onSubjectRestorationLlmChange,
+    onNounExtractionLlmChange,
 }: GraphExtractionSettingsProps) {
     const [isMaxPathsUnlimited, setIsMaxPathsUnlimited] = useState(graphParams.max_paths_per_chunk >= 1000);
 
@@ -102,7 +91,7 @@ export default function GraphExtractionSettings({
     };
 
     return (
-        <div style={{ marginBottom: '1.5rem', background: '#eff6ff', padding: '1.25rem', borderRadius: '12px', border: '1px solid #bfdbfe' }}>
+        <div style={{ marginBottom: '1.5rem', background: '#eff6ff', padding: '15px', borderRadius: '12px', border: '1px solid #bfdbfe' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1.25rem', color: '#3b82f6', fontWeight: 600 }}>
                 <Database size={18} />
                 <span>Graph Extraction Settings (LlamaIndex)</span>
@@ -112,7 +101,7 @@ export default function GraphExtractionSettings({
                 {/* Configuration Column */}
                 <div>
                     <h4 style={{ margin: '0 0 1rem 0', fontSize: '0.9rem', color: '#475569' }}>Configuration</h4>
-                    
+
                     {showExtractorType && (
                         <div style={{ marginBottom: '1rem' }}>
                             <LabelWithTooltip label="Extractor Type" tooltip="Select LlamaIndex extractor type" />
@@ -128,17 +117,17 @@ export default function GraphExtractionSettings({
                             </select>
                         </div>
                     )}
-                    
+
                     {showEntitySample && graphParams.max_sample_size !== undefined && (
                         <div style={{ marginBottom: '1rem' }}>
-                            <LabelWithTooltip 
-                                label={`Entity Sample: ${graphParams.max_sample_size / 1000}k`} 
-                                tooltip="Text sample size for entity dictionary building" 
+                            <LabelWithTooltip
+                                label={`Entity Sample: ${graphParams.max_sample_size / 1000}k`}
+                                tooltip="Text sample size for entity dictionary building"
                             />
                             <input
-                                type="range" 
-                                min="10000" 
-                                max="100000" 
+                                type="range"
+                                min="10000"
+                                max="100000"
                                 step="10000"
                                 value={graphParams.max_sample_size}
                                 onChange={(e) => updateParams({ max_sample_size: parseInt(e.target.value) })}
@@ -146,8 +135,7 @@ export default function GraphExtractionSettings({
                             />
                         </div>
                     )}
-                    
-                    {/* Show Max Paths for simple extractor or when not showing extractor type */}
+
                     {(!showExtractorType || graphParams.extractor_type === 'simple') && (
                         <div style={{ marginBottom: '1rem' }}>
                             <div style={{ marginBottom: '0.3rem' }}>
@@ -172,9 +160,9 @@ export default function GraphExtractionSettings({
                                 )}
                             </div>
                             <input
-                                type="range" 
-                                min="5" 
-                                max="50" 
+                                type="range"
+                                min="5"
+                                max="50"
                                 step="5"
                                 disabled={!showExtractorType && isMaxPathsUnlimited}
                                 value={(!showExtractorType && isMaxPathsUnlimited) ? 50 : graphParams.max_paths_per_chunk}
@@ -188,18 +176,17 @@ export default function GraphExtractionSettings({
                             />
                         </div>
                     )}
-                    
-                    {/* Show Max Triplets for dynamic extractor */}
+
                     {showExtractorType && graphParams.extractor_type === 'dynamic' && graphParams.max_triplets_per_chunk !== undefined && (
                         <div style={{ marginBottom: '1rem' }}>
-                            <LabelWithTooltip 
-                                label={`Max Triplets: ${graphParams.max_triplets_per_chunk}`} 
-                                tooltip="Max triples per chunk" 
+                            <LabelWithTooltip
+                                label={`Max Triplets: ${graphParams.max_triplets_per_chunk}`}
+                                tooltip="Max triples per chunk"
                             />
                             <input
-                                type="range" 
-                                min="10" 
-                                max="100" 
+                                type="range"
+                                min="10"
+                                max="100"
                                 step="10"
                                 value={graphParams.max_triplets_per_chunk}
                                 onChange={(e) => updateParams({ max_triplets_per_chunk: parseInt(e.target.value) })}
@@ -207,16 +194,16 @@ export default function GraphExtractionSettings({
                             />
                         </div>
                     )}
-                    
+
                     <div>
-                        <LabelWithTooltip 
-                            label={`Workers: ${graphParams.num_workers}`} 
-                            tooltip="Number of parallel workers" 
+                        <LabelWithTooltip
+                            label={`Workers: ${graphParams.num_workers}`}
+                            tooltip="Number of parallel workers"
                         />
                         <input
-                            type="range" 
-                            min="1" 
-                            max="8" 
+                            type="range"
+                            min="1"
+                            max="8"
                             step="1"
                             value={graphParams.num_workers}
                             onChange={(e) => updateParams({ num_workers: parseInt(e.target.value) })}
@@ -228,7 +215,8 @@ export default function GraphExtractionSettings({
                 {/* Options Column */}
                 <div>
                     <h4 style={{ margin: '0 0 1rem 0', fontSize: '0.9rem', color: '#475569' }}>Options</h4>
-                    
+
+                    {/* Clean Text */}
                     <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', marginBottom: '1rem' }}>
                         <input
                             type="checkbox"
@@ -241,25 +229,62 @@ export default function GraphExtractionSettings({
                             <div style={{ fontSize: '0.75rem', color: '#64748b' }}>Remove bullets, numbers</div>
                         </div>
                     </label>
-                    
-                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', marginBottom: '1rem' }}>
-                        <input
-                            type="checkbox"
-                            checked={graphParams.enable_subject_restoration}
-                            onChange={(e) => updateParams({ enable_subject_restoration: e.target.checked })}
-                            style={{ width: '1.1rem', height: '1.1rem', accentColor: '#3b82f6', flexShrink: 0 }}
-                        />
-                        <div>
-                            <span style={{ color: '#334155', fontWeight: 500, fontSize: '0.9rem' }}>Subject Restoration</span>
-                            <div style={{ fontSize: '0.75rem', color: '#64748b' }}>Resolve omitted subjects (KR)</div>
-                        </div>
-                    </label>
+
+                    {/* Subject Restoration + LLM selector */}
+                    <div style={{ marginBottom: '1rem' }}>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', marginBottom: '0.4rem' }}>
+                            <input
+                                type="checkbox"
+                                checked={graphParams.enable_subject_restoration}
+                                onChange={(e) => updateParams({ enable_subject_restoration: e.target.checked })}
+                                style={{ width: '1.1rem', height: '1.1rem', accentColor: '#3b82f6', flexShrink: 0 }}
+                            />
+                            <div>
+                                <span style={{ color: '#334155', fontWeight: 500, fontSize: '0.9rem' }}>Subject Restoration</span>
+                                <div style={{ fontSize: '0.75rem', color: '#64748b' }}>Resolve omitted subjects (KR)</div>
+                            </div>
+                        </label>
+                        {graphParams.enable_subject_restoration && onSubjectRestorationLlmChange && (
+                            <div style={{ marginLeft: '1.6rem' }}>
+                                <ModelSelector
+                                    type="llm"
+                                    value={subjectRestorationLlm}
+                                    onChange={onSubjectRestorationLlmChange}
+                                />
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Noun Extraction + LLM selector */}
+                    <div style={{ marginBottom: '1rem' }}>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', marginBottom: '0.4rem' }}>
+                            <input
+                                type="checkbox"
+                                checked={graphParams.enable_inference}
+                                onChange={(e) => updateParams({ enable_inference: e.target.checked })}
+                                style={{ width: '1.1rem', height: '1.1rem', accentColor: '#3b82f6', flexShrink: 0 }}
+                            />
+                            <div>
+                                <span style={{ color: '#334155', fontWeight: 500, fontSize: '0.9rem' }}>Noun Extraction</span>
+                                <div style={{ fontSize: '0.75rem', color: '#64748b' }}>Extract named entities</div>
+                            </div>
+                        </label>
+                        {graphParams.enable_inference && onNounExtractionLlmChange && (
+                            <div style={{ marginLeft: '1.6rem' }}>
+                                <ModelSelector
+                                    type="llm"
+                                    value={nounExtractionLlm}
+                                    onChange={onNounExtractionLlmChange}
+                                />
+                            </div>
+                        )}
+                    </div>
                 </div>
 
                 {/* Customization Column */}
                 <div>
                     <h4 style={{ margin: '0 0 1rem 0', fontSize: '0.9rem', color: '#475569' }}>Customization</h4>
-                    
+
                     <button
                         className="btn"
                         style={{ width: '100%', marginBottom: '0.75rem', justifyContent: 'center', background: '#fff', border: '1px solid #cbd5e1' }}
@@ -267,7 +292,7 @@ export default function GraphExtractionSettings({
                     >
                         Manage Examples
                     </button>
-                    
+
                     <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'default', marginBottom: '1.25rem', justifyContent: 'center' }}>
                         <input
                             type="checkbox"
@@ -277,7 +302,7 @@ export default function GraphExtractionSettings({
                         />
                         <span style={{ fontSize: '0.75rem', color: '#64748b' }}>Examples Added</span>
                     </label>
-                    
+
                     <button
                         className="btn"
                         style={{ width: '100%', marginBottom: '0.75rem', justifyContent: 'center', background: '#fff', border: '1px solid #cbd5e1' }}
@@ -285,7 +310,7 @@ export default function GraphExtractionSettings({
                     >
                         Edit Extraction Prompt
                     </button>
-                    
+
                     <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'default', justifyContent: 'center' }}>
                         <input
                             type="checkbox"

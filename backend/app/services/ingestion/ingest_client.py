@@ -36,6 +36,9 @@ class IngestServiceClient:
         callback_url: Optional[str] = None,
         entity_dictionary: Optional[Dict[str, Any]] = None,
         sampling_size: Optional[int] = None,
+        ingest_llm: Optional[Dict[str, Any]] = None,
+        chunk_grouping_llm: Optional[Dict[str, Any]] = None,
+        embedding_model: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """인제스션 작업 생성"""
         payload = {
@@ -56,6 +59,9 @@ class IngestServiceClient:
             "callback_url": callback_url,
             "entity_dictionary": entity_dictionary,
             "sampling_size": sampling_size,
+            "ingest_llm": ingest_llm,
+            "chunk_grouping_llm": chunk_grouping_llm,
+            "embedding_model": embedding_model,
         }
 
         
