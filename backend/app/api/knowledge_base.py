@@ -34,7 +34,11 @@ async def create_knowledge_base(kb: KnowledgeBaseCreate):
         chunking_config=kb.chunking_config,
         metric_type='COSINE',  # Always use COSINE
         enable_graph_rag=enable_graph,
-        graph_backend=kb.graph_backend
+        graph_backend=kb.graph_backend,
+        embedding_provider=kb.embedding_provider,
+        embedding_model=kb.embedding_model,
+        embedding_provider_id=kb.embedding_provider_id,
+        llm_model_config=kb.llm_model_config or {},
     )
     await db_kb.insert()
     

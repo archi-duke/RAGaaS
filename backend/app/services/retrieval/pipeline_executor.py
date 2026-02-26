@@ -40,7 +40,9 @@ class PipelineExecutor:
         query: str, 
         config: PipelineConfig,
         graph_backend: str = "ontology",
-        metric_type: str = "COSINE"
+        metric_type: str = "COSINE",
+        embedding_service=None,
+        llm_model_config: dict = None,
     ) -> ExecutionContext:
         """
         Execute all stages in the pipeline sequentially.
@@ -51,6 +53,8 @@ class PipelineExecutor:
             config: Pipeline configuration with stages
             graph_backend: Graph backend type (ontology/neo4j)
             metric_type: Vector metric type
+            embedding_service: EmbeddingService instance (KB 설정 기반)
+            llm_model_config: LLM 모델 설정 (그래프/리랭커 등에 사용)
             
         Returns:
             ExecutionContext with final results
@@ -61,6 +65,10 @@ class PipelineExecutor:
             graph_backend=graph_backend,
             metric_type=metric_type
         )
+        if embedding_service is not None:
+            ctx.metadata["embedding_service"] = embedding_service
+        if llm_model_config:
+            ctx.metadata["llm_model_config"] = llm_model_config
         
         log_msg = f"[Pipeline] Executing {len(config.stages)} stages for query: {query[:50]}..."
         print(log_msg)
@@ -106,7 +114,8 @@ class PipelineExecutor:
         using vector similarity. Otherwise, run a fresh ANN search.
         """
         from app.services.retrieval import retrieval_factory
-        from app.services.embedding import embedding_service
+        from app.services.embedding import embedding_service as default_embedding_service
+        emb_service = ctx.metadata.get("embedding_service", default_embedding_service)
         import numpy as np
         
         top_k = params.get("top_k", 10)
@@ -120,12 +129,12 @@ class PipelineExecutor:
             ctx.logs.append(f"[ANN] Rescore mode: rescoring {len(ctx.results)} candidates from previous stage")
             
             # Embed query
-            query_embedding = (await embedding_service.get_embeddings([ctx.query]))[0]
+            query_embedding = (await emb_service.get_embeddings([ctx.query]))[0]
             query_vec = np.array(query_embedding)
             
             # Embed all candidate contents
             candidate_contents = [r.get('content', '') for r in ctx.results]
-            candidate_embeddings = await embedding_service.get_embeddings(candidate_contents)
+            candidate_embeddings = await emb_service.get_embeddings(candidate_contents)
             
             # Compute similarity scores and update
             rescored_results = []
@@ -208,7 +217,8 @@ class PipelineExecutor:
     async def _execute_brute_force(self, ctx: ExecutionContext, params: dict) -> ExecutionContext:
         """Execute brute-force L2 re-ranking"""
         import numpy as np
-        from app.services.embedding import embedding_service
+        from app.services.embedding import embedding_service as default_embedding_service
+        emb_service = ctx.metadata.get("embedding_service", default_embedding_service)
         
         top_k = params.get("top_k", 3)
         threshold = params.get("threshold", 1.5)
@@ -217,11 +227,11 @@ class PipelineExecutor:
             return ctx
         
         # Embed query
-        query_embedding = (await embedding_service.get_embeddings([ctx.query]))[0]
+        query_embedding = (await emb_service.get_embeddings([ctx.query]))[0]
         
         # Embed candidates
         candidate_contents = [r.get('content', '') for r in ctx.results]
-        candidate_embeddings = await embedding_service.get_embeddings(candidate_contents)
+        candidate_embeddings = await emb_service.get_embeddings(candidate_contents)
         
         # Compute L2 distance and filter
         reranked = []

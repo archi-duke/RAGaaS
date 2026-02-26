@@ -1,4 +1,4 @@
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from .base import RetrievalStrategy
 from .graph_backends import GraphBackendFactory
 from app.core.fuseki import fuseki_client
@@ -9,7 +9,7 @@ import json
 import logging
 import re
 import urllib.parse
-from app.services.embedding import embedding_service
+from app.services.embedding import embedding_service as default_embedding_service
 import numpy as np
 
 logger = logging.getLogger(__name__)
@@ -18,11 +18,27 @@ class GraphRetrievalStrategy(RetrievalStrategy):
     def __init__(self):
         self.namespace_entity = "http://rag.local/entity/"
         self.namespace_relation = "http://rag.local/relation/"
-        self.client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
 
     async def search(self, kb_id: str, query: str, top_k: int, **kwargs) -> List[Dict[str, Any]]:
         use_raw_log = kwargs.get("use_raw_log", False)
         trace_logs = []
+
+        # LLM / Embedding 동적 설정
+        llm_model_config = kwargs.get("llm_model_config") or {}
+        emb_service = kwargs.get("embedding_service", default_embedding_service)
+
+        if llm_model_config:
+            from app.core.models_resolver import resolve_model_config
+            resolved_llm = await resolve_model_config(llm_model_config)
+            llm_client = AsyncOpenAI(
+                api_key=resolved_llm.get("api_key") or settings.OPENAI_API_KEY,
+                **({"base_url": resolved_llm["base_url"]} if resolved_llm.get("base_url") else {}),
+                **({"default_headers": resolved_llm["extra_headers"]} if resolved_llm.get("extra_headers") else {}),
+            )
+            llm_model_name = resolved_llm.get("model", "gpt-4o-mini")
+        else:
+            llm_client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+            llm_model_name = "gpt-4o-mini"
         
         import time
         from datetime import datetime
@@ -53,11 +69,11 @@ class GraphRetrievalStrategy(RetrievalStrategy):
         log(f"🚀 Graph Search Start for query: {query}")
         
         # 1. Analyze query for semantic understanding
-        query_analysis = await self._analyze_query(query)
+        query_analysis = await self._analyze_query(query, llm_client=llm_client, llm_model=llm_model_name)
         log(f"DEBUG: Query Analysis -> Type: {query_analysis.get('query_type')}, Hops: {query_analysis.get('hops', 1)}, Rel: {query_analysis.get('relationship_type')}")
         
         # 2. Extract Entities from Query
-        entities = await self._extract_entities(kb_id, query)
+        entities = await self._extract_entities(kb_id, query, llm_client=llm_client, llm_model=llm_model_name)
         log(f"DEBUG: 🔍 Extracted entities: {entities}")
         
         # 3. Expand entities - find related entities in graph (conditional)
@@ -183,7 +199,7 @@ class GraphRetrievalStrategy(RetrievalStrategy):
         
         return results
 
-    async def _extract_entities(self, kb_id: str, query: str) -> List[str]:
+    async def _extract_entities(self, kb_id: str, query: str, llm_client=None, llm_model: str = "gpt-4o-mini") -> List[str]:
         """Extract main entities from the query using LLM and spaCy Gazetteer."""
         entities = set()
         
@@ -203,8 +219,9 @@ class GraphRetrievalStrategy(RetrievalStrategy):
         Output format: {{"entities": ["성기훈", "오일남"], "translated_entities": ["Seong Gi-hun", "Oh Il-nam"]}}
         """
         try:
-            response = await self.client.chat.completions.create(
-                model="gpt-4o-mini", # Use smarter model for extraction
+            client = llm_client or AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+            response = await client.chat.completions.create(
+                model=llm_model,
                 messages=[
                     {"role": "system", "content": "You are a precise entity extractor for Knowledge Graphs. Output JSON only. Never translate entities in the main list."},
                     {"role": "user", "content": prompt}
@@ -257,7 +274,7 @@ class GraphRetrievalStrategy(RetrievalStrategy):
             
         return list(entities)
     
-    async def _analyze_query(self, query: str) -> Dict[str, Any]:
+    async def _analyze_query(self, query: str, llm_client=None, llm_model: str = "gpt-4o-mini") -> Dict[str, Any]:
         """Analyze query to understand semantic intent and relationship types."""
         analysis = {
             "query_type": "simple",  # simple, relationship, multi_hop
@@ -308,8 +325,9 @@ class GraphRetrievalStrategy(RetrievalStrategy):
             }}
             """
             
-            response = await self.client.chat.completions.create(
-                model="gpt-4o-mini",
+            client = llm_client or AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+            response = await client.chat.completions.create(
+                model=llm_model,
                 messages=[
                     {"role": "system", "content": "You are a query analyzer for graph search. Be precise and output only JSON."},
                     {"role": "user", "content": prompt}
@@ -485,7 +503,7 @@ class GraphRetrievalStrategy(RetrievalStrategy):
         retrieved = []
         
         # Calculate cosine similarity for scoring (so we can merge with vector results)
-        query_vec = (await embedding_service.get_embeddings([query]))[0]
+        query_vec = (await emb_service.get_embeddings([query]))[0]
         
         for hit in results:
             chunk_vector = hit.get("vector")

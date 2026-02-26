@@ -234,10 +234,11 @@ class OntologyPromoter:
         return result
     
     def _call_llm_for_schema(self, prompt: str) -> dict:
-        """OpenAI API 호출"""
-        api_key = os.environ.get("OPENAI_API_KEY")
+        """LLM API 호출 (settings.OPENAI_API_KEY fallback)"""
+        from app.core.config import settings as app_settings
+        api_key = os.environ.get("OPENAI_API_KEY") or app_settings.OPENAI_API_KEY
         if not api_key:
-             print("[OntologyPromoter] OPENAI_API_KEY not found. Skipping LLM schema generation.")
+             print("[OntologyPromoter] API Key not found. Skipping LLM schema generation.")
              return {}
 
         headers = {
@@ -246,11 +247,11 @@ class OntologyPromoter:
         }
         
         payload = {
-            "model": "gpt-4o",  # Cost-effective: $2.5/M input, $10/M output (vs o1: $15/M input, $60/M output)
+            "model": "gpt-4o",
             "messages": [
                 {"role": "user", "content": prompt}
             ],
-            "temperature": 0.1,  # Low temperature for consistent schema generation
+            "temperature": 0.1,
         }
         
         try:

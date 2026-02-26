@@ -81,7 +81,7 @@ export default function CreateKnowledgeBaseModal({ isOpen, onClose, onCreateComp
                 graph_backend: enableGraphRag ? graphBackend : 'none',
                 embedding_provider: embeddingModel.provider,
                 embedding_model: embeddingModel.model,
-                embedding_base_url: embeddingModel.base_url,
+                embedding_provider_id: embeddingModel.provider_id ?? null,
             } as any);
             onCreateComplete();
             onClose();

@@ -324,8 +324,16 @@ class Neo4jBackend(GraphBackend):
             
             # [FALLBACK] Use LLM-based CypherGenerator
             log_trace("[Neo4j] Fast Path not applicable. Falling back to LLM-based Cypher generation.")
-            
-            generator = CypherGenerator(api_key=settings.OPENAI_API_KEY)
+
+            # llm_model_config가 있으면 해당 키 사용, 없으면 env fallback
+            llm_model_config = kwargs.get("llm_model_config") or {}
+            if llm_model_config:
+                from app.core.models_resolver import resolve_model_config
+                resolved_llm = await resolve_model_config(llm_model_config)
+                cypher_api_key = resolved_llm.get("api_key") or settings.OPENAI_API_KEY
+            else:
+                cypher_api_key = settings.OPENAI_API_KEY
+            generator = CypherGenerator(api_key=cypher_api_key)
             context = f"관련 엔티티 후보: {', '.join(entities)}" if entities else None
             
             # Determine inverse relation mode

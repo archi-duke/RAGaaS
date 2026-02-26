@@ -134,6 +134,7 @@ async def retrieve_chunks(
     print(f"[DEBUG] Retrieve Request: brute={request.use_brute_force} bf_top_k={request.brute_force_top_k} bf_thresh={request.brute_force_threshold}")
     
     from app.models.knowledge_base import KnowledgeBase
+    from app.services.embedding import get_embedding_service
     kb = await KnowledgeBase.get(kb_id)
     
     with open("backend_debug.log", "a") as f:
@@ -142,6 +143,7 @@ async def retrieve_chunks(
         raise HTTPException(status_code=404, detail="Knowledge Base not found")
         
     metric_type = kb.metric_type or "COSINE"
+    kb_emb_service = await get_embedding_service(kb)
 
     # 1. Selection & Retrieval
     strategy = retrieval_factory.get_strategy(request.strategy)
@@ -161,10 +163,12 @@ async def retrieve_chunks(
         # Graph specific - 사용자 설정 그대로 전달
         enable_inverse_search=request.enable_inverse_search,
         inverse_extraction_mode=request.inverse_extraction_mode,
-        use_relation_filter=request.use_relation_filter
+        use_relation_filter=request.use_relation_filter,
+        embedding_service=kb_emb_service,
     )
     
     # 2. Reranking (Cross-Encoder)
+    rerank_llm_config = request.pipeline_model_config or request.frontend_model_config or {}
     if request.use_reranker and request.strategy != "2-stage" and results:
         print(f"[DEBUG] Applying reranker: top_k={request.reranker_top_k}, threshold={request.reranker_threshold}")
         
@@ -174,7 +178,8 @@ async def retrieve_chunks(
                 results=results,
                 top_k=request.reranker_top_k,
                 threshold=request.reranker_threshold,
-                strategy=request.llm_chunk_strategy
+                strategy=request.llm_chunk_strategy,
+                llm_model_config=rerank_llm_config or kb.llm_model_config or {},
             )
         else:
             results = await reranking_service.rerank_results(
@@ -241,12 +246,14 @@ async def chat_with_kb(
     print("📥 [Backend] Received Chat Request")
     
     from app.models.knowledge_base import KnowledgeBase
+    from app.services.embedding import get_embedding_service
     kb = await KnowledgeBase.get(kb_id)
     if not kb:
         raise HTTPException(status_code=404, detail="Knowledge Base not found")
         
     metric_type = kb.metric_type or "COSINE"
-    
+    kb_emb_service = await get_embedding_service(kb)
+
     # Check if pipeline mode is enabled
     pipeline_config = None
     if request.pipeline:
@@ -269,12 +276,15 @@ async def chat_with_kb(
         stages = [PipelineStage(**s) for s in pipeline_config["stages"]]
         config = PipelineConfig(stages=stages)
         
+        llm_config = request.pipeline_model_config or request.frontend_model_config
         exec_ctx = await pipeline_executor.execute(
             kb_id=kb_id,
             query=request.query,
             config=config,
             graph_backend=kb.graph_backend or "ontology",
-            metric_type=metric_type
+            metric_type=metric_type,
+            embedding_service=kb_emb_service,
+            llm_model_config=llm_config or kb.llm_model_config or {},
         )
         
         results = exec_ctx.results
@@ -301,6 +311,7 @@ async def chat_with_kb(
             execution_logs.append(f"[Legacy] Auto-enabled graph search (Backend: {kb.graph_backend}). Strategy switched to '{target_strategy}'")
 
         # 1. Retrieve chunks
+        llm_config = request.pipeline_model_config or request.frontend_model_config
         strategy = retrieval_factory.get_strategy(target_strategy)
         results = await strategy.search(
             kb_id, 
@@ -320,7 +331,9 @@ async def chat_with_kb(
             inverse_extraction_mode=request.inverse_extraction_mode,
             use_schema_mode=request.use_schema_mode,
             use_raw_log=request.use_raw_log,
-            execution_logs=execution_logs  # Pass logs list to collect strategy logs
+            execution_logs=execution_logs,
+            embedding_service=kb_emb_service,
+            llm_model_config=llm_config or kb.llm_model_config or {},
         )
         execution_logs.append(f"[Legacy] Search complete. Found {len(results)} chunks.")
         
@@ -340,7 +353,8 @@ async def chat_with_kb(
                     results=results,
                     top_k=request.reranker_top_k,
                     threshold=request.reranker_threshold,
-                    strategy=request.llm_chunk_strategy
+                    strategy=request.llm_chunk_strategy,
+                    llm_model_config=llm_config or kb.llm_model_config or {},
                 )
             else:
                 results = await reranking_service.rerank_results(

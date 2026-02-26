@@ -76,7 +76,8 @@ class CypherGenerator:
         self.llm_endpoint = llm_endpoint or "https://api.openai.com/v1/chat/completions"
         self.llm_model = llm_model
         # RAGaaS 환경 변수 설정에 맞게 기본값 수정 가능
-        self.api_key = api_key or os.environ.get("OPENAI_API_KEY", "")
+        from app.core.config import settings as app_settings
+        self.api_key = api_key or os.environ.get("OPENAI_API_KEY", "") or app_settings.OPENAI_API_KEY
 
         if not self.api_key:
             # RAGaaS 실행 환경에서 OPENAI_API_KEY가 없을 경우 대비

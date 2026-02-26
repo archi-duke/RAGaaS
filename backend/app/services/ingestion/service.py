@@ -1,7 +1,7 @@
 import io
 from pypdf import PdfReader
 from .text_splitter import chunking_service
-from app.services.embedding import embedding_service
+from app.services.embedding import get_embedding_service
 from app.core.milvus import create_collection
 from app.models.document import Document, DocumentStatus
 from app.models.knowledge_base import KnowledgeBase
@@ -49,11 +49,19 @@ class IngestionService:
         filename: str, 
         file_content: bytes, 
         chunking_strategy: str = "size",
-        chunking_config: str = "{}"
+        chunking_config: str = "{}",
+        kb: Optional[KnowledgeBase] = None,
     ):
         try:
             # NOTE: Graph RAG is now handled by the LlamaIndex Ingest Service (document.py)
             # This legacy method is kept for non-graph document processing fallback only.
+
+            # KB 임베딩 서비스 결정: kb 인자가 없으면 DB에서 조회
+            if kb is None:
+                kb = await KnowledgeBase.get(kb_id)
+            emb_service = await get_embedding_service(kb) if kb else __import__(
+                'app.services.embedding', fromlist=['embedding_service']
+            ).embedding_service
 
             # 1. Parse File
             text = ""
@@ -107,11 +115,18 @@ class IngestionService:
                 )
             elif chunking_strategy == "context_aware":
                 if config.get("semantic_mode"):
+                    # KB 임베딩 설정을 시맨틱 청킹에 전달
+                    semantic_api_key = emb_service.client.api_key
+                    semantic_model = emb_service.model
+                    semantic_base_url = str(emb_service.client.base_url) if emb_service.client.base_url else None
                     texts = chunking_service.chunk_semantic(
                         text,
                         buffer_size=int(config.get("buffer_size", 1)),
                         breakpoint_threshold_type=config.get("breakpoint_type", "percentile"),
-                        breakpoint_threshold_amount=float(config.get("breakpoint_amount", 95.0))
+                        breakpoint_threshold_amount=float(config.get("breakpoint_amount", 95.0)),
+                        api_key=semantic_api_key,
+                        model=semantic_model,
+                        base_url=semantic_base_url,
                     )
                 else:
                     # Convert config headers (e.g. {"h1": true}) to list of tuples
@@ -147,7 +162,7 @@ class IngestionService:
                 raise ValueError("No text content could be extracted from the document.")
 
             # Batch embedding if needed, but for now simple
-            vectors = await embedding_service.get_embeddings(texts_to_embed)
+            vectors = await emb_service.get_embeddings(texts_to_embed)
 
             # 4. Insert into Milvus
             collection = create_collection(kb_id)

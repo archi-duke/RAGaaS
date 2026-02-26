@@ -17,9 +17,12 @@ class KnowledgeBase(Document):
     promotion_metadata: Dict[str, Any] = {}
     sparql_prompt_template: Optional[str] = None
     pipeline_config: Dict[str, Any] = Field(default_factory=lambda: {"stages": []})
-    # LLM / Embedding model settings
-    embedding_provider: str = "openai"
+    # Embedding model settings
+    embedding_provider: str = "openai"       # built-in: openai/anthropic/google, custom: "custom"
     embedding_model: str = "text-embedding-3-small"
+    embedding_provider_id: Optional[str] = None  # CustomProvider UUID (custom일 때만 사용)
+    # LLM model settings (키워드 추출, 리랭커, 그래프 쿼리 생성용)
+    llm_model_config: Dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 

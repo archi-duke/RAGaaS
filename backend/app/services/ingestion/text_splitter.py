@@ -60,13 +60,27 @@ class ChunkingService:
         docs = markdown_splitter.split_text(text)
         return [doc.page_content for doc in docs]
 
-    def chunk_semantic(self, text: str, buffer_size: int = 1, breakpoint_threshold_type: str = "percentile", breakpoint_threshold_amount: float = 95.0) -> List[str]:
-        embeddings = OpenAIEmbeddings(api_key=settings.OPENAI_API_KEY)
+    def chunk_semantic(
+        self,
+        text: str,
+        buffer_size: int = 1,
+        breakpoint_threshold_type: str = "percentile",
+        breakpoint_threshold_amount: float = 95.0,
+        api_key: str = None,
+        model: str = None,
+        base_url: str = None,
+    ) -> List[str]:
+        effective_api_key = api_key or settings.OPENAI_API_KEY
+        effective_model = model or "text-embedding-3-small"
+        emb_kwargs: dict = {"api_key": effective_api_key, "model": effective_model}
+        if base_url:
+            emb_kwargs["openai_api_base"] = base_url
+        embeddings = OpenAIEmbeddings(**emb_kwargs)
         semantic_splitter = SemanticChunker(
             embeddings,
             buffer_size=buffer_size,
             breakpoint_threshold_type=breakpoint_threshold_type,
-            breakpoint_threshold_amount=breakpoint_threshold_amount
+            breakpoint_threshold_amount=breakpoint_threshold_amount,
         )
         docs = semantic_splitter.create_documents([text])
         return [doc.page_content for doc in docs]

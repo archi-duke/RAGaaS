@@ -70,9 +70,10 @@ class RerankingService:
         results: List[Dict],
         top_k: int = 5,
         threshold: float = 0.0,
-        strategy: str = "full"
+        strategy: str = "full",
+        llm_model_config: Optional[dict] = None,
     ) -> List[Dict]:
-        """Rerank using LLM (OpenAI)"""
+        """Rerank using LLM (OpenAI compatible)"""
         if not results:
             return []
             
@@ -80,8 +81,25 @@ class RerankingService:
         from app.core.config import settings
         import asyncio
         import os
-        
-        client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+
+        if llm_model_config:
+            from app.core.models_resolver import resolve_model_config
+            resolved = await resolve_model_config(llm_model_config)
+            api_key = resolved["api_key"]
+            llm_model = resolved["model"]
+            base_url = resolved.get("base_url")
+            extra_headers = resolved.get("extra_headers") or {}
+        else:
+            api_key = settings.OPENAI_API_KEY
+            llm_model = "gpt-3.5-turbo"
+            base_url = None
+            extra_headers = {}
+        client_kwargs: dict = {"api_key": api_key}
+        if base_url:
+            client_kwargs["base_url"] = base_url
+        if extra_headers:
+            client_kwargs["default_headers"] = extra_headers
+        client = AsyncOpenAI(**client_kwargs)
         
         # Load prompt template from file
         prompt_path = "/app/data/prompts/rerank_llm_prompt.txt"
@@ -103,7 +121,7 @@ class RerankingService:
 
             try:
                 resp = await client.chat.completions.create(
-                    model="gpt-3.5-turbo",
+                    model=llm_model,
                     messages=[{"role": "user", "content": prompt}],
                     temperature=0, max_tokens=10
                 )

@@ -3,7 +3,7 @@ from pymilvus import Collection
 from .base import RetrievalStrategy
 from .vector import VectorRetrievalStrategy
 from .graph import GraphRetrievalStrategy
-from app.services.embedding import embedding_service
+from app.services.embedding import embedding_service as default_embedding_service
 from rank_bm25 import BM25Okapi
 import numpy as np
 
@@ -18,6 +18,7 @@ class HybridRetrievalStrategy(RetrievalStrategy):
         metric_type = kwargs.get("metric_type", "COSINE")
         score_threshold = kwargs.get("score_threshold", 0.0)
         enable_graph = kwargs.get("enable_graph_search", False)
+        emb_service = kwargs.get("embedding_service", default_embedding_service)
         
         # Get existing collection
         collection_name = f"kb_{kb_id.replace('-', '_')}"
@@ -25,7 +26,7 @@ class HybridRetrievalStrategy(RetrievalStrategy):
         collection.load()
         
         # 1. Embed query
-        query_vectors = await embedding_service.get_embeddings([query])
+        query_vectors = await emb_service.get_embeddings([query])
         query_vec = query_vectors[0]
         
         # 2. Fetch all docs for BM25 (Note: Not scalable for huge datasets, okay for MVP)
@@ -58,7 +59,9 @@ class HybridRetrievalStrategy(RetrievalStrategy):
              # If LLM is ON, use LLM logic
              from app.services.retrieval.keyword import KeywordRetrievalStrategy
              ks = KeywordRetrievalStrategy()
-             search_query = await ks.extract_keywords_with_llm(query)
+             search_query = await ks.extract_keywords_with_llm(
+                 query, llm_model_config=kwargs.get("llm_model_config")
+             )
              tokenized_query = search_query.split()
         else:
              # If Multi-POS (extended): Verbs + Adjectives included by Kiwi
