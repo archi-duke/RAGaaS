@@ -38,6 +38,33 @@ from pydantic import Field
 from typing import Sequence
 
 from app.core.config import settings
+import httpx
+
+
+class MinimalEmbedding:
+    """
+    Minimal embedding API format (e.g. Samsung embedding API):
+    - POST {base_url}/v1/embeddings
+    - Headers: Content-Type + extra_headers (x-dep-ticket etc.)
+    - Body: {"input": "text"}
+    """
+
+    def __init__(self, base_url: str, extra_headers: Optional[Dict[str, str]] = None):
+        self.base_url = base_url.rstrip("/")
+        self.extra_headers = extra_headers or {}
+
+    async def aget_text_embedding(self, text: str) -> List[float]:
+        url = f"{self.base_url}/v1/embeddings"
+        headers = {"Content-Type": "application/json", **self.extra_headers}
+        payload = {"input": text}
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(url, headers=headers, json=payload)
+            resp.raise_for_status()
+            data = resp.json()
+        items = data.get("data", [])
+        if not items:
+            raise ValueError("Empty embedding response")
+        return items[0]["embedding"]
 
 
 class ContextAwareNodeParser(NodeParser):
@@ -381,11 +408,18 @@ class IngestPipeline:
     def _get_embedding_model(self, config: Optional[Dict[str, Any]]):
         if not config:
             return self.default_embed_model
-        
+
+        fmt = config.get("embedding_request_format", "openai")
+        if fmt == "minimal":
+            base_url = config.get("base_url") or ""
+            if not base_url:
+                raise ValueError("base_url required for minimal embedding format")
+            return MinimalEmbedding(base_url=base_url, extra_headers=config.get("extra_headers") or {})
+
         return OpenAIEmbedding(
             model=config.get("model", settings.EMBEDDING_MODEL),
             api_key=config.get("api_key", settings.OPENAI_API_KEY),
-            base_url=config.get("base_url")
+            base_url=config.get("base_url"),
         )
     
     def get_node_parser(

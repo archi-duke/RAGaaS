@@ -141,12 +141,18 @@ async def upload_text_document(
     async def call_ingest_service():
         try:
             from app.services.ingestion.ingest_client import ingest_client
-            from app.services.embedding import get_embedding_service
-            emb_resolved = await get_embedding_service(kb)
+            from app.core.models_resolver import resolve_model_config
+            resolved = await resolve_model_config({
+                "model": kb.embedding_model,
+                "provider": kb.embedding_provider,
+                "provider_id": kb.embedding_provider_id,
+            })
             embedding_model_cfg = {
-                "model": emb_resolved.model,
-                "api_key": emb_resolved.client.api_key,
-                "base_url": str(emb_resolved.client.base_url) if emb_resolved.client.base_url else None,
+                "model": resolved["model"],
+                "api_key": resolved.get("api_key"),
+                "base_url": resolved.get("base_url"),
+                "extra_headers": resolved.get("extra_headers") or {},
+                "embedding_request_format": resolved.get("embedding_request_format", "openai"),
             }
             await ingest_client.create_ingest_job(
                 kb_id=kb_id,
@@ -335,12 +341,18 @@ async def upload_document(
     async def call_ingest_service():
         try:
             from app.services.ingestion.ingest_client import ingest_client
-            from app.services.embedding import get_embedding_service
-            emb_resolved = await get_embedding_service(kb)
+            from app.core.models_resolver import resolve_model_config
+            resolved = await resolve_model_config({
+                "model": kb.embedding_model,
+                "provider": kb.embedding_provider,
+                "provider_id": kb.embedding_provider_id,
+            })
             embedding_model_cfg = {
-                "model": emb_resolved.model,
-                "api_key": emb_resolved.client.api_key,
-                "base_url": str(emb_resolved.client.base_url) if emb_resolved.client.base_url else None,
+                "model": resolved["model"],
+                "api_key": resolved.get("api_key"),
+                "base_url": resolved.get("base_url"),
+                "extra_headers": resolved.get("extra_headers") or {},
+                "embedding_request_format": resolved.get("embedding_request_format", "openai"),
             }
             await ingest_client.create_ingest_job(
                 kb_id=kb_id,

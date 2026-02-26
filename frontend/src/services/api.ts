@@ -271,6 +271,7 @@ export const providerApi = {
         model_list: string[];
         provider_type: string;
         extra_headers?: Record<string, string>;
+        embedding_request_format?: 'openai' | 'minimal';
     }) => api.post('providers/custom', data),
 
     /** Custom 프로바이더 수정 */
@@ -281,6 +282,7 @@ export const providerApi = {
         model_list: string[];
         provider_type: string;
         extra_headers?: Record<string, string>;
+        embedding_request_format?: 'openai' | 'minimal';
     }) => api.put(`providers/custom/${providerId}`, data),
 
     /** Custom 프로바이더 삭제 */

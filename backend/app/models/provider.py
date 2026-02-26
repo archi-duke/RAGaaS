@@ -39,7 +39,8 @@ class CustomProvider(Document):
     encrypted_key: str                 # Fernet 암호화된 API Key
     model_list: List[str] = []         # 사용 가능한 모델 목록 (사용자 입력)
     provider_type: str = "both"        # "llm" | "embedding" | "both"
-    extra_headers: Dict[str, str] = {}  # 추가 HTTP 헤더 (예: {"X-API-Version": "2024-01-01"})
+    extra_headers: Dict[str, str] = {}  # 추가 HTTP 헤더 (예: {"x-dep-ticket": "credential:TICKET"})
+    embedding_request_format: str = "minimal"  # "openai" | "minimal" - minimal: input만, extra_headers로 인증
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -56,6 +57,7 @@ class CustomProviderCreate(BaseModel):
     model_list: List[str] = []
     provider_type: str = "both"
     extra_headers: Optional[Dict[str, str]] = None  # 추가 HTTP 헤더
+    embedding_request_format: str = "minimal"  # "openai" | "minimal"
 
 
 class CustomProviderResponse(BaseModel):
@@ -66,4 +68,5 @@ class CustomProviderResponse(BaseModel):
     model_list: List[str]
     provider_type: str
     has_key: bool = True               # 키가 등록됐는지 여부만 노출
+    embedding_request_format: str = "minimal"
     created_at: datetime

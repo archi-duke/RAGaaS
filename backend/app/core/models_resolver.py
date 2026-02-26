@@ -35,18 +35,23 @@ async def resolve_model_config(config: Optional[dict], default_model: str = "gpt
     extra_headers: Dict[str, str] = {}
 
     if not config:
-        return {"model": model, "api_key": api_key, "base_url": base_url, "extra_headers": extra_headers}
+        return {
+            "model": model, "api_key": api_key, "base_url": base_url,
+            "extra_headers": extra_headers, "embedding_request_format": "openai",
+        }
 
     model = config.get("model", model)
     provider = config.get("provider")
     provider_id = config.get("provider_id")
 
+    embedding_request_format = "openai"
     # Custom 프로바이더 (provider_id가 UUID 형식)
     if provider_id and provider_id not in BUILTIN_IDS:
         custom = await CustomProvider.find_one({"provider_id": provider_id})
         if custom:
             base_url = custom.base_url
             extra_headers = getattr(custom, "extra_headers", None) or {}
+            embedding_request_format = getattr(custom, "embedding_request_format", "openai") or "openai"
             try:
                 api_key = decrypt(custom.encrypted_key)
             except Exception as e:
@@ -67,5 +72,13 @@ async def resolve_model_config(config: Optional[dict], default_model: str = "gpt
         api_key = config.get("api_key")
     if config.get("base_url"):
         base_url = config.get("base_url")
+    if config.get("embedding_request_format"):
+        embedding_request_format = config["embedding_request_format"]
 
-    return {"model": model, "api_key": api_key, "base_url": base_url, "extra_headers": extra_headers}
+    return {
+        "model": model,
+        "api_key": api_key,
+        "base_url": base_url,
+        "extra_headers": extra_headers,
+        "embedding_request_format": embedding_request_format,
+    }
