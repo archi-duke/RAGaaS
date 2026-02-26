@@ -139,6 +139,7 @@ async def list_providers(model_type: Optional[str] = None):
             model_list=p.model_list,
             provider_type=p.provider_type,
             has_key=bool(p.encrypted_key),
+            embedding_request_format=getattr(p, "embedding_request_format", "openai") or "openai",
             created_at=p.created_at,
         )
         for p in custom_docs
@@ -322,10 +323,10 @@ async def fetch_provider_models(payload: FetchModelsRequest):
 
 @router.post("/custom", response_model=CustomProviderResponse, status_code=201)
 async def create_custom_provider(payload: CustomProviderCreate):
-    if not payload.api_key.strip():
+    if payload.embedding_request_format != "minimal" and not payload.api_key.strip():
         raise HTTPException(status_code=422, detail="api_key is required")
     try:
-        encrypted = encrypt(payload.api_key)
+        encrypted = encrypt(payload.api_key or "")
     except Exception as e:
         logger.error(f"Encryption failed: {e}")
         raise HTTPException(status_code=500, detail="Failed to encrypt API key")
@@ -337,6 +338,7 @@ async def create_custom_provider(payload: CustomProviderCreate):
         model_list=payload.model_list,
         provider_type=payload.provider_type,
         extra_headers=payload.extra_headers or {},
+        embedding_request_format=payload.embedding_request_format,
     )
     await provider.insert()
     logger.info(f"Custom provider registered: {provider.name} ({provider.provider_id})")
@@ -346,7 +348,8 @@ async def create_custom_provider(payload: CustomProviderCreate):
         base_url=provider.base_url,
         model_list=provider.model_list,
         provider_type=provider.provider_type,
-        has_key=True,
+        has_key=bool(payload.api_key and payload.api_key.strip()),
+        embedding_request_format=provider.embedding_request_format,
         created_at=provider.created_at,
     )
 
@@ -361,6 +364,7 @@ async def update_custom_provider(provider_id: str, payload: CustomProviderCreate
     provider.model_list = payload.model_list
     provider.provider_type = payload.provider_type
     provider.extra_headers = payload.extra_headers or {}
+    provider.embedding_request_format = payload.embedding_request_format
     provider.updated_at = datetime.utcnow()
     if payload.api_key.strip():
         provider.encrypted_key = encrypt(payload.api_key)
@@ -371,7 +375,8 @@ async def update_custom_provider(provider_id: str, payload: CustomProviderCreate
         base_url=provider.base_url,
         model_list=provider.model_list,
         provider_type=provider.provider_type,
-        has_key=True,
+        has_key=bool(payload.api_key and payload.api_key.strip()),
+        embedding_request_format=provider.embedding_request_format,
         created_at=provider.created_at,
     )
 

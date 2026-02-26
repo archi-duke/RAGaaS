@@ -179,6 +179,7 @@ export default function ModelSelector({ type, value, onChange, disabled, valueEm
     const [customForm, setCustomForm] = useState({
         name: '', base_url: '', api_key: '', extra_headers_text: '', model_list_text: '',
         provider_type: 'both' as ProviderType,
+        embedding_request_format: 'minimal' as 'openai' | 'minimal',
     });
     const [showKey, setShowKey]     = useState(false);
     const [saving, setSaving]       = useState(false);
@@ -272,7 +273,7 @@ export default function ModelSelector({ type, value, onChange, disabled, valueEm
     // ── 프로바이더 선택 ───────────────────────────────────────────────────────
     const handleProviderChange = (providerKey: string) => {
         if (providerKey === CUSTOM_OPTION) {
-            setCustomForm({ name: '', base_url: '', api_key: '', extra_headers_text: '', model_list_text: '', provider_type: 'both' });
+            setCustomForm({ name: '', base_url: '', api_key: '', extra_headers_text: '', model_list_text: '', provider_type: 'both', embedding_request_format: 'minimal' });
             setSaveError('');
             setFetchError('');
             setShowModelPicker(false);
@@ -323,8 +324,9 @@ export default function ModelSelector({ type, value, onChange, disabled, valueEm
 
     // ── Custom 저장 ───────────────────────────────────────────────────────────
     const handleSaveCustom = async () => {
-        if (!customForm.name.trim() || !customForm.base_url.trim() || !customForm.api_key.trim()) {
-            setSaveError('Name, API URL, and API Key are required.');
+        const needApiKey = customForm.embedding_request_format !== 'minimal';
+        if (!customForm.name.trim() || !customForm.base_url.trim() || (needApiKey && !customForm.api_key.trim())) {
+            setSaveError(needApiKey ? 'Name, API URL, and API Key are required.' : 'Name and API URL are required.');
             return;
         }
         setSaving(true);
@@ -336,9 +338,10 @@ export default function ModelSelector({ type, value, onChange, disabled, valueEm
             const res = await providerApi.createCustom({
                 name: customForm.name.trim(),
                 base_url: customForm.base_url.trim(),
-                api_key: customForm.api_key,
+                api_key: customForm.api_key || '',
                 model_list,
                 provider_type: customForm.provider_type,
+                embedding_request_format: customForm.embedding_request_format,
                 ...(Object.keys(extra_headers).length > 0 && { extra_headers }),
             });
             await loadProviders();
@@ -715,7 +718,8 @@ export default function ModelSelector({ type, value, onChange, disabled, valueEm
                             {/* API Key */}
                             <div>
                                 <div style={{ fontSize: '0.72rem', fontWeight: 500, color: '#475569', marginBottom: '3px' }}>
-                                    API Key <span style={{ color: '#ef4444' }}>*</span>
+                                    API Key {customForm.embedding_request_format !== 'minimal' && <span style={{ color: '#ef4444' }}>*</span>}
+                                    {customForm.embedding_request_format === 'minimal' && <span style={{ color: '#94a3b8', fontWeight: 400 }}> (optional for Minimal)</span>}
                                 </div>
                                 <div style={{ position: 'relative' }}>
                                     <input className="input"
@@ -747,6 +751,27 @@ export default function ModelSelector({ type, value, onChange, disabled, valueEm
                                     One per line: Header-Name: value
                                 </div>
                             </div>
+
+                            {/* Embedding Request Format - when provider supports embedding */}
+                            {(customForm.provider_type === 'embedding' || customForm.provider_type === 'both') && (
+                                <div>
+                                    <div style={{ fontSize: '0.72rem', fontWeight: 500, color: '#475569', marginBottom: '5px' }}>
+                                        Embedding Format
+                                    </div>
+                                    <select
+                                        className="input"
+                                        style={{ fontSize: '0.8rem', padding: '0.35rem 0.5rem', width: '100%' }}
+                                        value={customForm.embedding_request_format}
+                                        onChange={e => setCustomForm(p => ({ ...p, embedding_request_format: e.target.value as 'openai' | 'minimal' }))}
+                                    >
+                                        <option value="minimal">Minimal (headers only, no model in body)</option>
+                                        <option value="openai">OpenAI compatible</option>
+                                    </select>
+                                    <div style={{ fontSize: '0.65rem', color: '#94a3b8', marginTop: '2px' }}>
+                                        Minimal: x-dep-ticket 등 extra headers만 사용, body에 input만 전송
+                                    </div>
+                                </div>
+                            )}
 
                             {/* 사용 유형 */}
                             <div>

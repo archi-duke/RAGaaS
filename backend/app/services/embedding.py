@@ -1,3 +1,4 @@
+import httpx
 from openai import AsyncOpenAI
 from app.core.config import settings
 from typing import List, Optional, TYPE_CHECKING
@@ -13,21 +14,51 @@ class EmbeddingService:
         model: str = "text-embedding-3-small",
         base_url: Optional[str] = None,
         extra_headers: Optional[dict] = None,
+        embedding_request_format: str = "openai",  # "openai" | "minimal"
     ):
         self.model = model
-        client_kwargs: dict = {"api_key": api_key or settings.OPENAI_API_KEY}
-        if base_url:
-            client_kwargs["base_url"] = base_url
-        if extra_headers:
-            client_kwargs["default_headers"] = extra_headers
-        self.client = AsyncOpenAI(**client_kwargs)
+        self.base_url = (base_url or "").rstrip("/")
+        self.extra_headers = extra_headers or {}
+        self.embedding_request_format = embedding_request_format or "openai"
+
+        if self.embedding_request_format == "minimal":
+            self.client = None
+        else:
+            client_kwargs: dict = {"api_key": api_key or settings.OPENAI_API_KEY}
+            if self.base_url:
+                client_kwargs["base_url"] = self.base_url
+            if self.extra_headers:
+                client_kwargs["default_headers"] = self.extra_headers
+            self.client = AsyncOpenAI(**client_kwargs)
 
     async def get_embeddings(self, texts: List[str]) -> List[List[float]]:
+        if self.embedding_request_format == "minimal":
+            return await self._get_embeddings_minimal(texts)
         response = await self.client.embeddings.create(
             input=texts,
             model=self.model,
         )
         return [data.embedding for data in response.data]
+
+    async def _get_embeddings_minimal(self, texts: List[str]) -> List[List[float]]:
+        """
+        Minimal 포맷: curl 예제와 동일
+        - POST {base_url}/v1/embeddings
+        - Headers: Content-Type + extra_headers (x-dep-ticket 등)
+        - Body: {"input": "text"} 또는 {"input": ["a","b"]}
+        """
+        url = f"{self.base_url}/v1/embeddings"
+        headers = {"Content-Type": "application/json", **self.extra_headers}
+        payload: dict = {"input": texts[0] if len(texts) == 1 else texts}
+
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(url, headers=headers, json=payload)
+            resp.raise_for_status()
+            data = resp.json()
+
+        # OpenAI 호환 응답: {"data": [{"embedding": [...]}, ...]}
+        items = data.get("data", [])
+        return [item["embedding"] for item in items]
 
 
 # 기본 싱글톤 (OPENAI_API_KEY env 기반) — 레거시/fallback 용도
@@ -48,4 +79,5 @@ async def get_embedding_service(kb: "KnowledgeBase") -> EmbeddingService:
         model=resolved["model"],
         base_url=resolved.get("base_url"),
         extra_headers=resolved.get("extra_headers"),
+        embedding_request_format=resolved.get("embedding_request_format", "openai"),
     )
