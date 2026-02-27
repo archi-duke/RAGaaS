@@ -5,7 +5,7 @@ Noun Extractor: 청크별 엔티티 추출 및 링킹 (Doc2Graph 전략)
 import json
 import asyncio
 import logging
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 from llama_index.core.schema import BaseNode
 from openai import AsyncOpenAI
 from app.core.config import settings
@@ -13,8 +13,15 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 class NounExtractor:
-    def __init__(self, llm=None):
-        self.client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+    def __init__(self, llm=None, llm_config: Optional[Dict[str, Any]] = None):
+        cfg = llm_config or {}
+        client_kwargs: Dict[str, Any] = {"api_key": cfg.get("api_key") or settings.OPENAI_API_KEY}
+        if cfg.get("base_url"):
+            client_kwargs["base_url"] = cfg["base_url"]
+        if cfg.get("extra_headers"):
+            client_kwargs["default_headers"] = cfg["extra_headers"]
+        self.client = AsyncOpenAI(**client_kwargs)
+        self.model = cfg.get("model", "gpt-4o")
         self.system_prompt = """당신은 텍스트에서 지식 그래프 구축을 위한 주요 엔티티(인물, 조직, 장소, 사건, 개념 등)를 추출하는 전문가입니다.
 
 [추출 규칙]
@@ -92,7 +99,7 @@ class NounExtractor:
             )
 
             response = await self.client.chat.completions.create(
-                model="gpt-4o",
+                model=self.model,
                 messages=[
                     {"role": "system", "content": "You are a helpful assistant that extracts nouns and compound nouns from Korean text."},
                     {"role": "user", "content": user_prompt}

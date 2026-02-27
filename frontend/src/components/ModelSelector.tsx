@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { Eye, EyeOff, X, Loader2, Check, Trash2, RefreshCw, Search, FileEdit } from 'lucide-react';
 import { providerApi } from '../services/api';
@@ -204,6 +204,16 @@ export default function ModelSelector({ type, value, onChange, disabled, valueEm
 
     const triggerRef = useRef<HTMLDivElement>(null);
     const popupRef = useRef<HTMLDivElement>(null);
+    const [popupHeight, setPopupHeight] = useState(420);
+
+    // Measure popup height after it is rendered so position is accurate.
+    useLayoutEffect(() => {
+        if (!isOpen) return;
+        const h = popupRef.current?.offsetHeight;
+        if (h && Number.isFinite(h)) {
+            setPopupHeight(h);
+        }
+    }, [isOpen, loading, selectedProvider, selectedModel, directInput, showModelPicker, type]);
 
     // ── 팝업 열릴 때 초기화 ───────────────────────────────────────────────────
     useEffect(() => {
@@ -512,11 +522,13 @@ export default function ModelSelector({ type, value, onChange, disabled, valueEm
             return { position: 'fixed' as const, top: '50%', left: '50%', transform: 'translate(-50%, -50%)', zIndex: 9999, maxHeight: '75vh', overflowY: 'auto' as const };
         }
         const rect = trigger.getBoundingClientRect();
-        const popupH = 420;
+        const popupH = popupHeight;
         const gap = 8;
         const padding = 12;
-        const showAbove = rect.top >= popupH + gap + padding;
-        const top = showAbove ? rect.top - popupH - gap : rect.bottom + gap;
+        const showAbove = rect.top >= popupH + gap + padding && (window.innerHeight - rect.bottom) < popupH;
+        const rawTop = showAbove ? rect.top - popupH - gap : rect.bottom + gap;
+        const maxTop = Math.max(padding, window.innerHeight - popupH - padding);
+        const top = Math.min(Math.max(rawTop, padding), maxTop);
         let left = rect.left;
         const maxW = 380;
         if (left + maxW > window.innerWidth - padding) left = window.innerWidth - maxW - padding;

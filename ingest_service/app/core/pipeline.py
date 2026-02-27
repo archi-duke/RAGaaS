@@ -538,8 +538,8 @@ class IngestPipeline:
     ) -> List[BaseNode]:
         """Chunk documents and return list of nodes"""
         
-        # Special handling for parent-child strategy
-        if strategy == ChunkingStrategy.PARENT_CHILD:
+        # Hierarchical is treated as explicit 2-level parent-child chunking.
+        if strategy in (ChunkingStrategy.PARENT_CHILD, ChunkingStrategy.HIERARCHICAL):
             return self._chunk_parent_child(text, config)
         
         # Create Document
@@ -550,18 +550,6 @@ class IngestPipeline:
         
         # Parse into nodes
         nodes = parser.get_nodes_from_documents([document])
-        
-        # For hierarchical, extract parent-child relationships from node.relationships
-        # and add to metadata for Milvus storage
-        if strategy == ChunkingStrategy.HIERARCHICAL:
-            for node in nodes:
-                if hasattr(node, 'relationships'):
-                    # Extract parent reference if exists
-                    from llama_index.core.schema import NodeRelationship
-                    if NodeRelationship.PARENT in node.relationships:
-                        parent_node = node.relationships[NodeRelationship.PARENT]
-                        if hasattr(parent_node, 'node_id'):
-                            node.metadata['parent_id'] = parent_node.node_id
         
         return nodes
     
@@ -787,6 +775,7 @@ Triplets:"""
         # Model configurations
         ingest_llm: Optional[Dict[str, Any]] = None,
         chunk_grouping_llm: Optional[Dict[str, Any]] = None,
+        noun_extraction_llm: Optional[Dict[str, Any]] = None,
         embedding_model: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """Execute the entire ingestion process in Doc2Graph order with timing stats."""
@@ -821,7 +810,11 @@ Triplets:"""
                 
             print(f"[Pipeline] Phase 1: Building Global Entity Dictionary...")
             from app.core.dictionary_builder import DictionaryBuilder
-            dict_builder = DictionaryBuilder(active_ingest_llm)
+            dict_builder = DictionaryBuilder(
+                active_ingest_llm,
+                ingest_llm_config=ingest_llm,
+                noun_extraction_llm=noun_extraction_llm,
+            )
             effective_sampling_size = sampling_size if sampling_size else 10000
             entity_dictionary = await dict_builder.build_from_text(text, sampling_size=effective_sampling_size)
             

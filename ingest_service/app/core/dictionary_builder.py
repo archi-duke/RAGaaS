@@ -1,6 +1,6 @@
 import json
 import asyncio
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 from llama_index.core.schema import BaseNode
 from .noun_extractor import NounExtractor
 from .contextual_grouper import ContextualGrouper
@@ -14,10 +14,15 @@ class DictionaryBuilder:
     Phase 2: 공출현 패턴과 컨텍스트를 활용한 엔티티 그룹핑
     """
     
-    def __init__(self, llm):
+    def __init__(
+        self,
+        llm,
+        ingest_llm_config: Optional[Dict[str, Any]] = None,
+        noun_extraction_llm: Optional[Dict[str, Any]] = None,
+    ):
         self.llm = llm
-        self.noun_extractor = NounExtractor(llm)
-        self.contextual_grouper = ContextualGrouper(llm)
+        self.noun_extractor = NounExtractor(llm, llm_config=noun_extraction_llm)
+        self.contextual_grouper = ContextualGrouper(llm, llm_config=ingest_llm_config)
     
     async def build_from_text(self, text: str, sampling_size: int = 5000) -> Dict[str, Dict[str, Any]]:
         """

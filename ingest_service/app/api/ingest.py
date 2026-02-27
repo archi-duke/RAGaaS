@@ -93,6 +93,8 @@ class IngestRequest(BaseModel):
     # Model configurations
     ingest_llm: Optional[Dict[str, Any]] = None
     chunk_grouping_llm: Optional[Dict[str, Any]] = None
+    subject_restoration_llm: Optional[Dict[str, Any]] = None
+    noun_extraction_llm: Optional[Dict[str, Any]] = None
     embedding_model: Optional[Dict[str, Any]] = None
 
 
@@ -155,7 +157,7 @@ async def process_ingest_job(job_id: str, request: IngestRequest):
         # 1.5 Subject Restoration (Optional)
         if request.enable_subject_restoration:
             from app.core.subject_restoration import restore_subjects
-            text = await restore_subjects(text)
+            text = await restore_subjects(text, llm_config=request.subject_restoration_llm)
             print(f"[IngestJob] Subject restoration applied: {len(text)} chars")
         
         jobs[job_id]["progress"] = 10
@@ -204,6 +206,7 @@ async def process_ingest_job(job_id: str, request: IngestRequest):
             # Model configurations
             ingest_llm=request.ingest_llm,
             chunk_grouping_llm=request.chunk_grouping_llm,
+            noun_extraction_llm=request.noun_extraction_llm,
             embedding_model=request.embedding_model
         )
         
@@ -463,6 +466,8 @@ class PreviewRequest(BaseModel):
     # Model configurations
     ingest_llm: Optional[Dict[str, Any]] = None
     chunk_grouping_llm: Optional[Dict[str, Any]] = None
+    subject_restoration_llm: Optional[Dict[str, Any]] = None
+    noun_extraction_llm: Optional[Dict[str, Any]] = None
     embedding_model: Optional[Dict[str, Any]] = None
 
 
@@ -508,7 +513,7 @@ async def create_preview(request: PreviewRequest):
         # 1.5 Subject Restoration (Optional)
         if request.enable_subject_restoration:
             from app.core.subject_restoration import restore_subjects
-            text = await restore_subjects(text)
+            text = await restore_subjects(text, llm_config=request.subject_restoration_llm)
             print(f"[Preview] Subject restoration applied: {len(text)} chars")
         
         # 2. Prepare configs
@@ -553,6 +558,7 @@ async def create_preview(request: PreviewRequest):
             # Model configurations
             ingest_llm=request.ingest_llm,
             chunk_grouping_llm=request.chunk_grouping_llm,
+            noun_extraction_llm=request.noun_extraction_llm,
             embedding_model=request.embedding_model
         )
         
@@ -851,80 +857,6 @@ async def discard_preview(preview_id: str):
         "message": "Preview discarded successfully.",
     }
 
-
-
-# ============================================================
-# Dictionary Preview Endpoint (Doc2Graph Phase 1 Only)
-# ============================================================
-
-class DictionaryPreviewResponse(BaseModel):
-    """Dictionary Preview Response"""
-    preview_id: str
-    kb_id: str
-    doc_id: str
-    entity_count: int
-    dictionary: Dict[str, Dict[str, Any]]
-    message: str
-
-
-@router.post("/preview-dictionary", response_model=DictionaryPreviewResponse)
-async def create_dictionary_preview(request: PreviewRequest):
-    """Build and return Global Entity Dictionary only (Doc2Graph Phase 1).
-    This skips the triple extraction phase.
-    """
-    import time
-    start_total = time.time()
-    preview_id = str(uuid.uuid4())
-    
-    try:
-        print(f"[PreviewDict] Starting dictionary build {preview_id} for doc {request.doc_id}")
-        
-        t0 = time.time()
-        from app.utils.file_utils import read_text_file
-        text = await read_text_file(request.file_path)
-        
-        if not text:
-            raise ValueError(f"Could not read content from {request.file_path}")
-            
-        t1 = time.time()
-        print(f"[Timer] File Read: {t1 - t0:.4f}s ({len(text)} chars)")
-        
-        # 3. Build Dictionary
-        from app.core.dictionary_builder import DictionaryBuilder
-        
-        print(f"[PreviewDict] Using optimized Doc2Graph builder on {len(text)} chars...")
-        
-        dict_builder = DictionaryBuilder(ingest_pipeline.llm)
-        
-        # Use window_size=5000 (default) or from request if provided
-        sampling_size = request.sampling_size if request.sampling_size and request.sampling_size > 0 else 5000
-        
-        if request.callback_url:
-            await send_pipeline_status(request.callback_url, preview_id, request.doc_id, request.kb_id, "EXTRACTING_ENTITIES")
-
-        t2 = time.time()
-        entity_dictionary = await dict_builder.build_from_text(text, sampling_size=sampling_size)
-        t3 = time.time()
-        print(f"[Timer] Dictionary Build (Total): {t3 - t2:.4f}s")
-        
-        print(f"[PreviewDict] Dictionary built with {len(entity_dictionary)} entities.")
-        
-        print(f"[Timer] Total Request Time: {t3 - start_total:.4f}s")
-        
-        return DictionaryPreviewResponse(
-            preview_id=preview_id,
-            kb_id=request.kb_id,
-            doc_id=request.doc_id,
-            entity_count=len(entity_dictionary),
-            dictionary=entity_dictionary,
-            message=f"Entity Dictionary built successfully with {len(entity_dictionary)} canonical entities."
-        )
-        
-    except Exception as e:
-        import traceback
-        print(f"[PreviewDict] ❌ Dictionary build failed: {e}")
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ============================================================

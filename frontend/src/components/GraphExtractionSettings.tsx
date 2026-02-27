@@ -35,6 +35,8 @@ interface GraphExtractionSettingsProps {
     nounExtractionLlm?: ModelConfig;
     onSubjectRestorationLlmChange?: (cfg: ModelConfig) => void;
     onNounExtractionLlmChange?: (cfg: ModelConfig) => void;
+    ingestLlm?: ModelConfig;
+    onIngestLlmChange?: (cfg: ModelConfig) => void;
 }
 
 const LabelWithTooltip = ({ label, tooltip }: { label: string, tooltip: string }) => {
@@ -83,6 +85,8 @@ export default function GraphExtractionSettings({
     nounExtractionLlm = DEFAULT_LLM_CONFIG,
     onSubjectRestorationLlmChange,
     onNounExtractionLlmChange,
+    ingestLlm = DEFAULT_LLM_CONFIG,
+    onIngestLlmChange,
 }: GraphExtractionSettingsProps) {
     const [isMaxPathsUnlimited, setIsMaxPathsUnlimited] = useState(graphParams.max_paths_per_chunk >= 1000);
 
@@ -266,7 +270,7 @@ export default function GraphExtractionSettings({
                             />
                             <div>
                                 <span style={{ color: '#334155', fontWeight: 500, fontSize: '0.9rem' }}>Noun Extraction</span>
-                                <div style={{ fontSize: '0.75rem', color: '#64748b' }}>Extract named entities</div>
+                                <div style={{ fontSize: '0.75rem', color: '#64748b' }}>Extract named entities for dictionary</div>
                             </div>
                         </label>
                         {graphParams.enable_inference && onNounExtractionLlmChange && (
@@ -279,6 +283,34 @@ export default function GraphExtractionSettings({
                             </div>
                         )}
                     </div>
+
+                    {/* Triple Extraction LLM — always active in graph mode */}
+                    {onIngestLlmChange && (
+                        <div style={{ marginBottom: '1rem' }}>
+                            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem', marginBottom: '0.4rem' }}>
+                                <div style={{
+                                    width: '1.1rem', height: '1.1rem', borderRadius: '3px',
+                                    background: '#3b82f6', display: 'flex', alignItems: 'center',
+                                    justifyContent: 'center', flexShrink: 0, marginTop: '2px'
+                                }}>
+                                    <svg width="9" height="7" viewBox="0 0 9 7" fill="none">
+                                        <path d="M1 3.5L3.5 6L8 1" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                                    </svg>
+                                </div>
+                                <div>
+                                    <span style={{ color: '#334155', fontWeight: 500, fontSize: '0.9rem' }}>Triple Extraction</span>
+                                    <div style={{ fontSize: '0.75rem', color: '#64748b' }}>Graph triple extraction &amp; entity grouping</div>
+                                </div>
+                            </div>
+                            <div style={{ marginLeft: '1.6rem' }}>
+                                <ModelSelector
+                                    type="llm"
+                                    value={ingestLlm}
+                                    onChange={onIngestLlmChange}
+                                />
+                            </div>
+                        </div>
+                    )}
                 </div>
 
                 {/* Customization Column */}

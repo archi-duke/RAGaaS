@@ -4,7 +4,7 @@ Contextual Grouper: 엔티티 해소 (Doc2Graph 전략)
 import json
 import logging
 import asyncio
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 from openai import AsyncOpenAI
 from app.core.config import settings
 
@@ -15,8 +15,15 @@ class ContextualGrouper:
     Doc2Graph Style Grouper:
     Uses LLM only (No Embeddings) to group noun variants based on strict identity rules.
     """
-    def __init__(self, llm=None):
-        self.client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+    def __init__(self, llm=None, llm_config: Optional[Dict[str, Any]] = None):
+        cfg = llm_config or {}
+        client_kwargs: Dict[str, Any] = {"api_key": cfg.get("api_key") or settings.OPENAI_API_KEY}
+        if cfg.get("base_url"):
+            client_kwargs["base_url"] = cfg["base_url"]
+        if cfg.get("extra_headers"):
+            client_kwargs["default_headers"] = cfg["extra_headers"]
+        self.client = AsyncOpenAI(**client_kwargs)
+        self.model = cfg.get("model", "gpt-4o")
         self.system_prompt = (
             "You are a linguistics expert who merges noun fragments into compound nouns and groups entities.\n"
             "Goal: Group words that refer to the EXACT SAME specific entity or individual."
@@ -92,7 +99,7 @@ class ContextualGrouper:
 
         try:
             response = await self.client.chat.completions.create(
-                model="gpt-4o",
+                model=self.model,
                 messages=[
                     {"role": "system", "content": self.system_prompt},
                     {"role": "user", "content": user_prompt}

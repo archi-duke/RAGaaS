@@ -17,6 +17,59 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+_UPLOAD_LLM_KEYMAP = {
+    "ingest": {
+        "provider": "llm_provider",
+        "model": "llm_model",
+        "base_url": "llm_base_url",
+        "provider_id": "llm_provider_id",
+    },
+    "chunk_grouping": {
+        "provider": "chunk_grouping_llm_provider",
+        "model": "chunk_grouping_llm_model",
+        "base_url": "chunk_grouping_llm_base_url",
+        "provider_id": "chunk_grouping_llm_provider_id",
+    },
+    "subject_restoration": {
+        "provider": "subject_restoration_llm_provider",
+        "model": "subject_restoration_llm_model",
+        "base_url": "subject_restoration_llm_base_url",
+        "provider_id": "subject_restoration_llm_provider_id",
+    },
+    "noun_extraction": {
+        "provider": "noun_extraction_llm_provider",
+        "model": "noun_extraction_llm_model",
+        "base_url": "noun_extraction_llm_base_url",
+        "provider_id": "noun_extraction_llm_provider_id",
+    },
+}
+
+
+async def _resolve_upload_llm_config(
+    final_config: Dict[str, Any],
+    kind: str,
+    default_model: str = "gpt-4o-mini",
+) -> Optional[Dict[str, Any]]:
+    keymap = _UPLOAD_LLM_KEYMAP[kind]
+    model_cfg = {
+        "provider": final_config.get(keymap["provider"]),
+        "model": final_config.get(keymap["model"]),
+        "base_url": final_config.get(keymap["base_url"]),
+        "provider_id": final_config.get(keymap["provider_id"]),
+    }
+    if not any(model_cfg.values()):
+        return None
+
+    from app.core.models_resolver import resolve_model_config
+    resolved = await resolve_model_config(model_cfg, default_model=default_model)
+    return {
+        "model": resolved.get("model", default_model),
+        "api_key": resolved.get("api_key"),
+        "base_url": resolved.get("base_url"),
+        "extra_headers": resolved.get("extra_headers") or {},
+    }
+
+
 class TextUploadRequest(BaseModel):
     title: str
     content: str
@@ -94,6 +147,18 @@ async def upload_text_document(
         "chunk_overlap": final_config.get("chunk_overlap") or 20,
         "window_size": final_config.get("window_size") or 3,
         "chunk_sizes": final_config.get("chunk_sizes") or [2048, 512, 128],
+        "parent_size": final_config.get("parent_size")
+        if final_config.get("parent_size") is not None
+        else (final_config.get("chunk_sizes") or [2048, 512])[0],
+        "child_size": final_config.get("child_size")
+        if final_config.get("child_size") is not None
+        else (final_config.get("chunk_sizes") or [2048, 512])[1],
+        "parent_overlap": final_config.get("parent_overlap")
+        if final_config.get("parent_overlap") is not None
+        else 0,
+        "child_overlap": final_config.get("child_overlap")
+        if final_config.get("child_overlap") is not None
+        else 100,
         "buffer_size": final_config.get("buffer_size") or 1,
         "breakpoint_threshold": final_config.get("breakpoint_threshold") or 95,
     }
@@ -154,6 +219,10 @@ async def upload_text_document(
                 "extra_headers": resolved.get("extra_headers") or {},
                 "embedding_request_format": resolved.get("embedding_request_format", "openai"),
             }
+            ingest_llm_cfg = await _resolve_upload_llm_config(final_config, "ingest", default_model="gpt-4o-mini")
+            chunk_grouping_llm_cfg = await _resolve_upload_llm_config(final_config, "chunk_grouping", default_model="gpt-4o-mini")
+            subject_restoration_llm_cfg = await _resolve_upload_llm_config(final_config, "subject_restoration", default_model="gpt-4o-mini")
+            noun_extraction_llm_cfg = await _resolve_upload_llm_config(final_config, "noun_extraction", default_model="gpt-4o-mini")
             await ingest_client.create_ingest_job(
                 kb_id=kb_id,
                 doc_id=str(doc.id),
@@ -172,6 +241,10 @@ async def upload_text_document(
                 callback_url=callback_url,
                 entity_dictionary=None,
                 sampling_size=50000,
+                ingest_llm=ingest_llm_cfg,
+                chunk_grouping_llm=chunk_grouping_llm_cfg,
+                subject_restoration_llm=subject_restoration_llm_cfg,
+                noun_extraction_llm=noun_extraction_llm_cfg,
                 embedding_model=embedding_model_cfg,
             )
         except Exception as e:
@@ -272,6 +345,18 @@ async def upload_document(
         "chunk_overlap": final_config.get("chunk_overlap") or 20,
         "window_size": final_config.get("window_size") or 3,
         "chunk_sizes": final_config.get("chunk_sizes") or [2048, 512, 128],
+        "parent_size": final_config.get("parent_size")
+        if final_config.get("parent_size") is not None
+        else (final_config.get("chunk_sizes") or [2048, 512])[0],
+        "child_size": final_config.get("child_size")
+        if final_config.get("child_size") is not None
+        else (final_config.get("chunk_sizes") or [2048, 512])[1],
+        "parent_overlap": final_config.get("parent_overlap")
+        if final_config.get("parent_overlap") is not None
+        else 0,
+        "child_overlap": final_config.get("child_overlap")
+        if final_config.get("child_overlap") is not None
+        else 100,
         "buffer_size": final_config.get("buffer_size") or 1,
         "breakpoint_threshold": final_config.get("breakpoint_threshold") or 95,
     }
@@ -354,6 +439,10 @@ async def upload_document(
                 "extra_headers": resolved.get("extra_headers") or {},
                 "embedding_request_format": resolved.get("embedding_request_format", "openai"),
             }
+            ingest_llm_cfg = await _resolve_upload_llm_config(final_config, "ingest", default_model="gpt-4o-mini")
+            chunk_grouping_llm_cfg = await _resolve_upload_llm_config(final_config, "chunk_grouping", default_model="gpt-4o-mini")
+            subject_restoration_llm_cfg = await _resolve_upload_llm_config(final_config, "subject_restoration", default_model="gpt-4o-mini")
+            noun_extraction_llm_cfg = await _resolve_upload_llm_config(final_config, "noun_extraction", default_model="gpt-4o-mini")
             await ingest_client.create_ingest_job(
                 kb_id=kb_id,
                 doc_id=str(doc.id),
@@ -372,6 +461,10 @@ async def upload_document(
                 callback_url=callback_url,
                 entity_dictionary=dict_data,
                 sampling_size=doc.max_sample_size,
+                ingest_llm=ingest_llm_cfg,
+                chunk_grouping_llm=chunk_grouping_llm_cfg,
+                subject_restoration_llm=subject_restoration_llm_cfg,
+                noun_extraction_llm=noun_extraction_llm_cfg,
                 embedding_model=embedding_model_cfg,
             )
         except Exception as e:

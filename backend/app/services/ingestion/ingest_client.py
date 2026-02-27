@@ -38,6 +38,8 @@ class IngestServiceClient:
         sampling_size: Optional[int] = None,
         ingest_llm: Optional[Dict[str, Any]] = None,
         chunk_grouping_llm: Optional[Dict[str, Any]] = None,
+        subject_restoration_llm: Optional[Dict[str, Any]] = None,
+        noun_extraction_llm: Optional[Dict[str, Any]] = None,
         embedding_model: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """인제스션 작업 생성"""
@@ -61,6 +63,8 @@ class IngestServiceClient:
             "sampling_size": sampling_size,
             "ingest_llm": ingest_llm,
             "chunk_grouping_llm": chunk_grouping_llm,
+            "subject_restoration_llm": subject_restoration_llm,
+            "noun_extraction_llm": noun_extraction_llm,
             "embedding_model": embedding_model,
         }
 

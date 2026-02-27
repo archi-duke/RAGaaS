@@ -245,15 +245,6 @@ export const extractionApi = {
         triples: any[];
     }) => ingestApi.post('/save-chunk-triples', data),
 
-    // [New] Doc2Graph Dictionary Preview
-    previewDictionary: (data: {
-        kb_id: string;
-        doc_id: string;
-        file_path: string;
-        chunking?: any;
-        sampling_size?: number;
-        callback_url?: string;
-    }) => ingestApi.post('/preview-dictionary', data),
 };
 
 

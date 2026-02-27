@@ -6,9 +6,19 @@ Example: "이며 Duke의 제자이다" → "오일남은 Duke의 제자이다"
 """
 import os
 from openai import OpenAI
+from typing import Optional, Dict, Any
 
-# Initialize OpenAI client
-client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+
+def _build_client(llm_config: Optional[Dict[str, Any]] = None) -> OpenAI:
+    cfg = llm_config or {}
+    client_kwargs: Dict[str, Any] = {
+        "api_key": cfg.get("api_key") or os.environ.get("OPENAI_API_KEY")
+    }
+    if cfg.get("base_url"):
+        client_kwargs["base_url"] = cfg["base_url"]
+    if cfg.get("extra_headers"):
+        client_kwargs["default_headers"] = cfg["extra_headers"]
+    return OpenAI(**client_kwargs)
 
 SYSTEM_PROMPT = """당신은 한국어 텍스트 전처리 전문가입니다.
 주어진 텍스트에서 **생략된 주어를 복원**하는 작업을 수행합니다.
@@ -27,7 +37,11 @@ SYSTEM_PROMPT = """당신은 한국어 텍스트 전처리 전문가입니다.
 """
 
 
-async def restore_subjects(text: str, model: str = "gpt-4o-mini") -> str:
+async def restore_subjects(
+    text: str,
+    model: str = "gpt-4o-mini",
+    llm_config: Optional[Dict[str, Any]] = None,
+) -> str:
     """
     Restore omitted subjects in Korean text using LLM.
     
@@ -40,9 +54,12 @@ async def restore_subjects(text: str, model: str = "gpt-4o-mini") -> str:
     """
     try:
         print(f"[SubjectRestoration] Processing {len(text)} chars...")
-        
+
+        cfg = llm_config or {}
+        active_model = cfg.get("model") or model
+        client = _build_client(cfg)
         response = client.chat.completions.create(
-            model=model,
+            model=active_model,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": text}
