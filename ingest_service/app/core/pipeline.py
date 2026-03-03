@@ -17,7 +17,7 @@ from typing import List, Dict, Any, Optional, Literal
 import asyncio
 from enum import Enum
 
-from llama_index.core import Document, Settings as LlamaSettings
+from llama_index.core import Document
 from llama_index.core.node_parser import (
     NodeParser,
     SentenceSplitter,
@@ -381,33 +381,25 @@ class IngestPipeline:
     """LlamaIndex-based Ingestion Pipeline"""
     
     def __init__(self):
-        # Initialize default LLM and Embedding
-        self.default_llm = OpenAI(
-            model=settings.OPENAI_MODEL,
-            api_key=settings.OPENAI_API_KEY
-        )
-        self.default_embed_model = OpenAIEmbedding(
-            model=settings.EMBEDDING_MODEL,
-            api_key=settings.OPENAI_API_KEY
-        )
-        
-        # Set global settings (default)
-        LlamaSettings.llm = self.default_llm
-        LlamaSettings.embed_model = self.default_embed_model
+        # Default env-based model fallback is disabled.
+        self.default_llm = None
+        self.default_embed_model = None
 
     def _get_llm(self, config: Optional[Dict[str, Any]]):
         if not config:
-            return self.default_llm
+            raise ValueError("LLM model is not configured.")
+        if not config.get("api_key"):
+            raise ValueError("LLM API key is not configured.")
         
         return OpenAI(
             model=config.get("model", settings.OPENAI_MODEL),
-            api_key=config.get("api_key", settings.OPENAI_API_KEY),
+            api_key=config.get("api_key"),
             base_url=config.get("base_url")
         )
 
     def _get_embedding_model(self, config: Optional[Dict[str, Any]]):
         if not config:
-            return self.default_embed_model
+            raise ValueError("Embedding model is not configured.")
 
         fmt = config.get("embedding_request_format", "openai")
         if fmt == "minimal":
@@ -418,7 +410,7 @@ class IngestPipeline:
 
         return OpenAIEmbedding(
             model=config.get("model", settings.EMBEDDING_MODEL),
-            api_key=config.get("api_key", settings.OPENAI_API_KEY),
+            api_key=config.get("api_key"),
             base_url=config.get("base_url"),
         )
     
@@ -453,9 +445,11 @@ class IngestPipeline:
             # LLM-based Context Aware Chunking using sliding window
             target_size = config.get("target_size", 800)
             llm_auto_size = config.get("llm_auto_size", False)
+            if llm is None:
+                raise ValueError("Chunk grouping model is not configured for context-aware chunking.")
             
             return ContextAwareNodeParser(
-                llm=llm or self.default_llm,
+                llm=llm,
                 target_size=target_size,
                 llm_auto_size=llm_auto_size
             )
@@ -788,9 +782,13 @@ Triplets:"""
         graph_config = graph_config or {}
         
         # Prepare Instances
-        active_ingest_llm = self._get_llm(ingest_llm)
-        active_chunk_llm = self._get_llm(chunk_grouping_llm)
+        active_ingest_llm = None
+        active_chunk_llm = None
         active_embed_model = self._get_embedding_model(embedding_model)
+        if chunking_strategy == ChunkingStrategy.CONTEXT_AWARE:
+            active_chunk_llm = self._get_llm(chunk_grouping_llm)
+        if graph_extractor_type != GraphExtractorType.NONE:
+            active_ingest_llm = self._get_llm(ingest_llm)
         
         # 0. Text Cleaning
         t0 = time.time()

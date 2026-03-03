@@ -20,6 +20,12 @@ from app.models.prompt import PromptTemplate
 
 router = APIRouter()
 
+
+def _format_model_error_message(error_text: str) -> str:
+    if "not configured" in error_text.lower() or "모델 지정" in error_text:
+        return f"모델 지정이 안되었습니다: {error_text}"
+    return error_text
+
 @router.post("/", response_model=KnowledgeBase)
 async def create_knowledge_base(kb: KnowledgeBaseCreate):
     # Auto-set enable_graph_rag if graph_backend is specified (not 'none')
@@ -288,7 +294,7 @@ async def promote_knowledge_base(
     except Exception as e:
         import traceback
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Promotion failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Promotion failed: {_format_model_error_message(str(e))}")
 
 @router.delete("/{kb_id}")
 async def delete_knowledge_base(kb_id: str):

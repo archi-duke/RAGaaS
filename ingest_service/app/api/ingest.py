@@ -38,6 +38,18 @@ class JobStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
+def _format_model_error_message(error_text: str) -> str:
+    if "not configured" in error_text.lower():
+        return f"모델 지정이 안되었습니다: {error_text}"
+    return error_text
+
+
+def _is_model_configured(config: Optional[Dict[str, Any]]) -> bool:
+    if not config:
+        return False
+    return any(config.get(k) for k in ("provider", "provider_id", "model", "api_key", "base_url"))
+
+
 class ChunkingConfig(BaseModel):
     """Chunking Configuration"""
     strategy: ChunkingStrategy = ChunkingStrategy.FIXED_SIZE
@@ -153,6 +165,18 @@ async def process_ingest_job(job_id: str, request: IngestRequest):
             raise ValueError(f"Could not read content from {request.file_path}")
         
         print(f"[IngestJob] Read file: {len(text)} chars")
+
+        # Validate required model settings before running pipeline steps.
+        if not _is_model_configured(request.embedding_model):
+            raise ValueError("Embedding model is not configured.")
+        if request.chunking.strategy == ChunkingStrategy.CONTEXT_AWARE and not _is_model_configured(request.chunk_grouping_llm):
+            raise ValueError("Chunk Grouping model is not configured for context-aware chunking.")
+        if request.graph.extractor_type != GraphExtractorType.NONE and not _is_model_configured(request.ingest_llm):
+            raise ValueError("Graph Triple Extraction model is not configured.")
+        if request.enable_subject_restoration and not _is_model_configured(request.subject_restoration_llm):
+            raise ValueError("Subject Restoration model is not configured.")
+        if request.enable_entity_normalization and request.graph.extractor_type != GraphExtractorType.NONE and not _is_model_configured(request.noun_extraction_llm):
+            raise ValueError("Noun Extraction model is not configured.")
         
         # 1.5 Subject Restoration (Optional)
         if request.enable_subject_restoration:
@@ -342,7 +366,7 @@ async def process_ingest_job(job_id: str, request: IngestRequest):
         print(f"[IngestJob] ❌ Job {job_id} FAILED: {e}")
         traceback.print_exc()
         jobs[job_id]["status"] = JobStatus.FAILED
-        jobs[job_id]["error"] = str(e)
+        jobs[job_id]["error"] = _format_model_error_message(str(e))
         jobs[job_id]["updated_at"] = datetime.utcnow().isoformat()
 
 
@@ -622,7 +646,7 @@ async def create_preview(request: PreviewRequest):
         import traceback
         print(f"[Preview] ❌ Preview failed: {e}")
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_format_model_error_message(str(e)))
 
 
 @router.post("/confirm/{preview_id}")
@@ -835,7 +859,7 @@ async def _save_preview_data(
         print(f"[Confirm] ❌ Save failed: {e}")
         traceback.print_exc()
         jobs[job_id]["status"] = JobStatus.FAILED
-        jobs[job_id]["error"] = str(e)
+        jobs[job_id]["error"] = _format_model_error_message(str(e))
         jobs[job_id]["updated_at"] = datetime.utcnow().isoformat()
 
 
@@ -962,7 +986,7 @@ async def extract_from_chunk(request: ChunkExtractRequest):
         import traceback
         print(f"[ExtractChunk] ❌ Extraction failed: {e}")
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_format_model_error_message(str(e)))
 
 
 # ============================================================
@@ -1044,4 +1068,4 @@ async def save_chunk_triples(request: SaveChunkTriplesRequest):
         import traceback
         print(f"[SaveChunkTriples] ❌ Save failed: {e}")
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_format_model_error_message(str(e)))

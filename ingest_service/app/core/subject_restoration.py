@@ -4,16 +4,15 @@ Subject Restoration Preprocessing Module
 Resolves omitted subjects in Korean text using LLM.
 Example: "이며 Duke의 제자이다" → "오일남은 Duke의 제자이다"
 """
-import os
 from openai import OpenAI
 from typing import Optional, Dict, Any
 
 
 def _build_client(llm_config: Optional[Dict[str, Any]] = None) -> OpenAI:
     cfg = llm_config or {}
-    client_kwargs: Dict[str, Any] = {
-        "api_key": cfg.get("api_key") or os.environ.get("OPENAI_API_KEY")
-    }
+    if not cfg.get("api_key"):
+        raise ValueError("Subject restoration model API key is not configured.")
+    client_kwargs: Dict[str, Any] = {"api_key": cfg.get("api_key")}
     if cfg.get("base_url"):
         client_kwargs["base_url"] = cfg["base_url"]
     if cfg.get("extra_headers"):

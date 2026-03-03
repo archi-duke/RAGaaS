@@ -1,5 +1,4 @@
 
-import os
 import json
 import requests
 from typing import Union, Optional,  Optional, Union, Dict
@@ -67,8 +66,9 @@ SELECT DISTINCT ?teacherLabel WHERE {
     ):
         self.llm_endpoint = llm_endpoint or "https://api.openai.com/v1/chat/completions"
         self.llm_model = llm_model
-        from app.core.config import settings as app_settings
-        self.api_key = api_key or os.environ.get("OPENAI_API_KEY", "") or app_settings.OPENAI_API_KEY
+        self.api_key = api_key
+        if not self.api_key:
+            raise ValueError("Graph2Ontology SPARQL generator model API key is not configured.")
 
     def generate(self, question: str, context: Optional[str] = None, mode: str = "ontology", inverse_relation: str = "auto", custom_prompt: Optional[str] = None, schema_info: Optional[Dict] = None) -> Dict:
         """자연어 질문을 SPARQL로 변환 (custom_prompt, schema_info 지원)"""

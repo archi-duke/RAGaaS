@@ -29,7 +29,6 @@ class Neo4jBackend(GraphBackend):
         def log_trace(msg: str):
             trace_logs.append(msg)
 
-        from app.core.config import settings
         
         try:
             # [NEW] Fast Path Logic
@@ -325,14 +324,14 @@ class Neo4jBackend(GraphBackend):
             # [FALLBACK] Use LLM-based CypherGenerator
             log_trace("[Neo4j] Fast Path not applicable. Falling back to LLM-based Cypher generation.")
 
-            # llm_model_config가 있으면 해당 키 사용, 없으면 env fallback
             llm_model_config = kwargs.get("llm_model_config") or {}
-            if llm_model_config:
-                from app.core.models_resolver import resolve_model_config
-                resolved_llm = await resolve_model_config(llm_model_config)
-                cypher_api_key = resolved_llm.get("api_key") or settings.OPENAI_API_KEY
-            else:
-                cypher_api_key = settings.OPENAI_API_KEY
+            if not llm_model_config:
+                raise ValueError("Graph query model is not configured.")
+            from app.core.models_resolver import resolve_model_config
+            resolved_llm = await resolve_model_config(llm_model_config)
+            cypher_api_key = resolved_llm.get("api_key")
+            if not cypher_api_key:
+                raise ValueError("Graph query API key is not configured.")
             generator = CypherGenerator(api_key=cypher_api_key)
             context = f"관련 엔티티 후보: {', '.join(entities)}" if entities else None
             

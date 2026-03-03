@@ -4,7 +4,6 @@ from app.services.embedding import embedding_service as default_embedding_servic
 from .base import RetrievalStrategy
 import numpy as np
 from openai import AsyncOpenAI
-from app.core.config import settings
 
 class KeywordRetrievalStrategy(RetrievalStrategy):
     async def extract_keywords_with_llm(self, query: str, llm_model_config: Optional[dict] = None) -> str:
@@ -20,37 +19,33 @@ class KeywordRetrievalStrategy(RetrievalStrategy):
         Query: {query}
         Keywords:
         """
-        try:
-            if llm_model_config:
-                from app.core.models_resolver import resolve_model_config
-                resolved = await resolve_model_config(llm_model_config)
-                api_key = resolved["api_key"]
-                model = resolved["model"]
-                base_url = resolved.get("base_url")
-                extra_headers = resolved.get("extra_headers") or {}
-            else:
-                api_key = settings.OPENAI_API_KEY
-                model = "gpt-3.5-turbo"
-                base_url = None
-                extra_headers = {}
-            client_kwargs: dict = {"api_key": api_key}
-            if base_url:
-                client_kwargs["base_url"] = base_url
-            if extra_headers:
-                client_kwargs["default_headers"] = extra_headers
-            client = AsyncOpenAI(**client_kwargs)
-            response = await client.chat.completions.create(
-                model=model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0,
-                max_tokens=50
-            )
-            keywords = response.choices[0].message.content.strip()
-            print(f"[LLM Keyword Extraction] '{query}' -> '{keywords}'")
-            return keywords
-        except Exception as e:
-            print(f"LLM Keyword Extraction failed: {e}")
-            return query
+        if not llm_model_config:
+            raise ValueError("Keyword extraction model is not configured.")
+
+        from app.core.models_resolver import resolve_model_config
+        resolved = await resolve_model_config(llm_model_config)
+        api_key = resolved["api_key"]
+        model = resolved["model"]
+        base_url = resolved.get("base_url")
+        extra_headers = resolved.get("extra_headers") or {}
+        if not api_key:
+            raise ValueError("Keyword extraction API key is not configured.")
+
+        client_kwargs: dict = {"api_key": api_key}
+        if base_url:
+            client_kwargs["base_url"] = base_url
+        if extra_headers:
+            client_kwargs["default_headers"] = extra_headers
+        client = AsyncOpenAI(**client_kwargs)
+        response = await client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+            max_tokens=50
+        )
+        keywords = response.choices[0].message.content.strip()
+        print(f"[LLM Keyword Extraction] '{query}' -> '{keywords}'")
+        return keywords
 
     async def search(self, kb_id: str, query: str, top_k: int, **kwargs) -> List[Dict[str, Any]]:
         score_threshold = kwargs.get("score_threshold", 0.0)
@@ -61,7 +56,7 @@ class KeywordRetrievalStrategy(RetrievalStrategy):
         
         # LLM Keyword Extraction
         search_query = query
-        llm_model_config = kwargs.get("llm_model_config")
+        llm_model_config = kwargs.get("keyword_llm_model_config") or kwargs.get("llm_model_config")
         if use_llm_extraction:
             search_query = await self.extract_keywords_with_llm(query, llm_model_config=llm_model_config)
 

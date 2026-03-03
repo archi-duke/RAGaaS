@@ -1,6 +1,5 @@
 import httpx
 from openai import AsyncOpenAI
-from app.core.config import settings
 from typing import List, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -24,7 +23,10 @@ class EmbeddingService:
         if self.embedding_request_format == "minimal":
             self.client = None
         else:
-            client_kwargs: dict = {"api_key": api_key or settings.OPENAI_API_KEY}
+            if not api_key:
+                self.client = None
+                return
+            client_kwargs: dict = {"api_key": api_key}
             if self.base_url:
                 client_kwargs["base_url"] = self.base_url
             if self.extra_headers:
@@ -34,6 +36,8 @@ class EmbeddingService:
     async def get_embeddings(self, texts: List[str]) -> List[List[float]]:
         if self.embedding_request_format == "minimal":
             return await self._get_embeddings_minimal(texts)
+        if self.client is None:
+            raise ValueError("Embedding model API key is not configured.")
         response = await self.client.embeddings.create(
             input=texts,
             model=self.model,

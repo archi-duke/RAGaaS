@@ -2,14 +2,15 @@ import json
 import logging
 from typing import List, Dict, Any, Optional
 from openai import AsyncOpenAI
-from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
 class DictionaryBuilder:
     def __init__(self, llm_model_config: Optional[Dict[str, Any]] = None):
         cfg = llm_model_config or {}
-        api_key = cfg.get("api_key") or settings.OPENAI_API_KEY
+        api_key = cfg.get("api_key")
+        if not api_key:
+            raise ValueError("Dictionary builder model API key is not configured.")
         client_kwargs: dict = {"api_key": api_key}
         if cfg.get("base_url"):
             client_kwargs["base_url"] = cfg["base_url"]

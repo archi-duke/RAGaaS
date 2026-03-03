@@ -78,22 +78,18 @@ class RerankingService:
             return []
             
         from openai import AsyncOpenAI
-        from app.core.config import settings
         import asyncio
-        import os
 
-        if llm_model_config:
-            from app.core.models_resolver import resolve_model_config
-            resolved = await resolve_model_config(llm_model_config)
-            api_key = resolved["api_key"]
-            llm_model = resolved["model"]
-            base_url = resolved.get("base_url")
-            extra_headers = resolved.get("extra_headers") or {}
-        else:
-            api_key = settings.OPENAI_API_KEY
-            llm_model = "gpt-3.5-turbo"
-            base_url = None
-            extra_headers = {}
+        if not llm_model_config:
+            raise ValueError("LLM reranker model is not configured.")
+        from app.core.models_resolver import resolve_model_config
+        resolved = await resolve_model_config(llm_model_config)
+        api_key = resolved["api_key"]
+        llm_model = resolved["model"]
+        base_url = resolved.get("base_url")
+        extra_headers = resolved.get("extra_headers") or {}
+        if not api_key:
+            raise ValueError("LLM reranker API key is not configured.")
         client_kwargs: dict = {"api_key": api_key}
         if base_url:
             client_kwargs["base_url"] = base_url

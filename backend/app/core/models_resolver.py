@@ -1,5 +1,4 @@
 from typing import Optional, Dict, Any
-import os
 import json
 import logging
 from pathlib import Path
@@ -27,9 +26,9 @@ async def resolve_model_config(config: Optional[dict], default_model: str = "gpt
     ModelConfig 딕셔너리를 기반으로 {model, api_key, base_url} 반환.
     - Built-in(openai/anthropic/google): BuiltinProviderConfig에서 암호화된 키 조회
     - Custom: provider_id로 CustomProvider에서 조회
-    - fallback: OPENAI_API_KEY env (openai만)
+    - fallback 없음: 설정이 없으면 api_key는 None
     """
-    api_key = os.getenv("OPENAI_API_KEY")
+    api_key = None
     base_url = None
     model = default_model
     extra_headers: Dict[str, str] = {}

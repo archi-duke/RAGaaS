@@ -9,6 +9,97 @@ import time
 
 router = APIRouter()
 
+_RETRIEVAL_MODEL_KEYMAP = {
+    "default": {
+        "provider": "retrieval_llm_provider",
+        "model": "retrieval_llm_model",
+        "base_url": "retrieval_llm_base_url",
+        "provider_id": "retrieval_llm_provider_id",
+    },
+    "keyword": {
+        "provider": "keyword_llm_provider",
+        "model": "keyword_llm_model",
+        "base_url": "keyword_llm_base_url",
+        "provider_id": "keyword_llm_provider_id",
+    },
+}
+
+
+def _has_model_selection(config: Optional[dict]) -> bool:
+    if not config:
+        return False
+    return any(config.get(k) for k in ("provider", "provider_id", "model", "api_key", "base_url"))
+
+
+def _format_model_error_message(error_text: str) -> str:
+    if "not configured" in error_text.lower() or "모델 지정" in error_text:
+        return f"모델 지정이 안되었습니다: {error_text}"
+    return error_text
+
+
+def _read_model_from_kb_storage(kb, kind: str) -> dict:
+    mapping = _RETRIEVAL_MODEL_KEYMAP[kind]
+    cfg = kb.chunking_config or {}
+    return {
+        "provider": cfg.get(mapping["provider"]),
+        "model": cfg.get(mapping["model"]),
+        "base_url": cfg.get(mapping["base_url"]),
+        "provider_id": cfg.get(mapping["provider_id"]),
+    }
+
+
+def _write_model_to_kb_storage(kb, kind: str, model_cfg: dict) -> bool:
+    if not _has_model_selection(model_cfg):
+        return False
+    mapping = _RETRIEVAL_MODEL_KEYMAP[kind]
+    cfg = kb.chunking_config.copy() if kb.chunking_config else {}
+    changed = False
+    for src, dst in mapping.items():
+        value = model_cfg.get(src)
+        if value in (None, ""):
+            continue
+        if cfg.get(dst) != value:
+            cfg[dst] = value
+            changed = True
+    if changed:
+        kb.chunking_config = cfg
+    return changed
+
+
+async def _resolve_retrieval_model_configs(
+    kb,
+    request_default: Optional[dict],
+    request_keyword: Optional[dict],
+    persist: bool,
+) -> tuple[dict, dict]:
+    stored_default = _read_model_from_kb_storage(kb, "default")
+    stored_keyword = _read_model_from_kb_storage(kb, "keyword")
+
+    default_cfg = (
+        request_default if _has_model_selection(request_default)
+        else stored_default if _has_model_selection(stored_default)
+        else (kb.llm_model_config or {})
+    )
+    keyword_cfg = (
+        request_keyword if _has_model_selection(request_keyword)
+        else stored_keyword if _has_model_selection(stored_keyword)
+        else default_cfg
+    )
+
+    if persist:
+        changed = False
+        if _has_model_selection(request_default):
+            if kb.llm_model_config != request_default:
+                kb.llm_model_config = request_default
+                changed = True
+            changed = _write_model_to_kb_storage(kb, "default", request_default) or changed
+        if _has_model_selection(request_keyword):
+            changed = _write_model_to_kb_storage(kb, "keyword", request_keyword) or changed
+        if changed:
+            await kb.save()
+
+    return default_cfg or {}, keyword_cfg or {}
+
 class ChatRequest(BaseModel):
     query: str  # Reverted to query to match frontend
     top_k: int = 5
@@ -108,7 +199,7 @@ async def update_rerank_prompt(request: PromptUpdateRequest):
             f.write(request.content)
         return {"message": "Prompt updated successfully"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_format_model_error_message(str(e)))
 
 
 @router.get("/settings/chat-prompt")
@@ -141,6 +232,13 @@ async def retrieve_chunks(
         f.write(f"\n--- REQ ---\nDefault TopK: {request.top_k}\nBF: {request.use_brute_force}\n")
     if not kb:
         raise HTTPException(status_code=404, detail="Knowledge Base not found")
+
+    llm_default_config, llm_keyword_config = await _resolve_retrieval_model_configs(
+        kb=kb,
+        request_default=None,
+        request_keyword=None,
+        persist=False,
+    )
         
     metric_type = kb.metric_type or "COSINE"
     kb_emb_service = await get_embedding_service(kb)
@@ -165,10 +263,12 @@ async def retrieve_chunks(
         inverse_extraction_mode=request.inverse_extraction_mode,
         use_relation_filter=request.use_relation_filter,
         embedding_service=kb_emb_service,
+        llm_model_config=llm_default_config,
+        keyword_llm_model_config=llm_keyword_config,
     )
     
     # 2. Reranking (Cross-Encoder)
-    rerank_llm_config = request.pipeline_model_config or request.frontend_model_config or {}
+    rerank_llm_config = llm_default_config
     if request.use_reranker and request.strategy != "2-stage" and results:
         print(f"[DEBUG] Applying reranker: top_k={request.reranker_top_k}, threshold={request.reranker_threshold}")
         
@@ -179,7 +279,7 @@ async def retrieve_chunks(
                 top_k=request.reranker_top_k,
                 threshold=request.reranker_threshold,
                 strategy=request.llm_chunk_strategy,
-                llm_model_config=rerank_llm_config or kb.llm_model_config or {},
+                llm_model_config=rerank_llm_config or {},
             )
         else:
             results = await reranking_service.rerank_results(
@@ -250,6 +350,13 @@ async def chat_with_kb(
     kb = await KnowledgeBase.get(kb_id)
     if not kb:
         raise HTTPException(status_code=404, detail="Knowledge Base not found")
+
+    llm_default_config, llm_keyword_config = await _resolve_retrieval_model_configs(
+        kb=kb,
+        request_default=request.pipeline_model_config or request.frontend_model_config,
+        request_keyword=request.model_config_keyword,
+        persist=True,
+    )
         
     metric_type = kb.metric_type or "COSINE"
     kb_emb_service = await get_embedding_service(kb)
@@ -276,7 +383,7 @@ async def chat_with_kb(
         stages = [PipelineStage(**s) for s in pipeline_config["stages"]]
         config = PipelineConfig(stages=stages)
         
-        llm_config = request.pipeline_model_config or request.frontend_model_config
+        llm_config = llm_default_config
         exec_ctx = await pipeline_executor.execute(
             kb_id=kb_id,
             query=request.query,
@@ -284,7 +391,7 @@ async def chat_with_kb(
             graph_backend=kb.graph_backend or "ontology",
             metric_type=metric_type,
             embedding_service=kb_emb_service,
-            llm_model_config=llm_config or kb.llm_model_config or {},
+            llm_model_config=llm_config or {},
         )
         
         results = exec_ctx.results
@@ -311,30 +418,34 @@ async def chat_with_kb(
             execution_logs.append(f"[Legacy] Auto-enabled graph search (Backend: {kb.graph_backend}). Strategy switched to '{target_strategy}'")
 
         # 1. Retrieve chunks
-        llm_config = request.pipeline_model_config or request.frontend_model_config
+        llm_config = llm_default_config
         strategy = retrieval_factory.get_strategy(target_strategy)
-        results = await strategy.search(
-            kb_id, 
-            request.query, 
-            request.top_k, 
-            metric_type=metric_type, 
-            score_threshold=request.score_threshold,
-            enable_graph_search=use_graph_search,
-            graph_hops=request.graph_hops,
-            graph_backend=kb.graph_backend or "ontology",
-            use_llm_keyword_extraction=request.use_llm_keyword_extraction,
-            use_multi_pos=request.use_multi_pos,
-            bm25_top_k=request.bm25_top_k,
-            use_parallel_search=request.use_parallel_search,
-            use_relation_filter=request.use_relation_filter,
-            enable_inverse_search=request.enable_inverse_search,
-            inverse_extraction_mode=request.inverse_extraction_mode,
-            use_schema_mode=request.use_schema_mode,
-            use_raw_log=request.use_raw_log,
-            execution_logs=execution_logs,
-            embedding_service=kb_emb_service,
-            llm_model_config=llm_config or kb.llm_model_config or {},
-        )
+        try:
+            results = await strategy.search(
+                kb_id, 
+                request.query, 
+                request.top_k, 
+                metric_type=metric_type, 
+                score_threshold=request.score_threshold,
+                enable_graph_search=use_graph_search,
+                graph_hops=request.graph_hops,
+                graph_backend=kb.graph_backend or "ontology",
+                use_llm_keyword_extraction=request.use_llm_keyword_extraction,
+                use_multi_pos=request.use_multi_pos,
+                bm25_top_k=request.bm25_top_k,
+                use_parallel_search=request.use_parallel_search,
+                use_relation_filter=request.use_relation_filter,
+                enable_inverse_search=request.enable_inverse_search,
+                inverse_extraction_mode=request.inverse_extraction_mode,
+                use_schema_mode=request.use_schema_mode,
+                use_raw_log=request.use_raw_log,
+                execution_logs=execution_logs,
+                embedding_service=kb_emb_service,
+                llm_model_config=llm_config or {},
+                keyword_llm_model_config=llm_keyword_config,
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=500, detail=f"모델 지정이 안되었습니다: {str(e)}")
         execution_logs.append(f"[Legacy] Search complete. Found {len(results)} chunks.")
         
         # [Trace Log Integration] Merge graph trace_logs into execution_logs
@@ -348,14 +459,17 @@ async def chat_with_kb(
         if request.use_reranker and request.strategy != "2-stage" and results:
             execution_logs.append(f"[Legacy] Applying Reranker (Top K: {request.reranker_top_k})")
             if request.use_llm_reranker:
-                results = await reranking_service.llm_rerank_results(
-                    query=request.query,
-                    results=results,
-                    top_k=request.reranker_top_k,
-                    threshold=request.reranker_threshold,
-                    strategy=request.llm_chunk_strategy,
-                    llm_model_config=llm_config or kb.llm_model_config or {},
-                )
+                try:
+                    results = await reranking_service.llm_rerank_results(
+                        query=request.query,
+                        results=results,
+                        top_k=request.reranker_top_k,
+                        threshold=request.reranker_threshold,
+                        strategy=request.llm_chunk_strategy,
+                        llm_model_config=llm_config or {},
+                    )
+                except ValueError as e:
+                    raise HTTPException(status_code=500, detail=f"모델 지정이 안되었습니다: {str(e)}")
             else:
                 results = await reranking_service.rerank_results(
                     query=request.query,
@@ -401,6 +515,11 @@ async def chat_with_kb(
     
     async def get_openai_client(config: Optional[dict]):
         """ModelConfig를 기반으로 OpenAI 호환 클라이언트 생성."""
+        if not config or not any(config.get(k) for k in ("provider", "provider_id", "model", "api_key", "base_url")):
+            raise HTTPException(
+                status_code=500,
+                detail="모델 지정이 안되었습니다: LLM 모델을 먼저 선택해주세요.",
+            )
         from app.core.models_resolver import resolve_model_config
         resolved = await resolve_model_config(config)
         api_key = resolved["api_key"]
@@ -454,7 +573,7 @@ async def chat_with_kb(
     context = "\n\n".join(context_parts)
 
     # LLM 모델 설정: model_config (프론트) / pipeline_model_config (백엔드) 호환
-    llm_config = request.pipeline_model_config or request.frontend_model_config
+    llm_config = llm_default_config or {}
     
     client, llm_model = await get_openai_client(llm_config)
     
@@ -558,4 +677,4 @@ async def get_chunk(kb_id: str, chunk_id: str):
     except Exception as e:
         print(f"[ChunkPreview] Error fetching chunk {chunk_id}: {e}")
         # Milvus error or connection error
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_format_model_error_message(str(e)))
