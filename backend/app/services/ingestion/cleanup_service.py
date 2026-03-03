@@ -17,6 +17,14 @@ class CleanupService:
         """
         print(f"[Cleanup] Starting cascading deletion for doc {doc_id} in KB {kb_id}")
         from app.models.document import Document, DocumentStatus
+        from app.models.knowledge_base import KnowledgeBase
+        
+        # Fetch KB settings to determine which graph DB to use
+        kb = await KnowledgeBase.get(kb_id)
+        enable_graph_rag = kb.enable_graph_rag if kb else False
+        graph_backend = kb.graph_backend if kb else "ontology"
+        
+        print(f"[Cleanup] KB settings - enable_graph_rag: {enable_graph_rag}, graph_backend: {graph_backend}")
         
         try:
             # Ensure Milvus connection (idempotent-ish check usually needed, but helper might handle it)
@@ -66,138 +74,144 @@ class CleanupService:
                 print(f"[Cleanup] ❌ Milvus connection failed: {e}")
                 # Don't return yet, try to proceed with what we can
     
-            # 2. Fuseki Cleanup (Graph)
-            try:
-                dataset_name = f"kb_{kb_id.replace('-', '_')}"
-                graph_uri = f"urn:doc:{doc_id}"
-                
-                # 2.1 DROP GRAPH (Named Graph)
-                fuseki_client.drop_graph(kb_id, graph_uri)
-                
-                # 2.2 Delete by Chunk IDs (Reification & Direct) in ALL Named Graphs
-                if chunk_ids:
-                    # Batch delete if too many
-                    batch_size = 50
-                    for i in range(0, len(chunk_ids), batch_size):
-                        batch = chunk_ids[i:i+batch_size]
-                        
-                        # Quote IDs for SPARQL
-                        quoted_ids = " ".join([f'"{cid}"' for cid in batch])
-                        
-                        # [FIX] Use GRAPH ?g to target ALL named graphs. 
-                        # Without it, DELETE only affects the default graph.
-                        delete_query = f"""
-                        PREFIX rel: <http://rag.local/relation/>
-                        PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
-                        PREFIX meta: <http://rag.local/meta/>
-                        
-                        DELETE {{ 
-                            GRAPH ?g {{
-                                ?stmt ?stmt_p ?stmt_o .
-                                ?s ?p ?o .
-                                ?inv_s ?inv_p ?s .
-                            }}
-                        }}
-                        WHERE {{
-                            GRAPH ?g {{
-                                VALUES ?cid {{ {quoted_ids} }}
-                                {{
-                                    # Pattern 1: Reification (meta:sourceNodeId)
-                                    ?stmt meta:sourceNodeId ?cid .
+            # 2. Fuseki Cleanup (Graph) - Only if Graph RAG is enabled and backend is ontology
+            if enable_graph_rag and graph_backend == "ontology":
+                try:
+                    dataset_name = f"kb_{kb_id.replace('-', '_')}"
+                    graph_uri = f"urn:doc:{doc_id}"
+                    
+                    # 2.1 DROP GRAPH (Named Graph)
+                    fuseki_client.drop_graph(kb_id, graph_uri)
+                    
+                    # 2.2 Delete by Chunk IDs (Reification & Direct) in ALL Named Graphs
+                    if chunk_ids:
+                        # Batch delete if too many
+                        batch_size = 50
+                        for i in range(0, len(chunk_ids), batch_size):
+                            batch = chunk_ids[i:i+batch_size]
+                            
+                            # Quote IDs for SPARQL
+                            quoted_ids = " ".join([f'"{cid}"' for cid in batch])
+                            
+                            # [FIX] Use GRAPH ?g to target ALL named graphs.
+                            # Without it, DELETE only affects the default graph.
+                            delete_query = f"""
+                            PREFIX rel: <http://rag.local/relation/>
+                            PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+                            PREFIX meta: <http://rag.local/meta/>
+                            
+                            DELETE {{
+                                GRAPH ?g {{
                                     ?stmt ?stmt_p ?stmt_o .
-                                    OPTIONAL {{
-                                        ?stmt rdf:subject ?s .
-                                        ?s ?p ?o .
-                                        OPTIONAL {{ ?inv_s ?inv_p ?s }}
+                                    ?s ?p ?o .
+                                    ?inv_s ?inv_p ?s .
+                                }}
+                            }}
+                            WHERE {{
+                                GRAPH ?g {{
+                                    VALUES ?cid {{ {quoted_ids} }}
+                                    {{
+                                        # Pattern 1: Reification (meta:sourceNodeId)
+                                        ?stmt meta:sourceNodeId ?cid .
+                                        ?stmt ?stmt_p ?stmt_o .
+                                        OPTIONAL {{
+                                            ?stmt rdf:subject ?s .
+                                            ?s ?p ?o .
+                                            OPTIONAL {{ ?inv_s ?inv_p ?s }}
+                                        }}
+                                    }}
+                                    UNION
+                                    {{
+                                         # Pattern 2: Direct Link (source URI)
+                                         BIND(URI(CONCAT("http://rag.local/source/", ?cid)) as ?srcUri)
+                                         ?s rel:hasSource ?srcUri .
+                                         ?s ?p ?o .
+                                         OPTIONAL {{ ?inv_s ?inv_p ?s }}
                                     }}
                                 }}
-                                UNION
-                                {{
-                                     # Pattern 2: Direct Link (source URI)
-                                     BIND(URI(CONCAT("http://rag.local/source/", ?cid)) as ?srcUri)
-                                     ?s rel:hasSource ?srcUri .
-                                     ?s ?p ?o .
-                                     OPTIONAL {{ ?inv_s ?inv_p ?s }}
-                                }}
                             }}
-                        }}
-                        """
-                        fuseki_client.update_sparql(kb_id, delete_query)
+                            """
+                            fuseki_client.update_sparql(kb_id, delete_query)
+                            
+                            # [ADD] Also drop manual graphs explicitly just in case they are completely separate
+                            for cid in batch:
+                                manual_graph_uri = f"urn:doc:manual_{cid}"
+                                fuseki_client.drop_graph(kb_id, manual_graph_uri)
                         
-                        # [ADD] Also drop manual graphs explicitly just in case they are completely separate
-                        for cid in batch:
-                            manual_graph_uri = f"urn:doc:manual_{cid}"
-                            fuseki_client.drop_graph(kb_id, manual_graph_uri)
-                    
-                # 2.3 Cleanup by meta:docId (Final safety net)
-                final_cleanup_query = f"""
-                PREFIX meta: <http://rag.local/meta/>
-                DELETE {{ 
-                    GRAPH ?g {{ ?s ?p ?o }} 
-                }}
-                WHERE {{
-                    GRAPH ?g {{
-                        ?stmt meta:docId ?did .
-                        FILTER(?did = "{doc_id}")
-                        ?s ?p ?o .
+                    # 2.3 Cleanup by meta:docId (Final safety net)
+                    final_cleanup_query = f"""
+                    PREFIX meta: <http://rag.local/meta/>
+                    DELETE {{
+                        GRAPH ?g {{ ?s ?p ?o }}
                     }}
-                }}
-                """
-                fuseki_client.update_sparql(kb_id, final_cleanup_query)
-    
+                    WHERE {{
+                        GRAPH ?g {{
+                            ?stmt meta:docId ?did .
+                            FILTER(?did = "{doc_id}")
+                            ?s ?p ?o .
+                        }}
+                    }}
+                    """
+                    fuseki_client.update_sparql(kb_id, final_cleanup_query)
+        
+                        
+                    print(f"[Cleanup] ✅ Fuseki deletion executed for {doc_id}")
                     
-                print(f"[Cleanup] ✅ Fuseki deletion executed for {doc_id}")
-                
-            except Exception as e:
-                print(f"[Cleanup] ❌ Fuseki cleanup failed: {e}")
-                # We continue to Milvus cleanup even if Graph fails, to ensure at least vector space is clean
+                except Exception as e:
+                    print(f"[Cleanup] ❌ Fuseki cleanup failed: {e}")
+                    # We continue to Milvus cleanup even if Graph fails, to ensure at least vector space is clean
+            else:
+                print(f"[Cleanup] ⏭️ Skipping Fuseki deletion (enable_graph_rag={enable_graph_rag}, graph_backend={graph_backend})")
     
-            # 3. Neo4j Cleanup (Graph)
-            try:
-                from app.core.neo4j_client import neo4j_client
-                
-                # Delete by doc_id
-                delete_query = """
-                MATCH ()-[r]->()
-                WHERE r.doc_id = $doc_id
-                DELETE r
-                RETURN count(r) as deleted_count
-                """
-                neo4j_client.execute_query(delete_query, {"doc_id": doc_id})
-                
-                # Delete by Chunk IDs (if doc_id missing on relationships)
-                if chunk_ids:
-                     batch_size = 1000
-                     for i in range(0, len(chunk_ids), batch_size):
-                        batch = chunk_ids[i:i+batch_size]
-                        chunk_query = """
-                        MATCH ()-[r]->()
-                        WHERE r.source_node_id IN $batch
-                        DELETE r
-                        """
-                        neo4j_client.execute_query(chunk_query, {"batch": batch})
-    
-                # Delete isolated Entity nodes
-                orphan_query = """
-                MATCH (n:Entity {kb_id: $kb_id})
-                WHERE NOT (n)--()
-                DELETE n
-                """
-                neo4j_client.execute_query(orphan_query, {"kb_id": kb_id})
-                
-                # Delete Chunk nodes for this document
-                chunk_delete_query = """
-                MATCH (c:Chunk {doc_id: $doc_id})
-                DELETE c
-                RETURN count(c) as deleted_chunks
-                """
-                result = neo4j_client.execute_query(chunk_delete_query, {"doc_id": doc_id})
-                deleted_chunks = result[0]["deleted_chunks"] if result else 0
-                print(f"[Cleanup] Deleted {deleted_chunks} Chunk nodes for doc {doc_id}")
-                
-                print(f"[Cleanup] ✅ Neo4j deletion executed for {doc_id}")
-            except Exception as e:
-                print(f"[Cleanup] ❌ Neo4j cleanup failed: {e}")
+            # 3. Neo4j Cleanup (Graph) - Only if Graph RAG is enabled and backend is neo4j
+            if enable_graph_rag and graph_backend == "neo4j":
+                try:
+                    from app.core.neo4j_client import neo4j_client
+                    
+                    # Delete by doc_id
+                    delete_query = """
+                    MATCH ()-[r]->()
+                    WHERE r.doc_id = $doc_id
+                    DELETE r
+                    RETURN count(r) as deleted_count
+                    """
+                    neo4j_client.execute_query(delete_query, {"doc_id": doc_id})
+                    
+                    # Delete by Chunk IDs (if doc_id missing on relationships)
+                    if chunk_ids:
+                         batch_size = 1000
+                         for i in range(0, len(chunk_ids), batch_size):
+                            batch = chunk_ids[i:i+batch_size]
+                            chunk_query = """
+                            MATCH ()-[r]->()
+                            WHERE r.source_node_id IN $batch
+                            DELETE r
+                            """
+                            neo4j_client.execute_query(chunk_query, {"batch": batch})
+        
+                    # Delete isolated Entity nodes
+                    orphan_query = """
+                    MATCH (n:Entity {kb_id: $kb_id})
+                    WHERE NOT (n)--()
+                    DELETE n
+                    """
+                    neo4j_client.execute_query(orphan_query, {"kb_id": kb_id})
+                    
+                    # Delete Chunk nodes for this document
+                    chunk_delete_query = """
+                    MATCH (c:Chunk {doc_id: $doc_id})
+                    DELETE c
+                    RETURN count(c) as deleted_chunks
+                    """
+                    result = neo4j_client.execute_query(chunk_delete_query, {"doc_id": doc_id})
+                    deleted_chunks = result[0]["deleted_chunks"] if result else 0
+                    print(f"[Cleanup] Deleted {deleted_chunks} Chunk nodes for doc {doc_id}")
+                    
+                    print(f"[Cleanup] ✅ Neo4j deletion executed for {doc_id}")
+                except Exception as e:
+                    print(f"[Cleanup] ❌ Neo4j cleanup failed: {e}")
+            else:
+                print(f"[Cleanup] ⏭️ Skipping Neo4j deletion (enable_graph_rag={enable_graph_rag}, graph_backend={graph_backend})")
     
             # 4. Milvus Cleanup (Vector)
             try:
