@@ -13,10 +13,10 @@ from app.api.ingest import router as ingest_router
 async def lifespan(app: FastAPI):
     """Application lifespan events."""
     # Startup
-    print(f"🚀 {settings.SERVICE_NAME} starting up...")
+    print(f"[IngestService] {settings.SERVICE_NAME} starting up...")
     yield
     # Shutdown
-    print(f"👋 {settings.SERVICE_NAME} shutting down...")
+    print(f"[IngestService] {settings.SERVICE_NAME} shutting down...")
 
 
 app = FastAPI(
