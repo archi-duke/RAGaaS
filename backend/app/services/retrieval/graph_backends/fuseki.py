@@ -15,9 +15,7 @@ class FusekiBackend(GraphBackend):
         self.generator = None
         try:
             from app.services.retrieval.sparql_generator import SPARQLGenerator
-            from app.core.config import settings
             self._SPARQLGenerator = SPARQLGenerator
-            self.generator = SPARQLGenerator(api_key=settings.OPENAI_API_KEY)
             print("DEBUG: [Fuseki] Doc2Onto SPARQLGenerator initialized successfully")
         except ImportError as e:
             print(f"WARNING: [Fuseki] Could not import Doc2Onto SPARQLGenerator: {e}. Using fallback logic.")
@@ -27,13 +25,16 @@ class FusekiBackend(GraphBackend):
             self._SPARQLGenerator = None
 
     async def _get_generator(self, llm_model_config: dict):
-        """llm_model_config로 SPARQLGenerator 동적 생성. 없으면 기본 generator 반환."""
-        if not llm_model_config or not self._SPARQLGenerator:
-            return self.generator
+        """llm_model_config로 SPARQLGenerator 동적 생성."""
+        if not self._SPARQLGenerator:
+            raise ValueError("SPARQLGenerator is unavailable.")
+        if not llm_model_config:
+            raise ValueError("Graph query model is not configured.")
         from app.core.models_resolver import resolve_model_config
-        from app.core.config import settings
         resolved = await resolve_model_config(llm_model_config)
-        api_key = resolved.get("api_key") or settings.OPENAI_API_KEY
+        api_key = resolved.get("api_key")
+        if not api_key:
+            raise ValueError("Graph query API key is not configured.")
         return self._SPARQLGenerator(api_key=api_key)
 
     def _extract_entities_from_question(self, query_text: str, existing_entities: List[str]) -> List[str]:

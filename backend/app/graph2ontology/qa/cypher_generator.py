@@ -1,4 +1,3 @@
-import os
 import json
 import requests
 from typing import Union, Optional,  Optional, Union, Dict
@@ -75,13 +74,9 @@ class CypherGenerator:
     ):
         self.llm_endpoint = llm_endpoint or "https://api.openai.com/v1/chat/completions"
         self.llm_model = llm_model
-        # RAGaaS 환경 변수 설정에 맞게 기본값 수정 가능
-        from app.core.config import settings as app_settings
-        self.api_key = api_key or os.environ.get("OPENAI_API_KEY", "") or app_settings.OPENAI_API_KEY
-
+        self.api_key = api_key
         if not self.api_key:
-            # RAGaaS 실행 환경에서 OPENAI_API_KEY가 없을 경우 대비
-            pass
+            raise ValueError("Graph2Ontology Cypher generator model API key is not configured.")
 
     def generate(self, question: str, context: Optional[str] = None, mode: str = "graph", custom_prompt: Optional[str] = None, inverse_search_mode: str = "auto") -> Dict:
         """사용자 질문을 Cypher로 변환

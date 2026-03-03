@@ -3,7 +3,6 @@ from .base import RetrievalStrategy
 from .graph_backends import GraphBackendFactory
 from app.core.fuseki import fuseki_client
 from app.core.neo4j_client import neo4j_client
-from app.core.config import settings
 from openai import AsyncOpenAI
 import json
 import logging
@@ -27,18 +26,18 @@ class GraphRetrievalStrategy(RetrievalStrategy):
         llm_model_config = kwargs.get("llm_model_config") or {}
         emb_service = kwargs.get("embedding_service", default_embedding_service)
 
-        if llm_model_config:
-            from app.core.models_resolver import resolve_model_config
-            resolved_llm = await resolve_model_config(llm_model_config)
-            llm_client = AsyncOpenAI(
-                api_key=resolved_llm.get("api_key") or settings.OPENAI_API_KEY,
-                **({"base_url": resolved_llm["base_url"]} if resolved_llm.get("base_url") else {}),
-                **({"default_headers": resolved_llm["extra_headers"]} if resolved_llm.get("extra_headers") else {}),
-            )
-            llm_model_name = resolved_llm.get("model", "gpt-4o-mini")
-        else:
-            llm_client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
-            llm_model_name = "gpt-4o-mini"
+        if not llm_model_config:
+            raise ValueError("Graph search model is not configured.")
+        from app.core.models_resolver import resolve_model_config
+        resolved_llm = await resolve_model_config(llm_model_config)
+        if not resolved_llm.get("api_key"):
+            raise ValueError("Graph search API key is not configured.")
+        llm_client = AsyncOpenAI(
+            api_key=resolved_llm.get("api_key"),
+            **({"base_url": resolved_llm["base_url"]} if resolved_llm.get("base_url") else {}),
+            **({"default_headers": resolved_llm["extra_headers"]} if resolved_llm.get("extra_headers") else {}),
+        )
+        llm_model_name = resolved_llm.get("model", "gpt-4o-mini")
         
         import time
         from datetime import datetime
@@ -219,7 +218,9 @@ class GraphRetrievalStrategy(RetrievalStrategy):
         Output format: {{"entities": ["성기훈", "오일남"], "translated_entities": ["Seong Gi-hun", "Oh Il-nam"]}}
         """
         try:
-            client = llm_client or AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+            if llm_client is None:
+                raise ValueError("Graph search model client is not configured.")
+            client = llm_client
             response = await client.chat.completions.create(
                 model=llm_model,
                 messages=[
@@ -325,7 +326,9 @@ class GraphRetrievalStrategy(RetrievalStrategy):
             }}
             """
             
-            client = llm_client or AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+            if llm_client is None:
+                raise ValueError("Graph search model client is not configured.")
+            client = llm_client
             response = await client.chat.completions.create(
                 model=llm_model,
                 messages=[

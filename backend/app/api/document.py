@@ -17,6 +17,172 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+_UPLOAD_LLM_KEYMAP = {
+    "ingest": {
+        "provider": "llm_provider",
+        "model": "llm_model",
+        "base_url": "llm_base_url",
+        "provider_id": "llm_provider_id",
+    },
+    "chunk_grouping": {
+        "provider": "chunk_grouping_llm_provider",
+        "model": "chunk_grouping_llm_model",
+        "base_url": "chunk_grouping_llm_base_url",
+        "provider_id": "chunk_grouping_llm_provider_id",
+    },
+    "subject_restoration": {
+        "provider": "subject_restoration_llm_provider",
+        "model": "subject_restoration_llm_model",
+        "base_url": "subject_restoration_llm_base_url",
+        "provider_id": "subject_restoration_llm_provider_id",
+    },
+    "noun_extraction": {
+        "provider": "noun_extraction_llm_provider",
+        "model": "noun_extraction_llm_model",
+        "base_url": "noun_extraction_llm_base_url",
+        "provider_id": "noun_extraction_llm_provider_id",
+    },
+}
+
+
+async def _resolve_upload_llm_config(
+    final_config: Dict[str, Any],
+    kind: str,
+    default_model: str = "gpt-4o-mini",
+) -> Optional[Dict[str, Any]]:
+    keymap = _UPLOAD_LLM_KEYMAP[kind]
+    model_cfg = {
+        "provider": final_config.get(keymap["provider"]),
+        "model": final_config.get(keymap["model"]),
+        "base_url": final_config.get(keymap["base_url"]),
+        "provider_id": final_config.get(keymap["provider_id"]),
+    }
+    if not any(model_cfg.values()):
+        return None
+
+    from app.core.models_resolver import resolve_model_config
+    resolved = await resolve_model_config(model_cfg, default_model=default_model)
+    return {
+        "model": resolved.get("model", default_model),
+        "api_key": resolved.get("api_key"),
+        "base_url": resolved.get("base_url"),
+        "extra_headers": resolved.get("extra_headers") or {},
+    }
+
+
+def _has_model_selection(config: Optional[Dict[str, Any]]) -> bool:
+    if not config:
+        return False
+    return any(
+        config.get(k)
+        for k in ("provider", "provider_id", "model", "api_key", "base_url")
+    )
+
+
+async def _persist_upload_model_settings(kb: KBModel, final_config: Dict[str, Any]) -> None:
+    """
+    Persist selected upload model fields into KB chunking_config.
+    - If a value is provided, save it for next uploads.
+    - If a value is missing, existing saved value remains unchanged.
+    """
+    stored_cfg = kb.chunking_config.copy() if kb.chunking_config else {}
+    changed = False
+
+    model_keys = set()
+    for mapping in _UPLOAD_LLM_KEYMAP.values():
+        model_keys.update(mapping.values())
+
+    for key in model_keys:
+        value = final_config.get(key)
+        if value is None or value == "":
+            continue
+        if stored_cfg.get(key) != value:
+            stored_cfg[key] = value
+            changed = True
+
+    if changed:
+        kb.chunking_config = stored_cfg
+        await kb.save()
+
+
+async def _build_and_validate_upload_model_configs(
+    *,
+    kb: KBModel,
+    final_config: Dict[str, Any],
+    chunking_cfg: Dict[str, Any],
+    graph_config: Dict[str, Any],
+    enable_subject_restoration: bool,
+    enable_entity_normalization: bool,
+) -> Dict[str, Optional[Dict[str, Any]]]:
+    from app.core.models_resolver import resolve_model_config
+
+    # Embedding model is always required for ingestion.
+    embedding_resolved = await resolve_model_config({
+        "model": kb.embedding_model,
+        "provider": kb.embedding_provider,
+        "provider_id": kb.embedding_provider_id,
+    })
+    embedding_cfg = {
+        "model": embedding_resolved.get("model"),
+        "api_key": embedding_resolved.get("api_key"),
+        "base_url": embedding_resolved.get("base_url"),
+        "extra_headers": embedding_resolved.get("extra_headers") or {},
+        "embedding_request_format": embedding_resolved.get("embedding_request_format", "openai"),
+    }
+    if not _has_model_selection({
+        "model": kb.embedding_model,
+        "provider": kb.embedding_provider,
+        "provider_id": kb.embedding_provider_id,
+    }):
+        raise HTTPException(
+            status_code=500,
+            detail="모델 지정이 안되었습니다: 임베딩 모델을 먼저 설정해주세요.",
+        )
+    if embedding_cfg["embedding_request_format"] != "minimal" and not embedding_cfg.get("api_key"):
+        raise HTTPException(
+            status_code=500,
+            detail="모델 지정이 안되었습니다: 임베딩 모델 API Key를 먼저 등록해주세요.",
+        )
+
+    async def require_llm(kind: str, label: str) -> Dict[str, Any]:
+        cfg = await _resolve_upload_llm_config(final_config, kind, default_model="gpt-4o-mini")
+        if not _has_model_selection(cfg):
+            raise HTTPException(
+                status_code=500,
+                detail=f"모델 지정이 안되었습니다: {label} 모델을 설정해주세요.",
+            )
+        if not cfg.get("api_key"):
+            raise HTTPException(
+                status_code=500,
+                detail=f"모델 지정이 안되었습니다: {label} 모델 API Key를 등록해주세요.",
+            )
+        return cfg
+
+    ingest_llm_cfg: Optional[Dict[str, Any]] = None
+    chunk_grouping_llm_cfg: Optional[Dict[str, Any]] = None
+    subject_restoration_llm_cfg: Optional[Dict[str, Any]] = None
+    noun_extraction_llm_cfg: Optional[Dict[str, Any]] = None
+
+    if chunking_cfg.get("strategy") == "context_aware":
+        chunk_grouping_llm_cfg = await require_llm("chunk_grouping", "Chunk Grouping")
+
+    if graph_config.get("extractor_type") != "none":
+        ingest_llm_cfg = await require_llm("ingest", "Graph Triple Extraction")
+        if enable_entity_normalization:
+            noun_extraction_llm_cfg = await require_llm("noun_extraction", "Noun Extraction")
+
+    if enable_subject_restoration:
+        subject_restoration_llm_cfg = await require_llm("subject_restoration", "Subject Restoration")
+
+    return {
+        "embedding_model": embedding_cfg,
+        "ingest_llm": ingest_llm_cfg,
+        "chunk_grouping_llm": chunk_grouping_llm_cfg,
+        "subject_restoration_llm": subject_restoration_llm_cfg,
+        "noun_extraction_llm": noun_extraction_llm_cfg,
+    }
+
+
 class TextUploadRequest(BaseModel):
     title: str
     content: str
@@ -88,12 +254,26 @@ async def upload_text_document(
         except Exception:
             logger.error("Failed to parse chunking_config override")
 
+    await _persist_upload_model_settings(kb, final_config)
+
     chunking_cfg = {
         "strategy": final_config.get("chunking_strategy") or final_config.get("strategy") or kb.chunking_strategy or "fixed_size",
         "chunk_size": final_config.get("chunk_size") or 300,
         "chunk_overlap": final_config.get("chunk_overlap") or 20,
         "window_size": final_config.get("window_size") or 3,
         "chunk_sizes": final_config.get("chunk_sizes") or [2048, 512, 128],
+        "parent_size": final_config.get("parent_size")
+        if final_config.get("parent_size") is not None
+        else (final_config.get("chunk_sizes") or [2048, 512])[0],
+        "child_size": final_config.get("child_size")
+        if final_config.get("child_size") is not None
+        else (final_config.get("chunk_sizes") or [2048, 512])[1],
+        "parent_overlap": final_config.get("parent_overlap")
+        if final_config.get("parent_overlap") is not None
+        else 0,
+        "child_overlap": final_config.get("child_overlap")
+        if final_config.get("child_overlap") is not None
+        else 100,
         "buffer_size": final_config.get("buffer_size") or 1,
         "breakpoint_threshold": final_config.get("breakpoint_threshold") or 95,
     }
@@ -119,6 +299,15 @@ async def upload_text_document(
         final_enable_entity_normalization = body.enable_entity_normalization
         final_enable_normalization_confirmation = body.enable_normalization_confirmation
 
+    model_configs = await _build_and_validate_upload_model_configs(
+        kb=kb,
+        final_config=final_config,
+        chunking_cfg=chunking_cfg,
+        graph_config=graph_config,
+        enable_subject_restoration=body.enable_subject_restoration,
+        enable_entity_normalization=final_enable_entity_normalization,
+    )
+
     doc.extractor_type = graph_config.get("extractor_type")
     doc.max_paths = graph_config.get("max_paths_per_chunk")
     doc.enable_text_cleaning = body.enable_text_cleaning
@@ -141,19 +330,6 @@ async def upload_text_document(
     async def call_ingest_service():
         try:
             from app.services.ingestion.ingest_client import ingest_client
-            from app.core.models_resolver import resolve_model_config
-            resolved = await resolve_model_config({
-                "model": kb.embedding_model,
-                "provider": kb.embedding_provider,
-                "provider_id": kb.embedding_provider_id,
-            })
-            embedding_model_cfg = {
-                "model": resolved["model"],
-                "api_key": resolved.get("api_key"),
-                "base_url": resolved.get("base_url"),
-                "extra_headers": resolved.get("extra_headers") or {},
-                "embedding_request_format": resolved.get("embedding_request_format", "openai"),
-            }
             await ingest_client.create_ingest_job(
                 kb_id=kb_id,
                 doc_id=str(doc.id),
@@ -172,7 +348,11 @@ async def upload_text_document(
                 callback_url=callback_url,
                 entity_dictionary=None,
                 sampling_size=50000,
-                embedding_model=embedding_model_cfg,
+                ingest_llm=model_configs["ingest_llm"],
+                chunk_grouping_llm=model_configs["chunk_grouping_llm"],
+                subject_restoration_llm=model_configs["subject_restoration_llm"],
+                noun_extraction_llm=model_configs["noun_extraction_llm"],
+                embedding_model=model_configs["embedding_model"],
             )
         except Exception as e:
             logger.error(f"[Ingest Text] Service call failed: {e}")
@@ -265,6 +445,8 @@ async def upload_document(
         except Exception:
             logger.error("Failed to parse chunking_config override")
 
+    await _persist_upload_model_settings(kb, final_config)
+
     # Build Pipeline Configs
     chunking_cfg = {
         "strategy": final_config.get("chunking_strategy") or final_config.get("strategy") or kb.chunking_strategy or "fixed_size",
@@ -272,6 +454,18 @@ async def upload_document(
         "chunk_overlap": final_config.get("chunk_overlap") or 20,
         "window_size": final_config.get("window_size") or 3,
         "chunk_sizes": final_config.get("chunk_sizes") or [2048, 512, 128],
+        "parent_size": final_config.get("parent_size")
+        if final_config.get("parent_size") is not None
+        else (final_config.get("chunk_sizes") or [2048, 512])[0],
+        "child_size": final_config.get("child_size")
+        if final_config.get("child_size") is not None
+        else (final_config.get("chunk_sizes") or [2048, 512])[1],
+        "parent_overlap": final_config.get("parent_overlap")
+        if final_config.get("parent_overlap") is not None
+        else 0,
+        "child_overlap": final_config.get("child_overlap")
+        if final_config.get("child_overlap") is not None
+        else 100,
         "buffer_size": final_config.get("buffer_size") or 1,
         "breakpoint_threshold": final_config.get("breakpoint_threshold") or 95,
     }
@@ -302,6 +496,15 @@ async def upload_document(
         # Graph 모드에서는 파라미터로 받은 값 사용
         final_enable_entity_normalization = enable_entity_normalization
         final_enable_normalization_confirmation = enable_normalization_confirmation
+
+    model_configs = await _build_and_validate_upload_model_configs(
+        kb=kb,
+        final_config=final_config,
+        chunking_cfg=chunking_cfg,
+        graph_config=graph_config,
+        enable_subject_restoration=enable_subject_restoration,
+        enable_entity_normalization=final_enable_entity_normalization,
+    )
 
     # Update document record with extraction settings
     doc.extractor_type = graph_config.get("extractor_type")
@@ -341,19 +544,6 @@ async def upload_document(
     async def call_ingest_service():
         try:
             from app.services.ingestion.ingest_client import ingest_client
-            from app.core.models_resolver import resolve_model_config
-            resolved = await resolve_model_config({
-                "model": kb.embedding_model,
-                "provider": kb.embedding_provider,
-                "provider_id": kb.embedding_provider_id,
-            })
-            embedding_model_cfg = {
-                "model": resolved["model"],
-                "api_key": resolved.get("api_key"),
-                "base_url": resolved.get("base_url"),
-                "extra_headers": resolved.get("extra_headers") or {},
-                "embedding_request_format": resolved.get("embedding_request_format", "openai"),
-            }
             await ingest_client.create_ingest_job(
                 kb_id=kb_id,
                 doc_id=str(doc.id),
@@ -372,7 +562,11 @@ async def upload_document(
                 callback_url=callback_url,
                 entity_dictionary=dict_data,
                 sampling_size=doc.max_sample_size,
-                embedding_model=embedding_model_cfg,
+                ingest_llm=model_configs["ingest_llm"],
+                chunk_grouping_llm=model_configs["chunk_grouping_llm"],
+                subject_restoration_llm=model_configs["subject_restoration_llm"],
+                noun_extraction_llm=model_configs["noun_extraction_llm"],
+                embedding_model=model_configs["embedding_model"],
             )
         except Exception as e:
             logger.error(f"[Ingest] Service call failed: {e}")

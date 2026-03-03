@@ -2,7 +2,6 @@ from typing import List, Tuple, Dict, Any
 from pathlib import Path
 from app.services.ingestion.spacy_processor import SpacyGraphProcessor
 from openai import AsyncOpenAI
-from app.core.config import settings
 import json
 import logging
 import re
@@ -25,7 +24,7 @@ class GraphProcessor:
         self.namespace_source = "http://rag.local/source/"
 
     def _get_llm_client(self, config: Dict[str, Any]) -> AsyncOpenAI:
-        """config의 llm_model_config 또는 env fallback으로 클라이언트를 반환."""
+        """config의 llm_model_config로 클라이언트를 반환."""
         llm_cfg = config.get("llm_model_config") or {}
         if llm_cfg.get("api_key"):
             kwargs: dict = {"api_key": llm_cfg["api_key"]}
@@ -34,7 +33,7 @@ class GraphProcessor:
             if llm_cfg.get("extra_headers"):
                 kwargs["default_headers"] = llm_cfg["extra_headers"]
             return AsyncOpenAI(**kwargs)
-        return AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+        raise ValueError("Ingestion graph model API key is not configured.")
 
     def _sanitize_uri(self, text: str) -> str:
         """Sanitize text to be used in URI."""

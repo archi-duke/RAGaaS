@@ -234,12 +234,10 @@ class OntologyPromoter:
         return result
     
     def _call_llm_for_schema(self, prompt: str) -> dict:
-        """LLM API 호출 (settings.OPENAI_API_KEY fallback)"""
-        from app.core.config import settings as app_settings
-        api_key = os.environ.get("OPENAI_API_KEY") or app_settings.OPENAI_API_KEY
+        """LLM API 호출"""
+        api_key = os.environ.get("OPENAI_API_KEY")
         if not api_key:
-             print("[OntologyPromoter] API Key not found. Skipping LLM schema generation.")
-             return {}
+             raise ValueError("Ontology promoter model API key is not configured.")
 
         headers = {
             "Authorization": f"Bearer {api_key}",

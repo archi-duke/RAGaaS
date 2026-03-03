@@ -70,7 +70,9 @@ class ChunkingService:
         model: str = None,
         base_url: str = None,
     ) -> List[str]:
-        effective_api_key = api_key or settings.OPENAI_API_KEY
+        effective_api_key = api_key
+        if not effective_api_key:
+            raise ValueError("Semantic chunking embedding API key is not configured.")
         effective_model = model or "text-embedding-3-small"
         emb_kwargs: dict = {"api_key": effective_api_key, "model": effective_model}
         if base_url:

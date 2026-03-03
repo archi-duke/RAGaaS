@@ -82,12 +82,11 @@ class OpenAIExtractor(BaseExtractor):
         super().__init__(confidence_threshold)
         self.llm_endpoint = llm_endpoint or "https://api.openai.com/v1/chat/completions"
         self.llm_model = llm_model
-        from app.core.config import settings as app_settings
-        self.api_key = api_key or os.environ.get("OPENAI_API_KEY", "") or app_settings.OPENAI_API_KEY
+        self.api_key = api_key
         self.examples_prompt = ""
 
         if not self.api_key:
-            raise ValueError("API Key가 설정되지 않았습니다. Provider 설정을 확인하거나 OPENAI_API_KEY 환경변수를 설정하세요.")
+            raise ValueError("OpenAIExtractor model API key is not configured.")
             
         # Few-shot 예제 로드
         if examples_path and Path(examples_path).exists():

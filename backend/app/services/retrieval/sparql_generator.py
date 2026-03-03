@@ -1,4 +1,3 @@
-import os
 import json
 import requests
 from typing import Optional, Dict, List
@@ -88,8 +87,9 @@ You MUST respond in JSON format:
     ):
         self.llm_endpoint = llm_endpoint or "https://api.openai.com/v1/chat/completions"
         self.llm_model = llm_model
-        from app.core.config import settings as app_settings
-        self.api_key = api_key or os.environ.get("OPENAI_API_KEY", "") or app_settings.OPENAI_API_KEY
+        self.api_key = api_key
+        if not self.api_key:
+            raise ValueError("SPARQLGenerator model API key is not configured.")
 
     def _format_prefixes(self) -> str:
         """Format standard prefixes as a string for inclusion in prompts."""
