@@ -6,6 +6,26 @@ if TYPE_CHECKING:
     from app.models.knowledge_base import KnowledgeBase
 
 
+# TODO: REMOVE DEBUG LOGGING AFTER DEBUGGING
+async def _log_request(request: httpx.Request):
+    """Debug log for outgoing requests"""
+    print(f"\n{'='*20} [DEBUG] HTTP REQUEST START {'='*20}")
+    print(f"Method: {request.method}")
+    print(f"URL: {request.url}")
+    print(f"Headers: {dict(request.headers)}")
+    try:
+        content = request.read().decode("utf-8")
+        print(f"Body: {content[:2000]}{'...' if len(content) > 2000 else ''}")
+    except Exception:
+        print("Body: [binary or un-decodable]")
+    print(f"{'='*20} [DEBUG] HTTP REQUEST END {'='*20}\n")
+
+async def _log_response(response: httpx.Response):
+    """Debug log for incoming responses"""
+    print(f"[DEBUG] HTTP RESPONSE: {response.status_code} {response.url}\n")
+# ------------------------------
+
+
 class EmbeddingService:
     def __init__(
         self,
@@ -31,6 +51,11 @@ class EmbeddingService:
                 client_kwargs["base_url"] = self.base_url
             if self.extra_headers:
                 client_kwargs["default_headers"] = self.extra_headers
+            
+            # Using custom http_client to log requests
+            client_kwargs["http_client"] = httpx.AsyncClient(
+                event_hooks={'request': [_log_request], 'response': [_log_response]}
+            )
             self.client = AsyncOpenAI(**client_kwargs)
 
     async def get_embeddings(self, texts: List[str]) -> List[List[float]]:
@@ -55,7 +80,10 @@ class EmbeddingService:
         headers = {"Content-Type": "application/json", **self.extra_headers}
         payload: dict = {"input": texts[0] if len(texts) == 1 else texts}
 
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(
+            timeout=60.0, 
+            event_hooks={'request': [_log_request], 'response': [_log_response]}
+        ) as client:
             resp = await client.post(url, headers=headers, json=payload)
             resp.raise_for_status()
             data = resp.json()

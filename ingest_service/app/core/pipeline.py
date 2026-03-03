@@ -41,6 +41,26 @@ from app.core.config import settings
 import httpx
 
 
+# TODO: REMOVE DEBUG LOGGING AFTER DEBUGGING
+async def _log_request(request: httpx.Request):
+    """Debug log for outgoing requests"""
+    print(f"\n{'='*20} [DEBUG] HTTP REQUEST START {'='*20}")
+    print(f"Method: {request.method}")
+    print(f"URL: {request.url}")
+    print(f"Headers: {dict(request.headers)}")
+    try:
+        content = request.read().decode("utf-8")
+        print(f"Body: {content[:2000]}{'...' if len(content) > 2000 else ''}")
+    except Exception:
+        print("Body: [binary or un-decodable]")
+    print(f"{'='*20} [DEBUG] HTTP REQUEST END {'='*20}\n")
+
+async def _log_response(response: httpx.Response):
+    """Debug log for incoming responses"""
+    print(f"[DEBUG] HTTP RESPONSE: {response.status_code} {response.url}\n")
+# ------------------------------
+
+
 class MinimalEmbedding:
     """
     Minimal embedding API format (e.g. Samsung embedding API):
@@ -57,7 +77,10 @@ class MinimalEmbedding:
         url = f"{self.base_url}/v1/embeddings"
         headers = {"Content-Type": "application/json", **self.extra_headers}
         payload = {"input": text}
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(
+            timeout=60.0, 
+            event_hooks={'request': [_log_request], 'response': [_log_response]}
+        ) as client:
             resp = await client.post(url, headers=headers, json=payload)
             resp.raise_for_status()
             data = resp.json()
@@ -396,6 +419,9 @@ class IngestPipeline:
             api_key=config.get("api_key"),
             base_url=config.get("base_url"),
             timeout=120.0,  # Add timeout to prevent hanging
+            http_client=httpx.AsyncClient(
+                event_hooks={'request': [_log_request], 'response': [_log_response]}
+            )
         )
 
     def _get_embedding_model(self, config: Optional[Dict[str, Any]]):
@@ -414,6 +440,9 @@ class IngestPipeline:
             api_key=config.get("api_key"),
             base_url=config.get("base_url"),
             timeout=60.0,  # Add timeout to prevent hanging
+            http_client=httpx.AsyncClient(
+                event_hooks={'request': [_log_request], 'response': [_log_response]}
+            )
         )
     
     def get_node_parser(
