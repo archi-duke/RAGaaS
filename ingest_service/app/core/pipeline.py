@@ -384,11 +384,13 @@ class IngestPipeline:
         # Initialize default LLM and Embedding
         self.default_llm = OpenAI(
             model=settings.OPENAI_MODEL,
-            api_key=settings.OPENAI_API_KEY
+            api_key=settings.OPENAI_API_KEY,
+            timeout=120.0,  # Add timeout to prevent hanging
         )
         self.default_embed_model = OpenAIEmbedding(
             model=settings.EMBEDDING_MODEL,
-            api_key=settings.OPENAI_API_KEY
+            api_key=settings.OPENAI_API_KEY,
+            timeout=60.0,  # Add timeout to prevent hanging
         )
         
         # Set global settings (default)
@@ -402,7 +404,8 @@ class IngestPipeline:
         return OpenAI(
             model=config.get("model", settings.OPENAI_MODEL),
             api_key=config.get("api_key", settings.OPENAI_API_KEY),
-            base_url=config.get("base_url")
+            base_url=config.get("base_url"),
+            timeout=120.0,  # Add timeout to prevent hanging
         )
 
     def _get_embedding_model(self, config: Optional[Dict[str, Any]]):
@@ -420,6 +423,7 @@ class IngestPipeline:
             model=config.get("model", settings.EMBEDDING_MODEL),
             api_key=config.get("api_key", settings.OPENAI_API_KEY),
             base_url=config.get("base_url"),
+            timeout=60.0,  # Add timeout to prevent hanging
         )
     
     def get_node_parser(
