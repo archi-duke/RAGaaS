@@ -10,9 +10,6 @@ interface GraphParams {
     generate_inverse_relations: boolean;
     allowed_entity_types: string[];
     allowed_relation_types: string[];
-    enable_text_cleaning: boolean;
-    enable_subject_restoration: boolean;
-    enable_inference: boolean;
     chunk_size: number;
     extraction_examples_yaml: string;
     custom_prompt: string;
@@ -31,10 +28,6 @@ interface GraphExtractionSettingsProps {
     showEntitySample?: boolean;
     showExtractorType?: boolean;
     // LLM model configs (from central settings)
-    subjectRestorationLlm?: ModelConfig;
-    nounExtractionLlm?: ModelConfig;
-    onSubjectRestorationLlmChange?: (cfg: ModelConfig) => void;
-    onNounExtractionLlmChange?: (cfg: ModelConfig) => void;
     ingestLlm?: ModelConfig;
     onIngestLlmChange?: (cfg: ModelConfig) => void;
 }
@@ -81,10 +74,6 @@ export default function GraphExtractionSettings({
     onEditPrompt,
     showEntitySample = true,
     showExtractorType = false,
-    subjectRestorationLlm = DEFAULT_LLM_CONFIG,
-    nounExtractionLlm = DEFAULT_LLM_CONFIG,
-    onSubjectRestorationLlmChange,
-    onNounExtractionLlmChange,
     ingestLlm = DEFAULT_LLM_CONFIG,
     onIngestLlmChange,
 }: GraphExtractionSettingsProps) {
@@ -219,70 +208,6 @@ export default function GraphExtractionSettings({
                 {/* Options Column */}
                 <div>
                     <h4 style={{ margin: '0 0 1rem 0', fontSize: '0.9rem', color: '#475569' }}>Options</h4>
-
-                    {/* Clean Text */}
-                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', marginBottom: '1rem' }}>
-                        <input
-                            type="checkbox"
-                            checked={graphParams.enable_text_cleaning}
-                            onChange={(e) => updateParams({ enable_text_cleaning: e.target.checked })}
-                            style={{ width: '1.1rem', height: '1.1rem', accentColor: '#3b82f6', flexShrink: 0 }}
-                        />
-                        <div>
-                            <span style={{ color: '#334155', fontWeight: 500, fontSize: '0.9rem' }}>Clean Text</span>
-                            <div style={{ fontSize: '0.75rem', color: '#64748b' }}>Remove bullets, numbers</div>
-                        </div>
-                    </label>
-
-                    {/* Subject Restoration + LLM selector */}
-                    <div style={{ marginBottom: '1rem' }}>
-                        <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', marginBottom: '0.4rem' }}>
-                            <input
-                                type="checkbox"
-                                checked={graphParams.enable_subject_restoration}
-                                onChange={(e) => updateParams({ enable_subject_restoration: e.target.checked })}
-                                style={{ width: '1.1rem', height: '1.1rem', accentColor: '#3b82f6', flexShrink: 0 }}
-                            />
-                            <div>
-                                <span style={{ color: '#334155', fontWeight: 500, fontSize: '0.9rem' }}>Subject Restoration</span>
-                                <div style={{ fontSize: '0.75rem', color: '#64748b' }}>Resolve omitted subjects (KR)</div>
-                            </div>
-                        </label>
-                        {graphParams.enable_subject_restoration && onSubjectRestorationLlmChange && (
-                            <div style={{ marginLeft: '1.6rem' }}>
-                                <ModelSelector
-                                    type="llm"
-                                    value={subjectRestorationLlm}
-                                    onChange={onSubjectRestorationLlmChange}
-                                />
-                            </div>
-                        )}
-                    </div>
-
-                    {/* Noun Extraction + LLM selector */}
-                    <div style={{ marginBottom: '1rem' }}>
-                        <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', marginBottom: '0.4rem' }}>
-                            <input
-                                type="checkbox"
-                                checked={graphParams.enable_inference}
-                                onChange={(e) => updateParams({ enable_inference: e.target.checked })}
-                                style={{ width: '1.1rem', height: '1.1rem', accentColor: '#3b82f6', flexShrink: 0 }}
-                            />
-                            <div>
-                                <span style={{ color: '#334155', fontWeight: 500, fontSize: '0.9rem' }}>Noun Extraction</span>
-                                <div style={{ fontSize: '0.75rem', color: '#64748b' }}>Extract named entities for dictionary</div>
-                            </div>
-                        </label>
-                        {graphParams.enable_inference && onNounExtractionLlmChange && (
-                            <div style={{ marginLeft: '1.6rem' }}>
-                                <ModelSelector
-                                    type="llm"
-                                    value={nounExtractionLlm}
-                                    onChange={onNounExtractionLlmChange}
-                                />
-                            </div>
-                        )}
-                    </div>
 
                     {/* Triple Extraction LLM — always active in graph mode */}
                     {onIngestLlmChange && (

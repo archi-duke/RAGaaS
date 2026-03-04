@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, FileText, Type } from 'lucide-react';
+import { Upload, FileText, Type, Wand2 } from 'lucide-react';
 import { docApi, kbApi } from '../services/api';
 import MessageDialog from './MessageDialog';
 import PromptDialog from './PromptDialog';
@@ -73,9 +73,6 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
         generate_inverse_relations: true,
         allowed_entity_types: [] as string[],
         allowed_relation_types: [] as string[],
-        enable_text_cleaning: false,
-        enable_subject_restoration: true,
-        enable_inference: false,
         chunk_size: 300,
         extraction_examples_yaml: '',
         custom_prompt: '',
@@ -84,6 +81,13 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
         normalization_threshold: 0.85,
         max_sample_size: 50000,
         enable_normalization_confirmation: false,
+    });
+
+    // 전처리 옵션 (청킹 방식과 무관하게 항상 적용 가능)
+    const [preprocessingParams, setPreprocessingParams] = useState({
+        enable_text_cleaning: false,
+        enable_subject_restoration: true,
+        enable_noun_extraction: false,
     });
 
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -138,6 +142,10 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
         try {
             const config = {
                 ...graphParams,
+                // 전처리 옵션
+                enable_text_cleaning: preprocessingParams.enable_text_cleaning,
+                enable_subject_restoration: preprocessingParams.enable_subject_restoration,
+                enable_inference: preprocessingParams.enable_noun_extraction,
                 chunking_strategy: strategy,
                 chunking_config: chunkingConfig,
                 // Ingest LLM (Chunk/Node Processing)
@@ -300,6 +308,96 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                             )}
                         </div>
 
+                        {/* ── Preprocessing Options ── */}
+                        <div style={{ marginBottom: '1.5rem', background: '#f8fafc', padding: '15px', borderRadius: '12px', border: '1px solid #e2e8f0' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1.25rem', color: '#475569', fontWeight: 600 }}>
+                                <Wand2 size={18} className="text-primary" style={{ color: 'var(--primary)' }} />
+                                <span>Preprocessing Options</span>
+                            </div>
+
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1.25rem' }}>
+
+                                {/* Col 1: Clean Text */}
+                                <div>
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                                        <input
+                                            type="checkbox"
+                                            checked={preprocessingParams.enable_text_cleaning}
+                                            onChange={(e) => setPreprocessingParams(p => ({ ...p, enable_text_cleaning: e.target.checked }))}
+                                            style={{ width: '1.1rem', height: '1.1rem', accentColor: 'var(--primary)', flexShrink: 0 }}
+                                        />
+                                        <div>
+                                            <span style={{ color: '#1e293b', fontWeight: 600, fontSize: '0.9rem' }}>Clean Text</span>
+                                            <div style={{ fontSize: '0.75rem', color: '#64748b' }}>Remove bullets, numbers, noise</div>
+                                        </div>
+                                    </label>
+                                </div>
+
+                                {/* Col 2: Subject Restoration */}
+                                <div>
+                                    <div>
+                                        <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', marginBottom: '0.4rem' }}>
+                                            <input
+                                                type="checkbox"
+                                                checked={preprocessingParams.enable_subject_restoration}
+                                                onChange={(e) => setPreprocessingParams(p => ({ ...p, enable_subject_restoration: e.target.checked }))}
+                                                style={{ width: '1.1rem', height: '1.1rem', accentColor: 'var(--primary)', flexShrink: 0 }}
+                                            />
+                                            <div>
+                                                <span style={{ color: '#1e293b', fontWeight: 600, fontSize: '0.9rem' }}>Subject Restoration</span>
+                                                <div style={{ fontSize: '0.75rem', color: '#64748b' }}>Resolve omitted subjects (KR)</div>
+                                            </div>
+                                        </label>
+                                        {preprocessingParams.enable_subject_restoration && (
+                                            <div style={{ marginLeft: '1.6rem' }}>
+                                                <ModelSelector
+                                                    type="llm"
+                                                    value={settings.subject_restoration_llm}
+                                                    onChange={(cfg) => updateSetting('subject_restoration_llm', cfg)}
+                                                />
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+
+                                {/* Col 3: Noun Extraction (그래프 활성화 시에만 유의미) */}
+                                <div>
+                                    <div>
+                                        <label style={{
+                                            display: 'flex', alignItems: 'center', gap: '0.5rem',
+                                            cursor: isGraphEnabled ? 'pointer' : 'not-allowed',
+                                            marginBottom: '0.4rem',
+                                            opacity: isGraphEnabled ? 1 : 0.45
+                                        }}>
+                                            <input
+                                                type="checkbox"
+                                                checked={preprocessingParams.enable_noun_extraction}
+                                                disabled={!isGraphEnabled}
+                                                onChange={(e) => setPreprocessingParams(p => ({ ...p, enable_noun_extraction: e.target.checked }))}
+                                                style={{ width: '1.1rem', height: '1.1rem', accentColor: 'var(--primary)', flexShrink: 0 }}
+                                            />
+                                            <div>
+                                                <span style={{ color: '#1e293b', fontWeight: 600, fontSize: '0.9rem' }}>Noun Extraction</span>
+                                                <div style={{ fontSize: '0.75rem', color: '#64748b' }}>
+                                                    {isGraphEnabled ? 'Build named entity dictionary' : 'Graph 활성화 시 사용 가능'}
+                                                </div>
+                                            </div>
+                                        </label>
+                                        {preprocessingParams.enable_noun_extraction && isGraphEnabled && (
+                                            <div style={{ marginLeft: '1.6rem' }}>
+                                                <ModelSelector
+                                                    type="llm"
+                                                    value={settings.noun_extraction_llm}
+                                                    onChange={(cfg) => updateSetting('noun_extraction_llm', cfg)}
+                                                />
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+
+                            </div>
+                        </div>
+
                         {/* Chunking Strategy */}
                         <div style={{ marginBottom: '10px' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.8rem' }}>
@@ -441,10 +539,6 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                                 onManageExamples={() => setShowExampleModal(true)}
                                 onEditPrompt={() => setShowPromptModal(true)}
                                 showEntitySample={true}
-                                subjectRestorationLlm={settings.subject_restoration_llm}
-                                nounExtractionLlm={settings.noun_extraction_llm}
-                                onSubjectRestorationLlmChange={(cfg) => updateSetting('subject_restoration_llm', cfg)}
-                                onNounExtractionLlmChange={(cfg) => updateSetting('noun_extraction_llm', cfg)}
                                 ingestLlm={settings.ingest_llm}
                                 onIngestLlmChange={(cfg) => updateSetting('ingest_llm', cfg)}
                             />
