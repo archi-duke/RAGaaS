@@ -76,7 +76,7 @@ class EmbeddingService:
         - Headers: Content-Type + extra_headers (x-dep-ticket 등)
         - Body: {"input": "text"} 또는 {"input": ["a","b"]}
         """
-        url = f"{self.base_url}/v1/embeddings"
+        url = self.base_url
         headers = {"Content-Type": "application/json", **self.extra_headers}
         payload: dict = {"input": texts[0] if len(texts) == 1 else texts}
 

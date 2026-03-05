@@ -74,7 +74,7 @@ class MinimalEmbedding:
         self.extra_headers = extra_headers or {}
 
     async def aget_text_embedding(self, text: str) -> List[float]:
-        url = f"{self.base_url}/v1/embeddings"
+        url = self.base_url
         headers = {"Content-Type": "application/json", **self.extra_headers}
         payload = {"input": text}
         async with httpx.AsyncClient(
