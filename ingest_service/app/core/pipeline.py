@@ -414,11 +414,15 @@ class IngestPipeline:
         if not config.get("api_key"):
             raise ValueError("LLM API key is not configured.")
         
+        # Pass extra_headers as default_headers for LlamaIndex/OpenAI
+        extra_headers = config.get("extra_headers") or {}
+        
         return OpenAI(
             model=config.get("model", settings.OPENAI_MODEL),
             api_key=config.get("api_key"),
             base_url=config.get("base_url"),
-            timeout=120.0,  # Add timeout to prevent hanging
+            default_headers=extra_headers,  # <--- FIX: Added extra headers
+            timeout=120.0,
             http_client=httpx.AsyncClient(
                 event_hooks={'request': [_log_request], 'response': [_log_response]}
             )
@@ -435,11 +439,15 @@ class IngestPipeline:
                 raise ValueError("base_url required for minimal embedding format")
             return MinimalEmbedding(base_url=base_url, extra_headers=config.get("extra_headers") or {})
 
+        # Pass extra_headers as default_headers for LlamaIndex/OpenAI
+        extra_headers = config.get("extra_headers") or {}
+
         return OpenAIEmbedding(
             model=config.get("model", settings.EMBEDDING_MODEL),
             api_key=config.get("api_key"),
             base_url=config.get("base_url"),
-            timeout=60.0,  # Add timeout to prevent hanging
+            default_headers=extra_headers,  # <--- FIX: Added extra headers
+            timeout=60.0,
             http_client=httpx.AsyncClient(
                 event_hooks={'request': [_log_request], 'response': [_log_response]}
             )

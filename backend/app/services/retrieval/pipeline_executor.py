@@ -188,7 +188,8 @@ class PipelineExecutor:
                 top_k,
                 metric_type=ctx.metric_type,
                 score_threshold=threshold,
-                index_type=index_type
+                index_type=index_type,
+                embedding_service=emb_service,
             )
             
             ctx.results = self._update_results_with_history(ctx.results, new_results, "ANN", merge_mode)

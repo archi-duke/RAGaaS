@@ -139,6 +139,7 @@ async def list_providers(model_type: Optional[str] = None):
             model_list=p.model_list,
             provider_type=p.provider_type,
             has_key=bool(p.encrypted_key),
+            extra_headers=p.extra_headers,
             embedding_request_format=getattr(p, "embedding_request_format", "openai") or "openai",
             created_at=p.created_at,
         )
@@ -349,6 +350,7 @@ async def create_custom_provider(payload: CustomProviderCreate):
         model_list=provider.model_list,
         provider_type=provider.provider_type,
         has_key=bool(payload.api_key and payload.api_key.strip()),
+        extra_headers=provider.extra_headers,
         embedding_request_format=provider.embedding_request_format,
         created_at=provider.created_at,
     )
@@ -375,7 +377,8 @@ async def update_custom_provider(provider_id: str, payload: CustomProviderCreate
         base_url=provider.base_url,
         model_list=provider.model_list,
         provider_type=provider.provider_type,
-        has_key=bool(payload.api_key and payload.api_key.strip()),
+        has_key=bool((payload.api_key and payload.api_key.strip()) or provider.encrypted_key),
+        extra_headers=provider.extra_headers,
         embedding_request_format=provider.embedding_request_format,
         created_at=provider.created_at,
     )

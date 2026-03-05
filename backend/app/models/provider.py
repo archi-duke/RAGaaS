@@ -68,5 +68,6 @@ class CustomProviderResponse(BaseModel):
     model_list: List[str]
     provider_type: str
     has_key: bool = True               # 키가 등록됐는지 여부만 노출
+    extra_headers: Optional[Dict[str, str]] = None  # 추가 HTTP 헤더
     embedding_request_format: str = "minimal"
     created_at: datetime

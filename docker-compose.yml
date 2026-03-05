@@ -198,6 +198,19 @@ services:
 #      - backend
 #    restart: unless-stopped
 
+#  samsung-ds-proxy:
+#    container_name: ragaas-proxy
+#    build:
+#      context: ./proxy
+#      dockerfile: Dockerfile
+#    environment:
+#      - EMBEDDING_DEP_TICKET=${EMBEDDING_DEP_TICKET}
+#      - LLM_DEP_TICKET=${LLM_DEP_TICKET}
+#      - LLM_USER_ID=${LLM_USER_ID}
+#    ports:
+#      - "8010:8010"
+#    restart: unless-stopped
+
 networks:
   default:
     name: milvus
