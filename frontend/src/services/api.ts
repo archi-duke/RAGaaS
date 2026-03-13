@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 const api = axios.create({
-    baseURL: 'http://127.0.0.1:8000/api/',
+    baseURL: '/api/',
     headers: {
         'Content-Type': 'application/json',
     },
@@ -183,10 +183,9 @@ export const retrievalApi = {
         api.put('knowledge-bases/settings/chat-prompt', { content }),
 };
 
-// Ingest Service API (runs on port 8001)
+// Ingest Service API - proxied via nginx (/ingest-api/) or vite dev proxy
 const ingestApi = axios.create({
-    baseURL: 'http://127.0.0.1:8001/api',
-    // Set timeout to Infinity (0) to allow long-running extraction jobs
+    baseURL: '/ingest-api/',
     timeout: 0,
     headers: {
         'Content-Type': 'application/json',

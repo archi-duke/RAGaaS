@@ -41,7 +41,14 @@ export function useWebSocket({ kbId, onMessage, enabled = true }: UseWebSocketPr
                 }
 
                 const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-                const wsUrl = `${protocol}//localhost:8000/api/ws/${kbIdRef.current}`;
+                let wsUrl;
+                if (window.location.port === '5173' || window.location.port === '3000') {
+                    // Dev mode: connect directly to backend
+                    wsUrl = `${protocol}//${window.location.hostname}:8000/api/ws/${kbIdRef.current}`;
+                } else {
+                    // Production/Docker: use same host (nginx proxies WS)
+                    wsUrl = `${protocol}//${window.location.host}/api/ws/${kbIdRef.current}`;
+                }
 
                 console.log(`[WebSocket] Connecting to ${wsUrl}`);
                 const ws = new WebSocket(wsUrl);
