@@ -18,6 +18,9 @@ interface GraphParams {
     normalization_threshold: number;
     max_sample_size: number;
     enable_normalization_confirmation: boolean;
+    enable_text_cleaning: boolean;
+    enable_subject_restoration: boolean;
+    enable_inference: boolean;
 }
 
 interface GraphExtractionSettingsProps {

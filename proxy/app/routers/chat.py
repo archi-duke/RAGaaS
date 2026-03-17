@@ -22,7 +22,6 @@ REQUIRED_HEADERS = [
 ]
 
 
-@router.post("/v1/chat/completions/chat/completions")
 @router.post("/v1/chat/completions")
 async def proxy_chat_completions(request: Request):
     """

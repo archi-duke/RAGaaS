@@ -81,6 +81,9 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
         normalization_threshold: 0.85,
         max_sample_size: 50000,
         enable_normalization_confirmation: false,
+        enable_text_cleaning: false,
+        enable_subject_restoration: true,
+        enable_inference: false,
     });
 
     // 전처리 옵션 (청킹 방식과 무관하게 항상 적용 가능)

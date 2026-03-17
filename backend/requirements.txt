@@ -21,6 +21,9 @@ rdflib>=7.0.0
 pyyaml>=6.0
 owlrl
 
+# Encryption
+cryptography
+
 # MongoDB ODM
 motor
 beanie

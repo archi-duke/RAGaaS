@@ -17,7 +17,6 @@ logger = logging.getLogger(__name__)
 REQUIRED_HEADERS = ["x-dep-ticket"]
 
 
-@router.post("/v1/embeddings/embeddings")
 @router.post("/v1/embeddings")
 async def proxy_embeddings(request: Request):
     """

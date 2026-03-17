@@ -563,19 +563,41 @@ export default function ModelSelector({ type, value, onChange, disabled, valueEm
     );
 
     // ── 팝업 위치 계산 (뷰포트 내 유지) ─────────────────────────────────────
+    const isFormMode = isAddingCustom || isEditing;
+
     const getPopupStyle = (): React.CSSProperties => {
+        // 수정/추가 모드: 화면 중앙 고정 (폼이 길어 trigger 기준 배치 시 잘림)
+        if (isFormMode) {
+            return {
+                position: 'fixed' as const,
+                top: '50%',
+                left: '50%',
+                transform: 'translate(-50%, -50%)',
+                zIndex: 9999,
+                maxHeight: '85vh',
+                overflowY: 'auto' as const,
+            };
+        }
         const trigger = triggerRef.current;
         if (!trigger) {
             return { position: 'fixed' as const, top: '50%', left: '50%', transform: 'translate(-50%, -50%)', zIndex: 9999, maxHeight: '75vh', overflowY: 'auto' as const };
         }
         const rect = trigger.getBoundingClientRect();
-        const popupH = popupHeight;
         const gap = 8;
         const padding = 12;
-        const showAbove = rect.top >= popupH + gap + padding && (window.innerHeight - rect.bottom) < popupH;
-        const rawTop = showAbove ? rect.top - popupH - gap : rect.bottom + gap;
-        const maxTop = Math.max(padding, window.innerHeight - popupH - padding);
-        const top = Math.min(Math.max(rawTop, padding), maxTop);
+        const maxH = Math.floor(window.innerHeight * 0.75);
+        const popupH = Math.min(popupHeight, maxH);
+        const spaceBelow = window.innerHeight - rect.bottom - gap - padding;
+        const spaceAbove = rect.top - gap - padding;
+        let top: number;
+        if (spaceBelow >= popupH) {
+            top = rect.bottom + gap;
+        } else if (spaceAbove >= popupH) {
+            top = rect.top - popupH - gap;
+        } else {
+            top = padding;
+        }
+        top = Math.max(padding, Math.min(top, window.innerHeight - popupH - padding));
         let left = rect.left;
         const maxW = 380;
         if (left + maxW > window.innerWidth - padding) left = window.innerWidth - maxW - padding;
@@ -585,7 +607,7 @@ export default function ModelSelector({ type, value, onChange, disabled, valueEm
             top,
             left,
             zIndex: 9999,
-            maxHeight: '75vh',
+            maxHeight: `${maxH}px`,
             overflowY: 'auto' as const,
         };
     };
@@ -625,6 +647,16 @@ export default function ModelSelector({ type, value, onChange, disabled, valueEm
 
             {/* ─── 팝업 ─── */}
             {isOpen && createPortal(
+                <>
+                {isFormMode && (
+                    <div
+                        onClick={() => setIsOpen(false)}
+                        style={{
+                            position: 'fixed', inset: 0, zIndex: 9998,
+                            background: 'rgba(0,0,0,0.25)',
+                        }}
+                    />
+                )}
                 <div
                     ref={popupRef}
                     style={{
@@ -1199,7 +1231,8 @@ export default function ModelSelector({ type, value, onChange, disabled, valueEm
                             )}
                         </>
                     )}
-                </div>,
+                </div>
+                </>,
                 document.body
             )
             }
