@@ -25,5 +25,6 @@ owlrl
 cryptography
 
 # MongoDB ODM
+# beanie 2.x는 Motor 지원을 제거함(PyMongo Async 전용) — 코드가 Motor 기반이므로 1.x 고정
 motor
-beanie
+beanie>=1.29,<2.0

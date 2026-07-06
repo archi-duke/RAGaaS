@@ -84,11 +84,14 @@ You MUST respond in JSON format:
         llm_endpoint: Optional[str] = None,
         llm_model: str = "gpt-4o",
         api_key: Optional[str] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
     ):
         self.llm_endpoint = llm_endpoint or "https://api.openai.com/v1/chat/completions"
         self.llm_model = llm_model
         self.api_key = api_key
-        if not self.api_key:
+        self.extra_headers = extra_headers or {}
+        # 사내 게이트웨이는 헤더 인증(extra_headers)만 쓸 수 있어 api_key 가 없을 수 있다.
+        if not self.api_key and not self.extra_headers:
             raise ValueError("SPARQLGenerator model API key is not configured.")
 
     def _format_prefixes(self) -> str:
@@ -359,31 +362,24 @@ STRONGLY PREFER using these predicates over inventing new ones or relying on gen
             context_predicates=context_predicates # [NEW]
         )
 
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
-
-        payload = {
+        from app.core.llm import chat
+        cfg = {
+            "base_url": self.llm_endpoint,
+            "api_key": self.api_key,
+            "extra_headers": self.extra_headers,
             "model": self.llm_model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_content}
-            ],
-            "temperature": 0.0,
         }
 
         try:
-            response = requests.post(
-                self.llm_endpoint,
-                headers=headers,
-                json=payload,
-                timeout=60,
+            content = chat(
+                cfg,
+                [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_content},
+                ],
+                temperature=0.0,
             )
-            response.raise_for_status()
-            
-            content = response.json()["choices"][0]["message"]["content"]
-            
+
             # Extract JSON from response
             content = content.strip()
             if "```json" in content:

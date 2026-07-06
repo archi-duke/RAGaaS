@@ -23,17 +23,13 @@ class GraphProcessor:
         self.namespace_relation = "http://rag.local/relation/"
         self.namespace_source = "http://rag.local/source/"
 
-    def _get_llm_client(self, config: Dict[str, Any]) -> AsyncOpenAI:
-        """config의 llm_model_config로 클라이언트를 반환."""
+    def _get_llm_cfg(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        """config에서 llm_model_config(resolved)를 꺼내 검증 후 반환."""
+        from app.core.llm import has_credentials
         llm_cfg = config.get("llm_model_config") or {}
-        if llm_cfg.get("api_key"):
-            kwargs: dict = {"api_key": llm_cfg["api_key"]}
-            if llm_cfg.get("base_url"):
-                kwargs["base_url"] = llm_cfg["base_url"]
-            if llm_cfg.get("extra_headers"):
-                kwargs["default_headers"] = llm_cfg["extra_headers"]
-            return AsyncOpenAI(**kwargs)
-        raise ValueError("Ingestion graph model API key is not configured.")
+        if not has_credentials(llm_cfg):
+            raise ValueError("Ingestion graph model API key/헤더가 설정되지 않았습니다.")
+        return llm_cfg
 
     def _sanitize_uri(self, text: str) -> str:
         """Sanitize text to be used in URI."""
@@ -153,15 +149,14 @@ class GraphProcessor:
         
         try:
             print(f"[Graph] Single-Pass Extraction for chunk {chunk_id[:8]}...")
-            llm_client = self._get_llm_client(config)
-            llm_model = config.get("llm_model_config", {}).get("model", "gpt-4o")
-            r1 = await llm_client.chat.completions.create(
-                model=llm_model,
-                messages=[{"role": "user", "content": relation_prompt}],
-                temperature=0.1,
-                response_format={"type": "json_object"}
+            from app.core.llm import achat
+            llm_cfg = self._get_llm_cfg(config)
+            llm_model = (config.get("llm_model_config") or {}).get("model")
+            content = await achat(
+                llm_cfg,
+                [{"role": "user", "content": relation_prompt}],
+                model=llm_model, temperature=0.1, response_format={"type": "json_object"},
             )
-            content = r1.choices[0].message.content
             data = json.loads(content)
             
             # The LLM should now return both triples and entity_mappings in one go

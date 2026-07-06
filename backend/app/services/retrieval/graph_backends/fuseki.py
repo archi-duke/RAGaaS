@@ -33,9 +33,17 @@ class FusekiBackend(GraphBackend):
         from app.core.models_resolver import resolve_model_config
         resolved = await resolve_model_config(llm_model_config)
         api_key = resolved.get("api_key")
-        if not api_key:
+        extra_headers = resolved.get("extra_headers") or {}
+        # 사내 게이트웨이는 헤더 인증(extra_headers)만 쓸 수 있으므로 키/헤더 중 하나면 통과.
+        if not api_key and not extra_headers:
             raise ValueError("Graph query API key is not configured.")
-        return self._SPARQLGenerator(api_key=api_key)
+        from app.core.llm import chat_endpoint
+        return self._SPARQLGenerator(
+            llm_endpoint=chat_endpoint(resolved.get("base_url")),
+            llm_model=resolved.get("model") or "gpt-4o",
+            api_key=api_key,
+            extra_headers=extra_headers,
+        )
 
     def _extract_entities_from_question(self, query_text: str, existing_entities: List[str]) -> List[str]:
         """질문에서 핵심 엔티티 추출. 기존 entities가 있으면 우선 사용."""

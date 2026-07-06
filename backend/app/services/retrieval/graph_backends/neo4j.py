@@ -330,9 +330,17 @@ class Neo4jBackend(GraphBackend):
             from app.core.models_resolver import resolve_model_config
             resolved_llm = await resolve_model_config(llm_model_config)
             cypher_api_key = resolved_llm.get("api_key")
-            if not cypher_api_key:
+            cypher_extra_headers = resolved_llm.get("extra_headers") or {}
+            # 사내 게이트웨이는 헤더 인증(extra_headers)만 쓸 수 있으므로 키/헤더 중 하나면 통과.
+            if not cypher_api_key and not cypher_extra_headers:
                 raise ValueError("Graph query API key is not configured.")
-            generator = CypherGenerator(api_key=cypher_api_key)
+            from app.core.llm import chat_endpoint
+            generator = CypherGenerator(
+                llm_endpoint=chat_endpoint(resolved_llm.get("base_url")),
+                llm_model=resolved_llm.get("model") or "gpt-4o",
+                api_key=cypher_api_key,
+                extra_headers=cypher_extra_headers,
+            )
             context = f"관련 엔티티 후보: {', '.join(entities)}" if entities else None
             
             # Determine inverse relation mode

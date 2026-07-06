@@ -1,0 +1,25 @@
+{
+  "_comment": "사내망 LLM 게이트웨이 모델 등록 파일. 사내 모델은 호출 방식은 같고 endpoint 만 모델별로 다르므로 여기에 나열한다. headers 의 ${VAR} 는 .env 환경변수로 치환된다(시크릿 DB 평문 저장 회피). models 를 채우면 모델 셀렉터에 provider_name 프로바이더로 노출되고, KB 설정은 {provider_id:\"internal\", model:\"<name>\"} 로 저장된다. endpoint 는 base_url(…/v1) 형태로 두면 /chat/completions 가 자동으로 붙는다.",
+  "provider_name": "사내 게이트웨이",
+  "shared_headers": {
+    "X-Dep-Ticket": "${LLM_DEP_TICKET}",
+    "Send-System-Name": "ai4se",
+    "User-Id": "${LLM_USER_ID}",
+    "User-Type": "AD_ID",
+    "Chat-Id": "00000000-0000-0000-0000-000000000000"
+  },
+  "models": [],
+  "_example_models": [
+    {
+      "name": "openai/gpt-oss-120b",
+      "endpoint": "http://apigw.samsungds.net:8000/gpt-oss/1/gpt-oss-120b/v1",
+      "type": "llm"
+    },
+    {
+      "name": "meta/llama-3-70b",
+      "endpoint": "http://apigw.samsungds.net:8000/llama/1/llama-3-70b/v1",
+      "type": "llm",
+      "headers": { "Send-System-Name": "ai4se-llama" }
+    }
+  ]
+}

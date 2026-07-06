@@ -28,22 +28,12 @@ class KeywordRetrievalStrategy(RetrievalStrategy):
         model = resolved["model"]
         base_url = resolved.get("base_url")
         extra_headers = resolved.get("extra_headers") or {}
-        if not api_key:
-            raise ValueError("Keyword extraction API key is not configured.")
-
-        client_kwargs: dict = {"api_key": api_key}
-        if base_url:
-            client_kwargs["base_url"] = base_url
-        if extra_headers:
-            client_kwargs["default_headers"] = extra_headers
-        client = AsyncOpenAI(**client_kwargs)
-        response = await client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0,
-            max_tokens=50
-        )
-        keywords = response.choices[0].message.content.strip()
+        from app.core.llm import achat
+        keywords = (await achat(
+            resolved,
+            [{"role": "user", "content": prompt}],
+            model=model, temperature=0, max_tokens=50,
+        )).strip()
         print(f"[LLM Keyword Extraction] '{query}' -> '{keywords}'")
         return keywords
 

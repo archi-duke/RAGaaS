@@ -138,10 +138,13 @@ async def _build_and_validate_upload_model_configs(
             status_code=500,
             detail="모델 지정이 안되었습니다: 임베딩 모델을 먼저 설정해주세요.",
         )
-    if embedding_cfg["embedding_request_format"] != "minimal" and not embedding_cfg.get("api_key"):
+    if (
+        embedding_cfg["embedding_request_format"] != "minimal"
+        and not (embedding_cfg.get("api_key") or embedding_cfg.get("extra_headers"))
+    ):
         raise HTTPException(
             status_code=500,
-            detail="모델 지정이 안되었습니다: 임베딩 모델 API Key를 먼저 등록해주세요.",
+            detail="모델 지정이 안되었습니다: 임베딩 모델 API Key 또는 인증 헤더를 먼저 등록해주세요.",
         )
 
     async def require_llm(kind: str, label: str) -> Dict[str, Any]:
@@ -151,10 +154,11 @@ async def _build_and_validate_upload_model_configs(
                 status_code=500,
                 detail=f"모델 지정이 안되었습니다: {label} 모델을 설정해주세요.",
             )
-        if not cfg.get("api_key"):
+        # 사내 게이트웨이는 헤더 인증(extra_headers)만 쓸 수 있어 api_key 가 없을 수 있다.
+        if not (cfg.get("api_key") or cfg.get("extra_headers")):
             raise HTTPException(
                 status_code=500,
-                detail=f"모델 지정이 안되었습니다: {label} 모델 API Key를 등록해주세요.",
+                detail=f"모델 지정이 안되었습니다: {label} 모델 API Key 또는 인증 헤더를 등록해주세요.",
             )
         return cfg
 
@@ -325,7 +329,7 @@ async def upload_text_document(
     graph_extraction_prompt = doc.custom_prompt
 
     callback_base = os.getenv("CALLBACK_BASE_URL", "http://127.0.0.1:8000")
-    callback_url = f"{callback_base.rstrip('/')}/api/knowledge-bases/ingest/callback"
+    callback_url = f"{callback_base.rstrip('/')}/api/v2/knowledge-bases/ingest/callback"
 
     async def call_ingest_service():
         try:
@@ -539,7 +543,7 @@ async def upload_document(
 
     # 6. Call Ingest Service (Async Task)
     callback_base = os.getenv("CALLBACK_BASE_URL", "http://127.0.0.1:8000")
-    callback_url = f"{callback_base.rstrip('/')}/api/knowledge-bases/ingest/callback"
+    callback_url = f"{callback_base.rstrip('/')}/api/v2/knowledge-bases/ingest/callback"
 
     async def call_ingest_service():
         try:

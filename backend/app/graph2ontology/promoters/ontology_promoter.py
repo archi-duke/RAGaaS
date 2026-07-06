@@ -260,7 +260,8 @@ class OntologyPromoter:
                 timeout=180,  # o1 takes longer
             )
             response.raise_for_status()
-            content = response.json()["choices"][0]["message"]["content"]
+            from app.core.llm import extract_content_from_dict
+            content = extract_content_from_dict(response.json())
             
             # Debug: Print raw response
             print(f"[OntologyPromoter] LLM Raw Response (first 500 chars): {content[:500]}")
