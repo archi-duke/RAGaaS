@@ -19,9 +19,9 @@ function env(key: string, fallback: string): string {
 }
 
 const config = {
-  /** RAGaaS 백엔드 API 베이스. 셸 배포: {gateway}/ragaas-api/api/v2, standalone: 같은 호스트 프록시 */
+  /** RAGaaS 백엔드 API 베이스. 셸 배포: {gateway}/ragaas/api/v2 (경로 v2), standalone: 같은 호스트 프록시 */
   RAGAAS_API: env('REACT_APP_RAGAAS_API', '/api/v2/'),
-  /** ingest 서비스 API 베이스. 셸 배포: {gateway}/ragaas-ingest-api/api/v2, standalone: nginx/vite 프록시 */
+  /** ingest 서비스 API 베이스. 셸 배포: {gateway}/ragaas/ingest-api (frontend nginx 가 분기), standalone: nginx/vite 프록시 */
   RAGAAS_INGEST_API: env('REACT_APP_RAGAAS_INGEST_API', '/ingest-api/'),
   /** standalone SSO 모드 토글 (셸 안에서는 셸 인증이 우선이라 미사용) */
   USE_SSO: env('REACT_APP_USE_SSO', 'false') === 'true',

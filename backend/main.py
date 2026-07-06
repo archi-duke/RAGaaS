@@ -40,7 +40,7 @@ from app.core.websocket_manager import manager
 from fastapi import WebSocket, WebSocketDisconnect
 
 # 플랫폼 계약 05 §4 — 백엔드 API 베이스 경로는 /api/v2 표준
-# (게이트웨이가 /ragaas-api/ 프리픽스를 strip 하고 /api/v2/... 로 전달)
+# (게이트웨이가 /ragaas 프리픽스를 strip 하고 /api/v2/... 로 전달 — 경로 v2)
 app.include_router(knowledge_base.router, prefix="/api/v2/knowledge-bases", tags=["Knowledge Base"])
 app.include_router(document.router, prefix="/api/v2/knowledge-bases", tags=["Documents"])
 app.include_router(retrieval.router, prefix="/api/v2/knowledge-bases", tags=["Retrieval"])
