@@ -2,6 +2,14 @@
 
 이 문서는 RAG Management System을 인터넷이 차단된 폐쇄망 환경에 배포하는 방법을 설명합니다.
 
+> **공유 인프라 전제**: 모든 인프라(MongoDB, Milvus+etcd/MinIO, Fuseki, Neo4j,
+> Redis)는 RAGaaS 스택에 포함되지 않고 GoJIRA와 공용하는 **shared-infra 스택**
+> (개발 환경: `D:\Works\shared-infra`)에서 제공됩니다. RAGaaS compose에는 자체 빌드
+> 앱 4개(backend, ingest, frontend, proxy)만 있습니다.
+> 폐쇄망 배포 시 shared-infra 디렉토리(docker-compose.yml, init/, .env)와 인프라
+> 이미지 tar를 함께 반입하고, **RAGaaS 스택보다 먼저 기동**해야 합니다
+> (`shared-net` 네트워크와 `ragaas_app` 계정이 이때 생성됨).
+
 ## 사전 준비 (인터넷 연결 환경)
 
 ### 1. Docker 이미지 빌드 및 저장
@@ -27,17 +35,16 @@ docker images | grep -E "ragaas|milvus|etcd|minio|fuseki"
 cat > export-images.sh << 'EOF'
 #!/bin/bash
 
-# 이미지 목록
+# 이미지 목록 — RAGaaS 앱 이미지만.
+# 인프라 이미지(mongo:8.0, milvusdb/milvus:v2.3.3, quay.io/coreos/etcd:v3.5.5,
+# minio, stain/jena-fuseki, neo4j:5.15.0, redis:7-alpine)는 shared-infra 패키지로
+# 별도 반입 (shared-infra/README.md 참조)
 IMAGES=(
     "ragaas-backend:latest"
     "ragaas-frontend:latest"
-    "milvusdb/milvus:v2.3.3"
-    "quay.io/coreos/etcd:v3.5.5"
-    "minio/minio:RELEASE.2023-03-20T20-16-18Z"
-    "stain/jena-fuseki:latest"
-    "nginx:alpine"
-    "node:18-alpine"
-    "python:3.11-slim"
+    "ragaas-ingest-service:latest"
+    "ragaas-samsung-ds-proxy:latest"
+    "ubuntu:22.04"
 )
 
 # 각 이미지를 tar 파일로 저장

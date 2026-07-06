@@ -43,7 +43,7 @@ docker-compose logs -f
 |---------|---------------|------|-------------|
 | Frontend | ragaas-frontend | 80 | React SPA (Nginx) |
 | Backend | ragaas-backend | 8000 | FastAPI Server |
-| Milvus | milvus-standalone | 19530 | Vector Database |
+| Milvus | shared-milvus | 19530 | Vector Database |
 | etcd | milvus-etcd | 2379 | Milvus Metadata |
 | MinIO | milvus-minio | 9000 | Milvus Storage |
 
@@ -84,10 +84,10 @@ Data is stored in the following locations:
 
 ```bash
 # Check Milvus logs
-docker-compose logs standalone
+docker compose logs milvus   # shared-infra 디렉토리에서
 
 # Restart Milvus
-docker-compose restart standalone
+docker compose restart milvus   # shared-infra 디렉토리에서
 ```
 
 ### Frontend shows API errors

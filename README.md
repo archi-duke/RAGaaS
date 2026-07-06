@@ -79,18 +79,24 @@ Milvus 기반의 다수의 RAG (Retrieval-Augmented Generation) 지식 베이스
 
 ## 시작하기
 
-### 1. Milvus 및 Fuseki 시작
+### 1. 공유 인프라 시작 (shared-infra)
+
+인프라(MongoDB, Milvus, Fuseki, Neo4j, Redis)는 GoJIRA와 공용하는 **shared-infra
+스택**에서 제공됩니다. RAGaaS compose에는 자체 빌드 앱만 있습니다.
 
 ```bash
-docker-compose up -d
+cd ../shared-infra   # 개발 환경: D:\Works\shared-infra
+docker compose up -d
 ```
 
-이 명령은 다음 서비스를 시작합니다:
-- **Milvus**: 벡터 데이터베이스 (포트 19530)
-- **Apache Jena Fuseki**: Graph RAG용 RDF 스토어 (포트 3030)
+이 명령은 다음 서비스를 시작합니다 (상세: shared-infra/README.md):
+- **MongoDB** `shared-mongo` (포트 27017) — 메타데이터 DB, GoJIRA와 공용
+- **Milvus** `shared-milvus` (포트 19530) — 벡터 데이터베이스
+- **Apache Jena Fuseki** `shared-fuseki` (포트 3030) — Graph RAG용 RDF 스토어
   - Fuseki UI: http://localhost:3030
-- **Neo4j**: Knowledge Graph용 Graph DB (포트 7474, 7687)
+- **Neo4j** `shared-neo4j` (포트 7474, 7687) — Knowledge Graph용 Graph DB
   - Neo4j Browser: http://localhost:7474
+- **Redis** `shared-redis` (포트 6379) — 인제스트 작업 큐
 
 ### 2. Backend 설정
 
@@ -121,12 +127,12 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
 cd frontend
 npm install
 npm run dev
-# Vite 개발 서버 포트: 5173
+# Vite 개발 서버 포트: 3002
 ```
 
 ### 4. 접속
 
-- Frontend: http://localhost:5173
+- Frontend: http://localhost:3002
 - Backend API Docs: http://localhost:8000/docs
 
 ## Docker를 사용한 배포
@@ -175,7 +181,7 @@ docker-compose up -d
 **자세한 가이드**: [AIRGAP-DEPLOY.md](AIRGAP-DEPLOY.md) 참조
 
 접속:
-- Frontend: http://서버IP:5173
+- Frontend: http://서버IP:3002
 - Backend API: http://서버IP:8000/docs
 - Fuseki Admin UI: http://localhost:3030 (Graph RAG 사용 시)
 

@@ -11,14 +11,14 @@ echo "Docker Image Export for Air-Gapped Deploy"
 echo "========================================="
 echo ""
 
-# 이미지 목록
+# 이미지 목록 — RAGaaS 앱 이미지만 포함.
+# 인프라 이미지(mongo/milvus/etcd/minio/fuseki/neo4j/redis)는 GoJIRA와 공용하는
+# shared-infra 스택 패키지로 별도 반입한다 (shared-infra/README.md 참조).
 IMAGES=(
     "ragaas-backend:latest"
     "ragaas-frontend:latest"
-    "milvusdb/milvus:v2.3.3"
-    "quay.io/coreos/etcd:v3.5.5"
-    "minio/minio:RELEASE.2023-03-20T20-16-18Z"
-    "stain/jena-fuseki:latest"
+    "ragaas-ingest-service:latest"
+    "ragaas-samsung-ds-proxy:latest"
 )
 
 # 출력 디렉토리 생성
