@@ -83,8 +83,13 @@ function AppRoutes(props: RemoteAppProps) {
  */
 function App(props: RemoteAppProps) {
   if (props.standalone) {
+    // 게이트웨이 경유 standalone 은 URL 이 /ragaas/... 이므로 빌드 base 를 basename 으로
+    // (통지 2026-07-07 §2). 직접 접속(/)·dev(:3002)는 프리픽스가 없어 basename 미적용.
+    const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+    const basename =
+      base && window.location.pathname.startsWith(base) ? base : undefined;
     return (
-      <BrowserRouter>
+      <BrowserRouter basename={basename}>
         <AppRoutes {...props} />
       </BrowserRouter>
     );

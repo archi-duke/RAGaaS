@@ -7,7 +7,10 @@ import { federation } from '@module-federation/vite'
 //   (requiredVersion 은 package.json range 자동 — 수동 고정 금지, 계약 01 §4)
 // - '@platform/web-ui' singleton 은 Phase 2(Kendo 이관) 시점에 추가
 // https://vite.dev/config/
-export default defineConfig({
+export default defineConfig(({ command }) => ({
+  // standalone 진입(게이트웨이 /ragaas/)용 자산 재기준 — 통지 2026-07-07 §2.
+  // dev(:3002 루트)와 셸 remote 로드(remoteEntry 는 로드 URL 기준 상대 해석)는 영향 없음.
+  base: command === 'build' ? '/ragaas/' : '/',
   plugins: [
     react(),
     federation({
@@ -47,4 +50,4 @@ export default defineConfig({
   build: {
     target: 'chrome89', // MF 2.0 (top-level await) 요구
   },
-})
+}))

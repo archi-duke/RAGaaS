@@ -18,11 +18,16 @@ function env(key: string, fallback: string): string {
   return fallback;
 }
 
+// 빌드 base (vite base: '/ragaas/', dev 는 '/') — 상대 API 폴백을 base 기준으로 재기준.
+// 셸 모드에선 window._env_ 가 셸의 env.js 라 RAGAAS_API 가 없다 → 이 폴백이 실사용 경로.
+// base 를 붙여야 게이트웨이 origin 에서 /ragaas/api/v2 로 나가 관통한다 (경로 v2).
+const BASE = import.meta.env.BASE_URL || '/';
+
 const config = {
-  /** RAGaaS 백엔드 API 베이스. 셸 배포: {gateway}/ragaas/api/v2 (경로 v2), standalone: 같은 호스트 프록시 */
-  RAGAAS_API: env('REACT_APP_RAGAAS_API', '/api/v2/'),
-  /** ingest 서비스 API 베이스. 셸 배포: {gateway}/ragaas/ingest-api (frontend nginx 가 분기), standalone: nginx/vite 프록시 */
-  RAGAAS_INGEST_API: env('REACT_APP_RAGAAS_INGEST_API', '/ingest-api/'),
+  /** RAGaaS 백엔드 API 베이스. 셸/게이트웨이: {base}api/v2 (경로 v2), dev: /api/v2 (vite 프록시) */
+  RAGAAS_API: env('REACT_APP_RAGAAS_API', `${BASE}api/v2/`),
+  /** ingest 서비스 API 베이스. frontend nginx 가 /ingest-api/ 를 내부 분기 */
+  RAGAAS_INGEST_API: env('REACT_APP_RAGAAS_INGEST_API', `${BASE}ingest-api/`),
   /** standalone SSO 모드 토글 (셸 안에서는 셸 인증이 우선이라 미사용) */
   USE_SSO: env('REACT_APP_USE_SSO', 'false') === 'true',
   /** SSO 서버 (ADFSLogin / introspect) — standalone SSO 모드에서만 사용 */
