@@ -8,16 +8,8 @@ logger = logging.getLogger(__name__)
 class DictionaryBuilder:
     def __init__(self, llm_model_config: Optional[Dict[str, Any]] = None):
         cfg = llm_model_config or {}
-        api_key = cfg.get("api_key")
-        if not api_key:
-            raise ValueError("Dictionary builder model API key is not configured.")
-        client_kwargs: dict = {"api_key": api_key}
-        if cfg.get("base_url"):
-            client_kwargs["base_url"] = cfg["base_url"]
-        if cfg.get("extra_headers"):
-            client_kwargs["default_headers"] = cfg["extra_headers"]
-        self.client = AsyncOpenAI(**client_kwargs)
-        self.model = cfg.get("model", "gpt-4o")
+        self.cfg = cfg
+        self.model = cfg.get("model")
 
     async def extract_entity_candidates(self, texts: List[str], sampling_size: int = 30000) -> List[str]:
         """
@@ -51,13 +43,12 @@ class DictionaryBuilder:
 
         try:
             logger.info(f"[Pass 1] Extracting candidates from sample ({len(sample_text)} chars)...")
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt.format(text=sample_text)}],
-                temperature=0,
-                response_format={"type": "json_object"}
-            )
-            data = json.loads(response.choices[0].message.content)
+            from app.core.llm import achat
+            data = json.loads(await achat(
+                self.cfg,
+                [{"role": "user", "content": prompt.format(text=sample_text)}],
+                model=self.model, temperature=0, response_format={"type": "json_object"},
+            ))
             candidates = data.get("entities", [])
             unique_candidates = sorted(list(set([c.strip() for c in candidates if c.strip()])))
             logger.info(f"[Pass 1] Successfully extracted {len(unique_candidates)} candidates.")
@@ -97,13 +88,12 @@ class DictionaryBuilder:
         
         try:
             logger.info(f"[Pass 2] Consolidating {len(candidates)} candidates...")
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt.format(candidates=candidates_str)}],
-                temperature=0,
-                response_format={"type": "json_object"}
-            )
-            data = json.loads(response.choices[0].message.content)
+            from app.core.llm import achat
+            data = json.loads(await achat(
+                self.cfg,
+                [{"role": "user", "content": prompt.format(candidates=candidates_str)}],
+                model=self.model, temperature=0, response_format={"type": "json_object"},
+            ))
             mappings = data.get("mappings", {})
             
             # 모든 후보에 대해 자기 자신으로의 매핑 보장

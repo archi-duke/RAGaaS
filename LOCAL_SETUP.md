@@ -37,7 +37,7 @@ exec "$SHELL"
 python --version  # Python 3.11.9
 ```
 
-### 2. Node.js 18+ 설치
+### 2. Node.js 20+ 설치 (@module-federation/vite 요구)
 
 #### macOS (Homebrew)
 ```bash
@@ -146,7 +146,7 @@ npm run dev
 
 ## 접속 URL
 
-- Frontend: http://localhost:5173
+- Frontend: http://localhost:3002
 - Backend API: http://localhost:8000/docs
 - Ingest Service: http://localhost:8001/docs
 
@@ -195,10 +195,10 @@ rm -rf node_modules package-lock.json
 npm install
 ```
 
-#### "Port 5173 is already in use"
+#### "Port 3002 is already in use"
 ```bash
 # 포트 사용 프로세스 찾기
-lsof -i :5173
+lsof -i :3002
 
 # 프로세스 종료
 kill -9 <PID>

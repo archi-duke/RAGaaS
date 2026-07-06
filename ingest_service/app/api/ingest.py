@@ -138,8 +138,9 @@ async def send_pipeline_status(callback_url: str, job_id: str, doc_id: str, kb_i
         # ✅ COMPLETED 상태일 때는 status를 'completed'로 전송
         overall_status = "completed" if status == "COMPLETED" else "processing"
         
+        from app.core.platform_auth import service_headers
         async with httpx.AsyncClient() as client:
-            await client.post(callback_url, json={
+            await client.post(callback_url, headers=service_headers(), json={
                 "job_id": job_id,
                 "doc_id": doc_id,
                 "kb_id": kb_id,
@@ -352,8 +353,9 @@ async def process_ingest_job(job_id: str, request: IngestRequest):
         # 6. Call callback (Optional)
         if request.callback_url:
             import httpx
+            from app.core.platform_auth import service_headers
             async with httpx.AsyncClient() as client:
-                await client.post(request.callback_url, json={
+                await client.post(request.callback_url, headers=service_headers(), json={
                     "job_id": job_id,
                     "doc_id": request.doc_id,
                     "kb_id": request.kb_id,
@@ -845,8 +847,9 @@ async def _save_preview_data(
         # Callback
         if callback_url:
             import httpx
+            from app.core.platform_auth import service_headers
             async with httpx.AsyncClient() as client:
-                await client.post(callback_url, json={
+                await client.post(callback_url, headers=service_headers(), json={
                     "job_id": job_id,
                     "doc_id": doc_id,
                     "kb_id": kb_id,

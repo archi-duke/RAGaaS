@@ -25,6 +25,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# 플랫폼 신원 확정 미들웨어 (계약 05 §1) — introspect / X-Service-Token / dev 폴백
+from app.core.platform_auth import platform_auth_middleware
+app.middleware("http")(platform_auth_middleware)
+
 @app.get("/")
 async def root():
     return {"message": "Welcome to RAG Management System API"}
@@ -35,17 +39,19 @@ from app.core.milvus import connect_milvus
 from app.core.websocket_manager import manager
 from fastapi import WebSocket, WebSocketDisconnect
 
-app.include_router(knowledge_base.router, prefix="/api/knowledge-bases", tags=["Knowledge Base"])
-app.include_router(document.router, prefix="/api/knowledge-bases", tags=["Documents"])
-app.include_router(retrieval.router, prefix="/api/knowledge-bases", tags=["Retrieval"])
+# 플랫폼 계약 05 §4 — 백엔드 API 베이스 경로는 /api/v2 표준
+# (게이트웨이가 /ragaas-api/ 프리픽스를 strip 하고 /api/v2/... 로 전달)
+app.include_router(knowledge_base.router, prefix="/api/v2/knowledge-bases", tags=["Knowledge Base"])
+app.include_router(document.router, prefix="/api/v2/knowledge-bases", tags=["Documents"])
+app.include_router(retrieval.router, prefix="/api/v2/knowledge-bases", tags=["Retrieval"])
 
 from app.api import graph_viewer
-app.include_router(graph_viewer.router, prefix="/api/graph", tags=["Graph Viewer"])
+app.include_router(graph_viewer.router, prefix="/api/v2/graph", tags=["Graph Viewer"])
 
 from app.api import providers
-app.include_router(providers.router, prefix="/api", tags=["providers"])
+app.include_router(providers.router, prefix="/api/v2", tags=["providers"])
 
-@app.websocket("/api/ws/{kb_id}")
+@app.websocket("/api/v2/ws/{kb_id}")
 async def websocket_endpoint(websocket: WebSocket, kb_id: str):
     await manager.connect(websocket, kb_id)
     try:

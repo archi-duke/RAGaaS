@@ -48,7 +48,7 @@ uvicorn app.main:app --reload --port 8000
 
 **확인:**
 - http://localhost:8000/docs (Swagger UI)
-- http://localhost:8000/api/health (응답: 404 정상 - health endpoint 없음)
+- http://localhost:8000/health (응답: 404 정상 - health endpoint 없음)
 
 ---
 
@@ -89,7 +89,7 @@ npm run dev
 ```
 
 **확인:**
-- http://localhost:5173 (React 앱)
+- http://localhost:3002 (React 앱)
 
 ---
 
@@ -98,7 +98,7 @@ npm run dev
 ### Backend (`.env`)
 ```env
 OPENAI_API_KEY=your-key-here
-MONGO_URI=mongodb://root:example@localhost:27017
+MONGO_URI=mongodb://ragaas_app:ragaas-dev-pass@localhost:27017/ragaas?authSource=ragaas
 MILVUS_HOST=localhost
 NEO4J_URI=bolt://localhost:7687
 FUSEKI_URL=http://localhost:3030
@@ -127,7 +127,7 @@ MAIN_BACKEND_URL=http://localhost:8000
 # 포트 사용 중인 프로세스 확인
 lsof -i :8000  # Backend
 lsof -i :8001  # Ingest Service
-lsof -i :5173  # Frontend
+lsof -i :3002  # Frontend
 
 # 프로세스 종료
 kill -9 <PID>
@@ -142,14 +142,14 @@ docker ps
 docker-compose restart
 
 # 로그 확인
-docker logs ragaas-mongo
-docker logs milvus-standalone
+docker logs shared-mongo  # MongoDB는 공유 인프라 스택(D:\Works\shared-infra)
+docker logs shared-milvus
 ```
 
 ### 3. MongoDB 연결 오류
 ```bash
 # MongoDB 연결 테스트
-mongosh "mongodb://root:example@localhost:27017"
+mongosh "mongodb://ragaas_app:ragaas-dev-pass@localhost:27017/ragaas?authSource=ragaas"
 ```
 
 ### 4. 파일 권한 오류 (SHARED_STORAGE_PATH)
@@ -171,8 +171,8 @@ chmod -R 755 data/uploads
 # backend, ingest-service, frontend 섹션의 주석(#) 제거
 
 # 2. 환경 변수 변경 (Docker 네트워크 사용)
-# - MILVUS_HOST=standalone (not localhost)
-# - MONGO_URI=mongodb://root:example@mongo:27017 (not localhost)
+# - MILVUS_HOST=shared-milvus (not localhost)
+# - MONGO_URI=mongodb://ragaas_app:...@shared-mongo:27017/ragaas?authSource=ragaas (not localhost)
 # - INGEST_SERVICE_URL=http://ingest-service:8001
 # - CALLBACK_BASE_URL=http://backend:8000
 
@@ -193,5 +193,5 @@ ps aux | grep node
 docker ps
 
 # 포트 확인
-lsof -i :8000,8001,5173,19530,3030,7687,27017,6379
+lsof -i :8000,8001,3002,19530,3030,7687,27017,6379
 ```

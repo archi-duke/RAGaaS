@@ -206,7 +206,7 @@ export default function KnowledgeBaseDetail() {
     const loadSettings = () => {
         try {
             // Include KB ID in key to save settings per KB
-            const settingsKey = `retrievalSettings_${id}`;
+            const settingsKey = `ragaas_retrievalSettings_${id}`;
             const saved = localStorage.getItem(settingsKey);
             if (saved) {
                 const settings = JSON.parse(saved);
@@ -270,7 +270,7 @@ export default function KnowledgeBaseDetail() {
             useDynamicSchema
         };
         // Save settings per KB
-        const settingsKey = `retrievalSettings_${id}`;
+        const settingsKey = `ragaas_retrievalSettings_${id}`;
         localStorage.setItem(settingsKey, JSON.stringify(settings));
         console.log(`[KB ${id}] Settings saved:`, { enableInverseSearch, inverseExtractionMode });
     };
@@ -447,7 +447,7 @@ export default function KnowledgeBaseDetail() {
 
             // ... (settings logic) ...
 
-            const settingsKey = `retrievalSettings_${id}`;
+            const settingsKey = `ragaas_retrievalSettings_${id}`;
             const saved = localStorage.getItem(settingsKey);
             const isGraphRAG = kbData.graph_backend === 'neo4j' || kbData.graph_backend === 'ontology';
 

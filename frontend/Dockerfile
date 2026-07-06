@@ -5,16 +5,16 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 WORKDIR /app
 
-# Install Node.js 18
+# Install Node.js 22 (LTS) — @module-federation/vite(undici)가 Node 20+ 전역 File 요구
 RUN apt-get update && apt-get install -y \
     curl \
     ca-certificates \
-    && curl -fsSL https://deb.nodesource.com/setup_18.x | bash - \
+    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy package files
-COPY package*.json ./
+# Copy package files (+ .npmrc — React19 + Kendo 5.8 peer 완화, frontend/.npmrc 참고)
+COPY package*.json .npmrc ./
 
 # Copy license file if it exists (optional, for local builds)
 COPY telerik-license.txt* ./
@@ -49,8 +49,12 @@ COPY --from=builder /app/dist /usr/share/nginx/html
 RUN rm -f /etc/nginx/sites-enabled/default
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
+# Runtime env injection (플랫폼 계약 05 §5) — 기동 시 env → env.js 생성 후 nginx 실행
+COPY entrypoint.sh /entrypoint.sh
+RUN sed -i 's/\r$//' /entrypoint.sh && chmod +x /entrypoint.sh
+
 # Expose port
 EXPOSE 80
 
-# Start nginx
-CMD ["nginx", "-g", "daemon off;"]
+# Start via entrypoint (env.js 생성 → nginx)
+CMD ["/entrypoint.sh"]

@@ -72,7 +72,7 @@ npm install
 npm run dev
 ```
 
-**실행 확인**: http://localhost:5173
+**실행 확인**: http://localhost:3002
 
 ## ✅ 실행 확인
 
@@ -80,7 +80,7 @@ npm run dev
 
 | 서비스 | URL | 설명 |
 |--------|-----|------|
-| Frontend | http://localhost:5173 | React 애플리케이션 |
+| Frontend | http://localhost:3002 | React 애플리케이션 |
 | Backend | http://localhost:8000 | FastAPI 백엔드 |
 | Backend API Docs | http://localhost:8000/docs | Swagger UI |
 | Ingest Service | http://localhost:8001 | 문서 처리 서비스 |
@@ -100,7 +100,7 @@ docker-compose down
 ### Backend (.env)
 ```
 OPENAI_API_KEY=your_api_key
-MONGO_URI=mongodb://root:example@localhost:27017
+MONGO_URI=mongodb://ragaas_app:ragaas-dev-pass@localhost:27017/ragaas?authSource=ragaas
 MILVUS_HOST=localhost
 MILVUS_PORT=19530
 NEO4J_URI=bolt://localhost:7687
@@ -131,7 +131,7 @@ MAIN_BACKEND_URL=http://localhost:8000
 # macOS/Linux
 lsof -ti:8000 | xargs kill -9
 lsof -ti:8001 | xargs kill -9
-lsof -ti:5173 | xargs kill -9
+lsof -ti:3002 | xargs kill -9
 ```
 
 ### MongoDB 연결 오류
@@ -142,7 +142,7 @@ docker-compose logs mongo  # MongoDB 로그 확인
 
 ### Milvus 연결 오류
 ```bash
-docker-compose logs standalone  # Milvus 로그 확인
+docker compose logs milvus  # Milvus 로그 확인 (shared-infra 디렉토리에서)
 ```
 
 ## 📝 개발 팁
