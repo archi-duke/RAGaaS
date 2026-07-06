@@ -96,6 +96,10 @@ services:
     depends_on:
       - backend
       - ingest-service
+    networks:
+      - default
+      # 게이트웨이가 /ragaas/ → ragaas-frontend:80 으로 프록시 (갱신 통지 2026-07-06 변경 3)
+      - shared-net
     restart: unless-stopped
 
 volumes:
