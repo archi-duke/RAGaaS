@@ -11,9 +11,20 @@ import os
 INGEST_SERVICE_URL = os.getenv("INGEST_SERVICE_URL", "http://127.0.0.1:8001")
 
 
+def service_headers(user_id: str = "") -> Dict[str, str]:
+    """서비스간 호출 헤더 (플랫폼 계약 05 §3) — X-Service-Token + act-as X-User-Id."""
+    headers: Dict[str, str] = {}
+    token = os.getenv("SERVICE_TOKEN", "")
+    if token:
+        headers["X-Service-Token"] = token
+    if user_id:
+        headers["X-User-Id"] = user_id
+    return headers
+
+
 class IngestServiceClient:
     """Ingest Service API 클라이언트"""
-    
+
     def __init__(self, base_url: str = INGEST_SERVICE_URL):
         self.base_url = base_url.rstrip("/")
     
@@ -71,8 +82,9 @@ class IngestServiceClient:
         
         async with httpx.AsyncClient(timeout=3600.0) as client:
             response = await client.post(
-                f"{self.base_url}/api/ingest",
-                json=payload
+                f"{self.base_url}/api/v2/ingest",
+                json=payload,
+                headers=service_headers(),
             )
             response.raise_for_status()
             return response.json()
@@ -81,7 +93,8 @@ class IngestServiceClient:
         """작업 상태 조회"""
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.get(
-                f"{self.base_url}/api/jobs/{job_id}"
+                f"{self.base_url}/api/v2/jobs/{job_id}",
+                headers=service_headers(),
             )
             response.raise_for_status()
             return response.json()
@@ -90,7 +103,8 @@ class IngestServiceClient:
         """작업 취소"""
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.post(
-                f"{self.base_url}/api/jobs/{job_id}/cancel"
+                f"{self.base_url}/api/v2/jobs/{job_id}/cancel",
+                headers=service_headers(),
             )
             response.raise_for_status()
             return response.json()

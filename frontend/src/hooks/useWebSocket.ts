@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { wsBase } from '../platform/config';
 
 interface WebSocketMessage {
     type: string;
@@ -40,15 +41,9 @@ export function useWebSocket({ kbId, onMessage, enabled = true }: UseWebSocketPr
                     wsRef.current.close();
                 }
 
-                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-                let wsUrl;
-                if (window.location.port === '5173' || window.location.port === '3000') {
-                    // Dev mode: connect directly to backend
-                    wsUrl = `${protocol}//${window.location.hostname}:8000/api/ws/${kbIdRef.current}`;
-                } else {
-                    // Production/Docker: use same host (nginx proxies WS)
-                    wsUrl = `${protocol}//${window.location.host}/api/ws/${kbIdRef.current}`;
-                }
+                // 런타임 config(REACT_APP_RAGAAS_API)에서 유도 — dev 는 vite 프록시(ws:true),
+                // 배포는 nginx/게이트웨이가 WS 업그레이드를 프록시한다
+                const wsUrl = `${wsBase()}/ws/${kbIdRef.current}`;
 
                 console.log(`[WebSocket] Connecting to ${wsUrl}`);
                 const ws = new WebSocket(wsUrl);
