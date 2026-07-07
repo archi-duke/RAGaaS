@@ -1,16 +1,27 @@
 # [통지] 셸 탭 활성화 완료 + standalone 자산 경로 이슈 1건 (2026-07-07)
 
 > **대상**: RAGaaS 팀. `ragaas-status-reply-2026-07-06.md` 회신 잘 받았습니다.
-> **요지**: ① 셸 탭 **활성화 완료** — C1~C3 합동 검증 가능. ② 단, **standalone `/ragaas/` 진입이
-> 흰 화면**입니다 — 원인·수정법 아래 (GoJIRA-App 도 같은 문제라 오늘 같은 방식으로 수정했습니다).
+> **요지**: ① 셸 탭 **활성화 완료** — C1~C3 합동 검증 가능. ② standalone `/ragaas/` 진입 흰 화면
+> 이슈가 있었으나, **아키텍처 결정(아래 §0)으로 그쪽 조치는 불필요**해졌습니다 — §2 는 선택 사항.
 > ③ 문의 4건(tarball 경로 / WS 인증 / Kendo 라이선스 / dev 포트) 답변 포함.
+
+## 0. (갱신 2026-07-07) standalone 진입 폐지 — remote 는 바디 전용
+
+셸에서 RAGaaS 탭 렌더 확인 결과(Knowledge Bases 정상), remote 가 바디 전용인 현 구조를 표준으로
+확정했습니다 (계약 01 §2 갱신): **크롬(타이틀바·플랫폼 메뉴·사용자 표시)은 셸 단독 소유, 브라우저
+사용자용 standalone 화면은 없음.** 게이트웨이가 `location = /ragaas/` (exact) 를 셸 딥링크
+`/ragaas` 로 302 수렴시킵니다 — 자산(`/ragaas/assets/…`)·remoteEntry·API 는 그대로 통과.
+
+**따라서 §2 의 base 수정은 필수가 아닙니다.** 하고 싶으면 위생 차원(게이트웨이 미경유 직접 접근
+대비)으로 해도 무해하나, C1~C3 합동 검증으로 직행하셔도 됩니다. 제품 단독 실행은 dev 서버(:3002)
+기준으로 유지하면 됩니다 (C5 는 dev 서버 검증으로 충족).
 
 ## 1. 셸 탭 활성화 완료
 
 플랫폼 게이트웨이 스택의 env 에 `REACT_APP_RAGAAS_APP_REMOTE={scheme}://{host}:{port}/ragaas` 반영
 완료 — 셸(`/`)에 RAGaaS 탭이 노출되고 remoteEntry 를 로드합니다. **C1~C3 합동 검증 진행 가능합니다.**
 
-## 2. 이슈: standalone `/ragaas/` 흰 화면 — Vite `base` 필요
+## 2. (선택 — §0 참조) standalone `/ragaas/` 흰 화면 — Vite `base`
 
 ### 증상 / 원인
 
@@ -71,6 +82,17 @@ curl -s http://{gateway}/ragaas/ | grep -o 'src="[^"]*"'   # 전부 /ragaas/ 프
 | **WebSocket 인증** | 제안 수용합니다. 계약 05 에 WS 인증 규약(첫 메시지 토큰 방식 유력 — 쿼리파라미터는 액세스 로그 노출 우려)을 **v1.1 로 추가 예정**, 초안은 플랫폼 쪽에서 작성해 공유하겠습니다. 그전까지는 게이트웨이/셸 경유 전제로 현행 수용. |
 | **Kendo 라이선스** | 이해하신 대로입니다. web-ui 이관(Phase 2) 시 플랫폼 소유 라이선스로 일원화 — 실키는 어느 레포에도 커밋하지 않고 **빌드 시점 주입**(CI/빌드 머신의 `TELERIK_LICENSE`)입니다. 미등록 모드 워터마크는 Phase 2 에서 자연 해소. |
 | **dev 포트 3002** | 셸 registry 는 RAGaaS 를 env 게이트로만 등록합니다(dev 폴백 없음 — 미기동 환경에서 죽은 탭 방지). dev 합동 검증 시 Platform-App 쪽 `.env` 에 `REACT_APP_RAGAAS_APP_REMOTE=http://localhost:3002` 한 줄이면 됩니다. |
+
+## 3.5. (추가 2026-07-07) 계약 확장 — `./manifest` 로 타이틀바 브랜딩/메뉴 등록 (선택)
+
+계약 01 §2 에 선택 expose `./manifest` 가 추가됐습니다: `{ name, icon, menus }`.
+`/ragaas` 진입 시 셸이 RAGaaS 브랜드(아이콘+이름)와 RAGaaS 가 선언한 메뉴만 노출하는
+**브랜디드 스코프**가 생겼습니다 (플랫폼 루트 `/` 는 전 제품 통합 뷰 유지).
+
+- **안 하면**: 지금처럼 동작 (브랜드명 'RAGaaS' 폴백, 메뉴 없음 — 바디 전체 화면). 블로커 아님.
+- **하면**: `exposes: { './manifest': './src/manifest' }` + 순수 데이터 default export.
+  타이틀바 메뉴(예: Knowledge Bases / Jobs)를 직접 소유하게 되고, 메뉴 클릭 키는 `page` prop
+  (RemoteAppProps 추가됨) 으로 들어옵니다. 상세는 계약 01 §2 갱신본 참조.
 
 ## 4. 다음 단계
 
