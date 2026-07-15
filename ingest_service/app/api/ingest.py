@@ -351,18 +351,23 @@ async def process_ingest_job(job_id: str, request: IngestRequest):
 
         
         # 6. Call callback (Optional)
+        # 잡은 이미 COMPLETED 이고 데이터도 저장 완료됨. 콜백 POST 실패가
+        # 전체 except 로 전파돼 성공한 잡을 FAILED 로 뒤집지 않도록 개별 보호한다.
         if request.callback_url:
-            import httpx
-            from app.core.platform_auth import service_headers
-            async with httpx.AsyncClient() as client:
-                await client.post(request.callback_url, headers=service_headers(), json={
-                    "job_id": job_id,
-                    "doc_id": request.doc_id,
-                    "kb_id": request.kb_id,
-                    "status": "completed",
-                    "result": jobs[job_id]["result"],
-                })
-        
+            try:
+                import httpx
+                from app.core.platform_auth import service_headers
+                async with httpx.AsyncClient() as client:
+                    await client.post(request.callback_url, headers=service_headers(), json={
+                        "job_id": job_id,
+                        "doc_id": request.doc_id,
+                        "kb_id": request.kb_id,
+                        "status": "completed",
+                        "result": jobs[job_id]["result"],
+                    })
+            except Exception as cb_err:
+                print(f"[IngestJob] ⚠️ 완료 콜백 전송 실패(잡은 COMPLETED 유지): {cb_err}", flush=True)
+
     except Exception as e:
         import traceback
         print(f"[IngestJob] ❌ Job {job_id} FAILED: {e}")
