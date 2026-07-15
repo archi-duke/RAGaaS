@@ -416,11 +416,23 @@ class IngestPipeline:
         
         # Pass extra_headers as default_headers for LlamaIndex/OpenAI
         extra_headers = config.get("extra_headers") or {}
-        
+
+        model = config.get("model", settings.OPENAI_MODEL)
+        base_url = config.get("base_url")
+        # 커스텀(비-OpenAI) 프로바이더 모델은 LlamaIndex OpenAI의 하드코딩된 모델명
+        # 검증을 통과하도록 등록한다 (예: z.ai glm-5.2). 미등록 시 'Unknown model' 오류.
+        if base_url and "api.openai.com" not in base_url:
+            try:
+                from llama_index.llms.openai import utils as _oai_utils
+                _oai_utils.ALL_AVAILABLE_MODELS.setdefault(model, 128000)
+                _oai_utils.CHAT_MODELS.setdefault(model, 128000)
+            except Exception as _e:
+                print(f"[Pipeline] Could not register custom model '{model}': {_e}", flush=True)
+
         return OpenAI(
-            model=config.get("model", settings.OPENAI_MODEL),
+            model=model,
             api_key=config.get("api_key"),
-            base_url=config.get("base_url"),
+            api_base=base_url,  # LlamaIndex OpenAI는 base_url이 아니라 api_base 사용 (base_url은 무시됨)
             default_headers=extra_headers,  # <--- FIX: Added extra headers
             timeout=120.0,
             http_client=httpx.AsyncClient(
@@ -445,7 +457,7 @@ class IngestPipeline:
         return OpenAIEmbedding(
             model=config.get("model", settings.EMBEDDING_MODEL),
             api_key=config.get("api_key"),
-            base_url=config.get("base_url"),
+            api_base=config.get("base_url"),  # LlamaIndex는 base_url이 아니라 api_base 사용
             default_headers=extra_headers,  # <--- FIX: Added extra headers
             timeout=60.0,
             http_client=httpx.AsyncClient(

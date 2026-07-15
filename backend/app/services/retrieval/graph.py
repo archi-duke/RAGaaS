@@ -144,7 +144,7 @@ class GraphRetrievalStrategy(RetrievalStrategy):
         # 5. Fetch content from Milvus
         results = []
         if chunk_ids:
-            results = await self._fetch_chunks(kb_id, chunk_ids, query, top_k)
+            results = await self._fetch_chunks(kb_id, chunk_ids, query, top_k, emb_service=emb_service)
         
         # 6. Graph-Guided Fallback: If SPARQL found entities but no chunks, or if no results at all
         # We use the entities found by SPARQL (e.g. 'Duke', 'Oh Il-nam') to guide the vector/hybrid search
@@ -475,7 +475,9 @@ class GraphRetrievalStrategy(RetrievalStrategy):
             logger.error(f"Error in fallback search: {e}")
             return []
 
-    async def _fetch_chunks(self, kb_id: str, chunk_ids: List[str], query: str, top_k: int) -> List[Dict[str, Any]]:
+    async def _fetch_chunks(self, kb_id: str, chunk_ids: List[str], query: str, top_k: int, emb_service=None) -> List[Dict[str, Any]]:
+        if emb_service is None:
+            emb_service = default_embedding_service
         # Get existing collection
         collection_name = f"kb_{kb_id.replace('-', '_')}"
         from pymilvus import Collection
