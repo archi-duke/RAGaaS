@@ -1,59 +1,58 @@
-# 서비스 가동 및 트러블슈팅 가이드 (Startup & Troubleshooting Guide)
+# 서비스 가동 및 트러블슈팅 가이드
 
-이 문서는 RAGaaS 시스템의 백엔드, 인제스트 서비스, 프론트엔드를 안정적으로 가동하는 방법과 발생할 수 있는 주요 문제 해결 방법을 기록합니다.
+> **상태**: ✅ 현행 · **최종 검증**: 2026-07-15 · 배포 상세·MF 함정은 [`PLATFORM-INTEGRATION.md`](PLATFORM-INTEGRATION.md) 참조.
+> 구(로컬 인프라 + venv) 방식 가이드는 폐기됨 — 인프라는 이제 **shared-infra**(외부 호스트)를 참조한다.
 
-## 1. 서비스 가동 전 필수 체크 (좀비 프로세스 정리)
-
-서버 재시도나 비정상 종료 후 포트가 점유되어 있는 경우 서비스가 시작되지 않습니다. 아래 명령어로 기존 프로세스를 정리합니다.
+## 1. 운영 기동 (Docker — 표준)
 
 ```bash
-# 8000(Back), 8001(Ingest), 5173(Front) 포트 점유 프로세스 종료
-lsof -ti :8000,8001,5173 | xargs kill -9 || true
+cd deploy
+# 최초 또는 코드 변경 시
+docker compose build            # frontend(MF 빌드) + backend + ingest
+docker compose up -d            # shared-net 외부 네트워크 필요 (GoJIRA 스택이 생성)
 ```
 
-## 2. 권장 서비스 시작 순서
+전제:
+- `deploy/.env` 존재 (shared-infra 엔드포인트 + **기존 `ENCRYPTION_KEY`** — PLATFORM-INTEGRATION §3 템플릿).
+- 컨테이너 재생성 후 게이트웨이가 새 IP를 못 잡으면, GoJIRA deploy 에서 `docker compose restart gateway`.
 
-모든 서비스는 `0.0.0.0` 호스트로 실행하여 IPv4/IPv6 접속 문제를 방지합니다.
+### 기동 검증
 
-### 1) 인프라 서비스 (Docker)
 ```bash
-docker-compose up -d
+docker compose ps                                   # 3서비스 Up
+docker logs ragaas-backend | grep Startup           # "MongoDB Connected", "Milvus Connected" 확인
+curl -s http://<gateway-host>:44300/ragaas/api/knowledge-bases/ | head -c 200   # KB 목록 응답
 ```
 
-### 2) 백엔드 (Backend) - Port 8000
+접속: **`http://<gateway-host>:44300/ragaas`** (셸 경유는 `/` 에서 RAGaaS 타일).
+
+## 2. 개발 모드 (frontend 만 로컬)
+
 ```bash
-cd backend
-source venv/bin/activate
-uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+cd frontend && npm install --legacy-peer-deps && npm run dev   # base '/' 로 standalone 동작
 ```
+backend/ingest 는 Docker 를 그대로 쓰고 vite proxy(`/api`, `/ingest-api`)로 연결하거나, 로컬 uvicorn 실행 시 shared-infra env 를 직접 주입한다.
 
-### 3) 인제스트 서비스 (Ingest Service) - Port 8001
-```bash
-cd ingest_service
-source venv/bin/activate
-uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload
-```
+## 3. 주요 문제 및 해결
 
-### 4) 프론트엔드 (Frontend) - Port 5173
-```bash
-cd frontend
-npm run dev -- --host 0.0.0.0
-```
+### 셸에서 "RAGaaS에 연결할 수 없습니다"
+- **원인 1 — 오리진 불일치(CORS)**: 셸을 `localhost:44300` 으로 열었는데 `RAGAAS_APP_REMOTE` 가 LAN IP 로 설정된 경우, remoteEntry 교차출처 로드가 차단된다.
+  **해결**: remote 와 같은 호스트로 접속 (`http://<gateway-host>:44300`).
+- **원인 2**: ragaas 컨테이너가 `shared-net` 미조인 → 게이트웨이 502. `docker network inspect shared-net` 로 확인.
 
-## 3. 주요 문제 및 해결 방안
+### backend 기동 직후 `Failed to connect to Milvus`
+- 인프라 워밍업 전 기동된 경합. Milvus healthy 후 `docker compose restart backend`.
+- shared-infra 자체가 죽어 있으면 해당 호스트에서 인프라 스택 확인.
 
-### 문제 1: "Address already in use" 에러 (8000 포트 등)
-*   **원인**: 이전 프로세스가 비정상 종료되어 포트를 잡고 있음.
-*   **해결**: 상단의 '좀비 프로세스 정리' 명령어를 실행한 후 다시 시작.
+### 문서가 processing 에서 멈춤
+- ingest-service 중단 시 콜백 유실로 상태가 고착된다 ([ADR-002](adr/ADR-002-http-ingest-service.md) 알려진 한계).
+  `docker logs ragaas-ingest` 확인 → 필요 시 문서 삭제 후 재업로드.
 
-### 문제 2: 프론트엔드에서 백엔드 접속 실패 (Connection Refused)
-*   **원인**: 
-    1. 서버가 `127.0.0.1`로만 바인딩되어 있는데 브라우저가 `localhost`를 IPv6(`::1`)로 호출하는 경우.
-    2. CORS 설정 문제.
-*   **해결**: 
-    *   서버 실행 시 `--host 0.0.0.0` 옵션 사용.
-    *   브라우저에서 `http://127.0.0.1:5173`으로 직접 접속 시도.
+### API 키 복호화 실패 (`ENCRYPTION_KEY may have changed`)
+- `deploy/.env` 의 `ENCRYPTION_KEY` 가 데이터를 암호화했던 값과 다름. **기존 키로 복원** (새로 생성하면 저장된 프로바이더 키 전부 무효).
 
-### 문제 3: 문서 처리(Ingestion) 중 에러 또는 무한 대기
-*   **원인**: 인제스트 서비스(8001)가 죽어있거나 백엔드와 통신이 안 됨.
-*   **해결**: `ingest_service` 로그를 확인하고, `backend/.env` 파일의 `INGEST_SERVICE_URL`이 정확한지 확인.
+### 커스텀 LLM(예: z.ai) 401/타임아웃/모델 오류
+- [`architecture/model-config-and-pipeline-contract.md`](architecture/model-config-and-pipeline-contract.md) §4 함정 목록 참조 (api_base, 모델 화이트리스트, coding 플랜 엔드포인트, thinking 모델 주의).
+
+### 배포했는데 프론트가 옛 버전으로 동작
+- MF 청크 캐시 문제. JS/CSS 는 no-cache 로 서빙 중이나, 과거 immutable 캐시가 남은 브라우저는 1회 수동 클리어 필요 (PLATFORM-INTEGRATION §4.2).

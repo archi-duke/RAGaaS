@@ -187,10 +187,11 @@ docker-compose up -d
 
 ## 문서
 
-- [서비스 가동 및 트러블슈팅 가이드](docs/startup_guide.md) **(추천)**
-- [시스템 사양서](docs/specification.md)
-- [구현 계획](docs/implementation_plan.md)
-- [구현 완료 보고서](docs/walkthrough.md)
+- [문서 색인 — 정본/상태 표시](docs/README.md) **(먼저 볼 것)**
+- [서비스 가동 및 트러블슈팅 가이드](docs/startup_guide.md)
+- [시스템 사양서 v2 (현행)](docs/specification-v2.md)
+- [플랫폼(NETRIX) 연계·배포](docs/PLATFORM-INTEGRATION.md)
+- [아키텍처 결정 기록 (ADR)](docs/adr/README.md)
 - [설정 가이드](SETUP.md)
 
 ## 프로젝트 구조
