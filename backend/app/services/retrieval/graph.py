@@ -15,8 +15,11 @@ logger = logging.getLogger(__name__)
 
 class GraphRetrievalStrategy(RetrievalStrategy):
     def __init__(self):
-        self.namespace_entity = "http://rag.local/entity/"
-        self.namespace_relation = "http://rag.local/relation/"
+        # 실제 저장 네임스페이스와 일치시킴 (sparql_generator / fuseki_connector 와 동일).
+        # 과거 relation/·entity/ 로 잘못 지정돼 _expand_entities 의 rel:hasSource 제외
+        # 필터가 실데이터와 매치되지 않던 문제 수정.
+        self.namespace_entity = "http://rag.local/inst/"
+        self.namespace_relation = "http://rag.local/rel/"
 
     async def search(self, kb_id: str, query: str, top_k: int, **kwargs) -> List[Dict[str, Any]]:
         use_raw_log = kwargs.get("use_raw_log", False)
