@@ -1,4 +1,8 @@
- # RAG 관리 시스템 사양서 (Milvus 기반)
+> 🗄️ **아카이브 (2026-07-15)** — 이 문서는 초기 설계 시점(v1)의 사양이며 현행 시스템과 다르다
+> (SQLite→MongoDB, 고정 임베딩→프로바이더 레지스트리, 모놀리스→3서비스+MF, strategy→파이프라인 등).
+> **현행 사양은 [`../specification-v2.md`](../specification-v2.md), 결정 이력은 [`../adr/`](../adr/) 참조.**
+
+# RAG 관리 시스템 사양서 (Milvus 기반)
 
 ## 1. 개요
 본 문서는 Milvus를 기반으로 하는 RAG (Retrieval-Augmented Generation) 관리 시스템의 사양을 정의합니다. 이 시스템은 사용자가 다수의 지식 베이스(Knowledge Base)를 생성 및 관리하고, 문서를 업로드하며, 검색 전략을 구성할 수 있도록 지원합니다. 디자인과 기능은 Dify의 Knowledge 기능을 참고하여 설계되었습니다.
