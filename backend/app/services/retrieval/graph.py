@@ -173,12 +173,17 @@ class GraphRetrievalStrategy(RetrievalStrategy):
 
         
         # 7. Add graph metadata
+        # dead-chip 방지: 추출 엔티티 중 실제 그래프 노드로 존재하는 것만 clickable 로 표시.
+        # (번역 변이 "Seong Gi-hun" 이나 일반개념어는 그래프에 노드가 없어 뷰어가 빈 화면이 됨)
+        graph_triples = graph_result.get("triples", [])
+        clickable_entities = self._compute_clickable_entities(entities, graph_triples)
         metadata = {
             "sparql_query": graph_result.get("sparql_query", ""),
             "extracted_entities": entities,
+            "clickable_entities": clickable_entities,
             "expanded_entities": expanded_entities,
             "found_graph_entities": found_graph_entities, # Add this for debugging
-            "triples": graph_result.get("triples", []),
+            "triples": graph_triples,
             "total_chunks_found": len(results), # Use final results count (includes Entity-Guided chunks)
             "query_analysis": query_analysis,
             "trace_logs": trace_logs
@@ -278,6 +283,38 @@ class GraphRetrievalStrategy(RetrievalStrategy):
             
         return list(entities)
     
+    def _compute_clickable_entities(self, entities: List[str], triples: List[Dict[str, Any]]) -> List[str]:
+        """추출 엔티티 중 실제 그래프 노드(트리플 subject/object)로 존재하는 것만 반환.
+
+        그래프 뷰어는 노드가 있는 엔티티만 확장 가능하므로, 노드가 없는 번역 변이나
+        일반개념어(dead-chip)를 UI 가 비활성화할 수 있도록 clickable 목록을 계산한다.
+        정규화(밑줄→공백, 소문자, trim) 후 완전일치, 또는 2자 이상 양방향 부분포함으로 판정.
+        """
+        def _norm(s: Any) -> str:
+            return str(s or "").replace("_", " ").strip().lower()
+
+        node_texts = set()
+        for t in triples or []:
+            for key in ("subject", "object"):
+                nt = _norm(t.get(key))
+                if nt:
+                    node_texts.add(nt)
+
+        clickable = []
+        for e in entities:
+            ne = _norm(e)
+            if not ne:
+                continue
+            if ne in node_texts:
+                clickable.append(e)
+                continue
+            # 2자 이상 양방향 부분포함 (예: "장풍" ↔ "전수받은 장풍")
+            if len(ne) >= 2 and any(
+                (len(nt) >= 2 and (ne in nt or nt in ne)) for nt in node_texts
+            ):
+                clickable.append(e)
+        return clickable
+
     async def _analyze_and_extract(self, kb_id: str, query: str, llm_client=None, llm_model: str = "gpt-4o-mini") -> Tuple[List[str], Dict[str, Any]]:
         """질의 분석 + 엔티티 추출을 단일 LLM 호출로 병합 (기존 2회 → 1회).
 

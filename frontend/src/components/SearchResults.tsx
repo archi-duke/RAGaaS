@@ -341,31 +341,39 @@ export default function SearchResults({ chunks, kbId, graphBackend, logs, pipeli
                                 </div>
                                 <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
                                     {graphMetadata.extracted_entities && graphMetadata.extracted_entities.length > 0 ? (
-                                        graphMetadata.extracted_entities.map((entity: string, idx: number) => (
+                                        graphMetadata.extracted_entities.map((entity: string, idx: number) => {
+                                            // clickable_entities 가 있으면 그 목록에 있는 엔티티만 그래프 노드로 존재(live).
+                                            // 필드가 없으면(구 백엔드) 하위호환으로 전부 clickable 로 취급.
+                                            const liveList: string[] | undefined = graphMetadata.clickable_entities;
+                                            const isLive = !liveList || liveList.includes(entity);
+                                            const clickable = !!kbId && isLive;
+                                            return (
                                             <button
                                                 key={idx}
                                                 className="badge"
+                                                disabled={!clickable}
                                                 onClick={() => {
-                                                    if (kbId) {
+                                                    if (clickable) {
                                                         window.open(`${import.meta.env.BASE_URL}graph-viewer?kb_id=${kbId}&entity=${encodeURIComponent(entity)}&backend=${graphBackend || 'neo4j'}`, '_blank');
                                                     }
                                                 }}
                                                 style={{
                                                     fontSize: '0.8rem',
-                                                    background: 'white',
-                                                    border: '1px solid #bae6fd',
-                                                    color: '#0369a1',
-                                                    cursor: kbId ? 'pointer' : 'default',
+                                                    background: clickable ? 'white' : '#f1f5f9',
+                                                    border: clickable ? '1px solid #bae6fd' : '1px dashed #cbd5e1',
+                                                    color: clickable ? '#0369a1' : '#94a3b8',
+                                                    cursor: clickable ? 'pointer' : 'not-allowed',
                                                     display: 'flex',
                                                     alignItems: 'center',
                                                     gap: '4px'
                                                 }}
-                                                title={kbId ? "Visualize Graph" : undefined}
+                                                title={clickable ? "Visualize Graph" : "이 엔티티는 그래프에 노드가 없어 확장할 수 없습니다"}
                                             >
-                                                {kbId && <span>🕸️</span>}
+                                                {clickable && <span>🕸️</span>}
                                                 {entity}
                                             </button>
-                                        ))
+                                            );
+                                        })
                                     ) : (
                                         <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', fontStyle: 'italic' }}>None detected</span>
                                     )}
