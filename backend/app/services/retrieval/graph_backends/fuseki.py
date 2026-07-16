@@ -74,25 +74,29 @@ class FusekiBackend(GraphBackend):
             # SPARQL 문자열 리터럴에 삽입하기 전 이스케이프 (원본 entity_text는 로깅용으로 보존)
             safe_entity_text = escape_sparql_literal(entity_text)
 
-            # 1. rdfs:label로 검색
+            # 1. rdfs:label로 검색 — LIMIT 1 임의 매치 대신 후보를 모아 랭킹한다.
+            #    (부분매칭은 "성기훈" → "성기훈"/"기훈"/"성기훈의 어머니"/"기훈에게 …" 등
+            #     여러 후보를 만들며, 임의 첫 매치는 긴 노이즈 노드를 앵커로 잡을 수 있다.)
             label_query = f"""
             PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-            SELECT DISTINCT ?uri
+            SELECT DISTINCT ?uri ?label
             FROM <urn:x-arq:UnionGraph>
             WHERE {{
               ?uri rdfs:label ?label .
               FILTER(CONTAINS(LCASE(STR(?label)), LCASE("{safe_entity_text}")))
             }}
-            LIMIT 1
+            LIMIT 50
             """
 
             results = fuseki_client.query_sparql(kb_id, label_query)
             bindings = results.get("results", {}).get("bindings", [])
 
-            if bindings:
-                return bindings[0]["uri"]["value"]
+            best_uri = self._pick_best_uri_binding(entity_text, bindings, value_key="label")
+            if best_uri:
+                return best_uri
 
-            # 2. URI 마지막 부분으로 검색 (예: inst:Seong_Gi-hun)
+            # 2. URI 마지막 부분으로 검색 (예: inst:Seong_Gi-hun) — 동일하게 랭킹 적용.
+            #    URI 로컬네임을 비교 대상으로 삼는다.
             uri_query = f"""
             PREFIX inst: <http://rag.local/inst/>
             SELECT DISTINCT ?uri
@@ -102,21 +106,47 @@ class FusekiBackend(GraphBackend):
               FILTER(CONTAINS(LCASE(STR(?uri)), LCASE("{safe_entity_text}")))
               FILTER(STRSTARTS(STR(?uri), "http://rag.local/inst/"))
             }}
-            LIMIT 1
+            LIMIT 50
             """
-            
+
             results = fuseki_client.query_sparql(kb_id, uri_query)
             bindings = results.get("results", {}).get("bindings", [])
-            
-            if bindings:
-                return bindings[0]["uri"]["value"]
-            
+
+            best_uri = self._pick_best_uri_binding(entity_text, bindings, value_key=None)
+            if best_uri:
+                return best_uri
+
             print(f"[Fuseki] Entity Resolution: '{entity_text}' not found in graph")
             return None
-            
+
         except Exception as e:
             print(f"[Fuseki] Error resolving entity '{entity_text}': {e}")
             return None
+
+    def _pick_best_uri_binding(self, entity_text: str, bindings: List[Dict], value_key: Optional[str]) -> Optional[str]:
+        """SPARQL 바인딩 후보들에서 entity_text 와 가장 잘 매칭되는 URI 선택.
+
+        value_key 가 지정되면 그 변수(예: label)의 값을 비교 기준으로 삼고,
+        None 이면 URI 의 로컬네임(마지막 path 세그먼트, '_'→' ')을 기준으로 삼는다.
+        랭킹은 entity_linking.score_candidate (완전일치 > 접두 > 부분포함, 길이 근접
+        보너스)를 따른다. 매칭 후보가 없으면 None.
+        """
+        from app.services.retrieval.entity_linking import score_candidate
+
+        best_uri, best_score = None, 0.0
+        for b in bindings:
+            uri = b.get("uri", {}).get("value")
+            if not uri:
+                continue
+            if value_key:
+                compare_text = b.get(value_key, {}).get("value", "")
+            else:
+                local = uri.rsplit("/", 1)[-1]
+                compare_text = local.replace("_", " ")
+            score = score_candidate(entity_text, compare_text)
+            if score > best_score:
+                best_uri, best_score = uri, score
+        return best_uri
 
     def _fetch_entity_predicates(self, kb_id: str, entity_uri: str) -> Dict[str, List[str]]:
         """엔티티 URI에 연결된 모든 Predicate 조회.

@@ -547,11 +547,22 @@ class Neo4jBackend(GraphBackend):
         return False
 
     def _check_entity_exists(self, kb_id: str, entity_name: str) -> bool:
-        """Check if an entity exists in the Neo4j graph."""
+        """Check if an entity exists in the Neo4j graph.
+
+        완전일치뿐 아니라 대소문자 무시 양방향 부분매칭까지 허용한다. 완전일치만
+        보면 표기 변이("Seong Gi-hun")나 조사 잔존 토큰이 게이트에서 탈락해 Fast
+        Path 자체가 스킵되는 문제가 있었다. 실제 Fast Path Cypher 들은 이미
+        bidirectional CONTAINS 로 매칭하므로, 게이트도 같은 기준으로 맞춘다.
+        """
         try:
             query = """
             MATCH (n:Entity)
-            WHERE n.kb_id = $kb_id AND n.name = $entity_name
+            WHERE n.kb_id = $kb_id
+              AND (
+                n.name = $entity_name
+                OR toLower(n.name) CONTAINS toLower($entity_name)
+                OR toLower($entity_name) CONTAINS toLower(n.name)
+              )
             RETURN count(n) as count
             """
             records = neo4j_client.execute_query(query, {"kb_id": kb_id, "entity_name": entity_name})
