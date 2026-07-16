@@ -145,7 +145,7 @@ export default function PipelineBuilder({
     useEffect(() => {
         const loadPipeline = async () => {
             try {
-                const response = await fetch(`/api/knowledge-bases/${kbId}/pipeline`);
+                const response = await fetch(`${import.meta.env.BASE_URL}api/knowledge-bases/${kbId}/pipeline`);
                 if (response.ok) {
                     const config = await response.json();
                     if (config.stages && config.stages.length > 0) {
@@ -193,7 +193,7 @@ export default function PipelineBuilder({
 
         const saveTimeout = setTimeout(async () => {
             try {
-                await fetch(`/api/knowledge-bases/${kbId}/pipeline`, {
+                await fetch(`${import.meta.env.BASE_URL}api/knowledge-bases/${kbId}/pipeline`, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ stages })
@@ -216,7 +216,7 @@ export default function PipelineBuilder({
         setIsLoadingPrompt(true);
         setPromptError('');
         try {
-            const response = await fetch('/api/knowledge-bases/settings/rerank-prompt');
+            const response = await fetch(`${import.meta.env.BASE_URL}api/knowledge-bases/settings/rerank-prompt`);
             if (!response.ok) throw new Error('Failed to load global prompt');
             const data = await response.json();
             setTempPrompt(data.content);
@@ -234,7 +234,7 @@ export default function PipelineBuilder({
             const backendType = graphBackend === 'neo4j'
                 ? 'neo4j'
                 : (isOntologyPromoted ? 'ontology_plus' : 'ontology_minus');
-            const response = await fetch(`/api/knowledge-bases/query-prompt/content?type=${backendType}`);
+            const response = await fetch(`${import.meta.env.BASE_URL}api/knowledge-bases/query-prompt/content?type=${backendType}`);
             if (!response.ok) throw new Error('Failed to load default graph prompt');
             const data = await response.json();
             setTempPrompt(data.content);
@@ -258,7 +258,7 @@ export default function PipelineBuilder({
         try {
             if (editingPromptStage === -1) {
                 // Global Rerank Prompt → txt file
-                const response = await fetch('/api/knowledge-bases/settings/rerank-prompt', {
+                const response = await fetch(`${import.meta.env.BASE_URL}api/knowledge-bases/settings/rerank-prompt`, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ content: tempPrompt })
@@ -269,7 +269,7 @@ export default function PipelineBuilder({
                 const backendType = graphBackend === 'neo4j'
                     ? 'neo4j'
                     : (isOntologyPromoted ? 'ontology_plus' : 'ontology_minus');
-                const response = await fetch('/api/knowledge-bases/query-prompt/save', {
+                const response = await fetch(`${import.meta.env.BASE_URL}api/knowledge-bases/query-prompt/save`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ content: tempPrompt, type: backendType })

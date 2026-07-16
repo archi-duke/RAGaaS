@@ -100,7 +100,7 @@ class HybridRetrievalStrategy(RetrievalStrategy):
                 top_k=top_k * 3, 
                 metric_type=metric_type, 
                 score_threshold=score_threshold,
-                index_type=kwargs.get("index_type", "IVF_FLAT")
+                index_type=index_type
             )
             
             for rank, res in enumerate(ann_results):

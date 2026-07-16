@@ -15,11 +15,8 @@ logger = logging.getLogger(__name__)
 
 class GraphRetrievalStrategy(RetrievalStrategy):
     def __init__(self):
-        # 실제 저장 네임스페이스와 일치시킴 (sparql_generator / fuseki_connector 와 동일).
-        # 과거 relation/·entity/ 로 잘못 지정돼 _expand_entities 의 rel:hasSource 제외
-        # 필터가 실데이터와 매치되지 않던 문제 수정.
-        self.namespace_entity = "http://rag.local/inst/"
-        self.namespace_relation = "http://rag.local/rel/"
+        self.namespace_entity = "http://rag.local/entity/"
+        self.namespace_relation = "http://rag.local/relation/"
 
     async def search(self, kb_id: str, query: str, top_k: int, **kwargs) -> List[Dict[str, Any]]:
         use_raw_log = kwargs.get("use_raw_log", False)
@@ -33,11 +30,14 @@ class GraphRetrievalStrategy(RetrievalStrategy):
             raise ValueError("Graph search model is not configured.")
         from app.core.models_resolver import resolve_model_config
         resolved_llm = await resolve_model_config(llm_model_config)
-        from app.core.llm import achat, has_credentials
-        if not has_credentials(resolved_llm):
-            raise ValueError("Graph search API key/헤더가 설정되지 않았습니다.")
-        llm_cfg = resolved_llm
-        llm_model_name = resolved_llm.get("model")
+        if not resolved_llm.get("api_key"):
+            raise ValueError("Graph search API key is not configured.")
+        llm_client = AsyncOpenAI(
+            api_key=resolved_llm.get("api_key"),
+            **({"base_url": resolved_llm["base_url"]} if resolved_llm.get("base_url") else {}),
+            **({"default_headers": resolved_llm["extra_headers"]} if resolved_llm.get("extra_headers") else {}),
+        )
+        llm_model_name = resolved_llm.get("model", "gpt-4o-mini")
         
         import time
         from datetime import datetime
@@ -68,11 +68,11 @@ class GraphRetrievalStrategy(RetrievalStrategy):
         log(f"🚀 Graph Search Start for query: {query}")
         
         # 1. Analyze query for semantic understanding
-        query_analysis = await self._analyze_query(query, llm_cfg=llm_cfg, llm_model=llm_model_name)
+        query_analysis = await self._analyze_query(query, llm_client=llm_client, llm_model=llm_model_name)
         log(f"DEBUG: Query Analysis -> Type: {query_analysis.get('query_type')}, Hops: {query_analysis.get('hops', 1)}, Rel: {query_analysis.get('relationship_type')}")
         
         # 2. Extract Entities from Query
-        entities = await self._extract_entities(kb_id, query, llm_cfg=llm_cfg, llm_model=llm_model_name)
+        entities = await self._extract_entities(kb_id, query, llm_client=llm_client, llm_model=llm_model_name)
         log(f"DEBUG: 🔍 Extracted entities: {entities}")
         
         # 3. Expand entities - find related entities in graph (conditional)
@@ -198,7 +198,7 @@ class GraphRetrievalStrategy(RetrievalStrategy):
         
         return results
 
-    async def _extract_entities(self, kb_id: str, query: str, llm_cfg=None, llm_model: str = None) -> List[str]:
+    async def _extract_entities(self, kb_id: str, query: str, llm_client=None, llm_model: str = "gpt-4o-mini") -> List[str]:
         """Extract main entities from the query using LLM and spaCy Gazetteer."""
         entities = set()
         
@@ -218,15 +218,19 @@ class GraphRetrievalStrategy(RetrievalStrategy):
         Output format: {{"entities": ["성기훈", "오일남"], "translated_entities": ["Seong Gi-hun", "Oh Il-nam"]}}
         """
         try:
-            from app.core.llm import achat
-            content = await achat(
-                llm_cfg,
-                [
+            if llm_client is None:
+                raise ValueError("Graph search model client is not configured.")
+            client = llm_client
+            response = await client.chat.completions.create(
+                model=llm_model,
+                messages=[
                     {"role": "system", "content": "You are a precise entity extractor for Knowledge Graphs. Output JSON only. Never translate entities in the main list."},
-                    {"role": "user", "content": prompt},
+                    {"role": "user", "content": prompt}
                 ],
-                model=llm_model, temperature=0, response_format={"type": "json_object"},
+                temperature=0,
+                response_format={"type": "json_object"}
             )
+            content = response.choices[0].message.content
             data = json.loads(content)
             for e in data.get("entities", []):
                 entities.add(e)
@@ -271,7 +275,7 @@ class GraphRetrievalStrategy(RetrievalStrategy):
             
         return list(entities)
     
-    async def _analyze_query(self, query: str, llm_cfg=None, llm_model: str = None) -> Dict[str, Any]:
+    async def _analyze_query(self, query: str, llm_client=None, llm_model: str = "gpt-4o-mini") -> Dict[str, Any]:
         """Analyze query to understand semantic intent and relationship types."""
         analysis = {
             "query_type": "simple",  # simple, relationship, multi_hop
@@ -322,16 +326,20 @@ class GraphRetrievalStrategy(RetrievalStrategy):
             }}
             """
             
-            from app.core.llm import achat
-            content = await achat(
-                llm_cfg,
-                [
+            if llm_client is None:
+                raise ValueError("Graph search model client is not configured.")
+            client = llm_client
+            response = await client.chat.completions.create(
+                model=llm_model,
+                messages=[
                     {"role": "system", "content": "You are a query analyzer for graph search. Be precise and output only JSON."},
-                    {"role": "user", "content": prompt},
+                    {"role": "user", "content": prompt}
                 ],
-                model=llm_model, temperature=0, response_format={"type": "json_object"},
+                temperature=0,
+                response_format={"type": "json_object"}
             )
-            llm_analysis = json.loads(content)
+            
+            llm_analysis = json.loads(response.choices[0].message.content)
             analysis.update(llm_analysis)
             
         except Exception as e:

@@ -170,7 +170,7 @@ const GraphViewer: React.FC = () => {
 
                 if (!backend) {
                     try {
-                        const kbResp = await fetch(`/api/knowledge-bases/${kbId}`);
+                        const kbResp = await fetch(`${import.meta.env.BASE_URL}api/knowledge-bases/${kbId}`);
                         if (kbResp.ok) {
                             const kbData = await kbResp.json();
                             if (kbData.graph_backend) {
@@ -189,10 +189,10 @@ const GraphViewer: React.FC = () => {
                 // Use mode directly as isSchemaMode state might not be updated yet
                 if (mode === 'schema') {
                     // Fetch schema data
-                    response = await fetch(`/api/graph/schema?kb_id=${kbId}&backend=${resolvedBackend}`);
+                    response = await fetch(`${import.meta.env.BASE_URL}api/graph/schema?kb_id=${kbId}&backend=${resolvedBackend}`);
                 } else {
                     // Fetch entity expansion data
-                    response = await fetch(`/api/graph/expand?kb_id=${kbId}&entity=${encodeURIComponent(entity || '')}&backend=${resolvedBackend}`);
+                    response = await fetch(`${import.meta.env.BASE_URL}api/graph/expand?kb_id=${kbId}&entity=${encodeURIComponent(entity || '')}&backend=${resolvedBackend}`);
                 }
 
                 if (!response.ok) {

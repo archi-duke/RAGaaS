@@ -35,12 +35,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 플랫폼 신원 확정 미들웨어 (계약 05 §1) — introspect / X-Service-Token / dev 폴백
-from app.core.platform_auth import platform_auth_middleware
-app.middleware("http")(platform_auth_middleware)
-
 # Routers
-app.include_router(ingest_router, prefix="/api/v2", tags=["ingest"])
+app.include_router(ingest_router, prefix="/api", tags=["ingest"])
 
 
 @app.get("/health")

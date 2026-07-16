@@ -147,7 +147,7 @@ export default function KnowledgeBaseDetail() {
             wsUrl = `${protocol}//${window.location.hostname}:8000/api/ws/${id}`;
         } else {
             // Production/Docker: Use same host:port as page
-            wsUrl = `${protocol}//${window.location.host}/api/ws/${id}`;
+            wsUrl = `${protocol}//${window.location.host}${import.meta.env.BASE_URL}api/ws/${id}`;
         }
 
         console.log(`[WebSocket] Connecting to: ${wsUrl}`);
@@ -206,7 +206,7 @@ export default function KnowledgeBaseDetail() {
     const loadSettings = () => {
         try {
             // Include KB ID in key to save settings per KB
-            const settingsKey = `ragaas_retrievalSettings_${id}`;
+            const settingsKey = `retrievalSettings_${id}`;
             const saved = localStorage.getItem(settingsKey);
             if (saved) {
                 const settings = JSON.parse(saved);
@@ -270,7 +270,7 @@ export default function KnowledgeBaseDetail() {
             useDynamicSchema
         };
         // Save settings per KB
-        const settingsKey = `ragaas_retrievalSettings_${id}`;
+        const settingsKey = `retrievalSettings_${id}`;
         localStorage.setItem(settingsKey, JSON.stringify(settings));
         console.log(`[KB ${id}] Settings saved:`, { enableInverseSearch, inverseExtractionMode });
     };
@@ -447,7 +447,7 @@ export default function KnowledgeBaseDetail() {
 
             // ... (settings logic) ...
 
-            const settingsKey = `ragaas_retrievalSettings_${id}`;
+            const settingsKey = `retrievalSettings_${id}`;
             const saved = localStorage.getItem(settingsKey);
             const isGraphRAG = kbData.graph_backend === 'neo4j' || kbData.graph_backend === 'ontology';
 
@@ -900,7 +900,7 @@ export default function KnowledgeBaseDetail() {
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
                                     <button
                                         className="btn"
-                                        onClick={() => window.open(`/graph-viewer?kb_id=${id}&backend=ontology&mode=schema`, '_blank')}
+                                        onClick={() => window.open(`${import.meta.env.BASE_URL}graph-viewer?kb_id=${id}&backend=ontology&mode=schema`, '_blank')}
                                         style={{
                                             fontSize: '0.85rem',
                                             padding: '0.5rem 1rem',

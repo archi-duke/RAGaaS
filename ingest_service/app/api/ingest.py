@@ -138,9 +138,8 @@ async def send_pipeline_status(callback_url: str, job_id: str, doc_id: str, kb_i
         # ✅ COMPLETED 상태일 때는 status를 'completed'로 전송
         overall_status = "completed" if status == "COMPLETED" else "processing"
         
-        from app.core.platform_auth import service_headers
         async with httpx.AsyncClient() as client:
-            await client.post(callback_url, headers=service_headers(), json={
+            await client.post(callback_url, json={
                 "job_id": job_id,
                 "doc_id": doc_id,
                 "kb_id": kb_id,
@@ -351,23 +350,17 @@ async def process_ingest_job(job_id: str, request: IngestRequest):
 
         
         # 6. Call callback (Optional)
-        # 잡은 이미 COMPLETED 이고 데이터도 저장 완료됨. 콜백 POST 실패가
-        # 전체 except 로 전파돼 성공한 잡을 FAILED 로 뒤집지 않도록 개별 보호한다.
         if request.callback_url:
-            try:
-                import httpx
-                from app.core.platform_auth import service_headers
-                async with httpx.AsyncClient() as client:
-                    await client.post(request.callback_url, headers=service_headers(), json={
-                        "job_id": job_id,
-                        "doc_id": request.doc_id,
-                        "kb_id": request.kb_id,
-                        "status": "completed",
-                        "result": jobs[job_id]["result"],
-                    })
-            except Exception as cb_err:
-                print(f"[IngestJob] ⚠️ 완료 콜백 전송 실패(잡은 COMPLETED 유지): {cb_err}", flush=True)
-
+            import httpx
+            async with httpx.AsyncClient() as client:
+                await client.post(request.callback_url, json={
+                    "job_id": job_id,
+                    "doc_id": request.doc_id,
+                    "kb_id": request.kb_id,
+                    "status": "completed",
+                    "result": jobs[job_id]["result"],
+                })
+        
     except Exception as e:
         import traceback
         print(f"[IngestJob] ❌ Job {job_id} FAILED: {e}")
@@ -852,9 +845,8 @@ async def _save_preview_data(
         # Callback
         if callback_url:
             import httpx
-            from app.core.platform_auth import service_headers
             async with httpx.AsyncClient() as client:
-                await client.post(callback_url, headers=service_headers(), json={
+                await client.post(callback_url, json={
                     "job_id": job_id,
                     "doc_id": doc_id,
                     "kb_id": kb_id,

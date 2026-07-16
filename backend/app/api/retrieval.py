@@ -521,11 +521,20 @@ async def chat_with_kb(
                 detail="모델 지정이 안되었습니다: LLM 모델을 먼저 선택해주세요.",
             )
         from app.core.models_resolver import resolve_model_config
-        from app.core.llm import has_credentials
         resolved = await resolve_model_config(config)
-        if not has_credentials(resolved):
-            raise HTTPException(status_code=500, detail="LLM API key/헤더가 설정되지 않았습니다.")
-        return resolved, resolved.get("model")
+        api_key = resolved["api_key"]
+        base_url = resolved["base_url"]
+        model = resolved["model"]
+        extra_headers = resolved.get("extra_headers") or {}
+        if not api_key:
+            raise HTTPException(status_code=500, detail="LLM API key (OpenAI or Custom) not configured")
+        kwargs = {"api_key": api_key}
+        if base_url:
+            kwargs["base_url"] = base_url
+        if extra_headers:
+            kwargs["default_headers"] = extra_headers
+        client = openai.OpenAI(**kwargs)
+        return client, model
 
     # 4. Generate LLM response based on retrieved chunks
     if not results:
@@ -566,20 +575,27 @@ async def chat_with_kb(
     # LLM 모델 설정: model_config (프론트) / pipeline_model_config (백엔드) 호환
     llm_config = llm_default_config or {}
     
-    llm_cfg, llm_model = await get_openai_client(llm_config)
-
+    client, llm_model = await get_openai_client(llm_config)
+    
     system_prompt = _load_chat_system_prompt()
 
     try:
-        from app.core.llm import achat
-        answer = await achat(
-            llm_cfg,
-            [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {request.query}\n\nPlease provide a comprehensive answer based on the context above. If there are multiple answers, please list them all."},
+        response = client.chat.completions.create(
+            model=llm_model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": system_prompt
+                },
+                {
+                    "role": "user",
+                    "content": f"Context:\n{context}\n\nQuestion: {request.query}\n\nPlease provide a comprehensive answer based on the context above. If there are multiple answers, please list them all."
+                }
             ],
-            model=llm_model, temperature=0.3, max_tokens=1000,
+            temperature=0.3,
+            max_tokens=1000
         )
+        answer = response.choices[0].message.content
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to generate response: {str(e)}")
     

@@ -108,13 +108,6 @@ async def expand_graph(
             raise HTTPException(status_code=500, detail=str(e))
 
     elif backend == "ontology":
-        # SPARQL 문자열 리터럴 이스케이프 (인젝션 방지). Neo4j 경로는 파라미터
-        # 바인딩($entity)을 쓰지만 Fuseki 경로는 f-string 조립이라 수동 이스케이프 필요.
-        entity_esc = (
-            entity.replace("\\", "\\\\")
-                  .replace('"', '\\"')
-                  .replace("\n", " ").replace("\r", " ").replace("\t", " ")
-        )
         # Fuseki Query
         sparql = f"""
         PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
@@ -126,18 +119,18 @@ async def expand_graph(
             {{ 
                 ?s ?p ?o . 
                 {{
-                    ?s rdfs:label ?label . FILTER(CONTAINS(LCASE(str(?label)), LCASE("{entity_esc}")))
+                    ?s rdfs:label ?label . FILTER(CONTAINS(LCASE(str(?label)), LCASE("{entity}")))
                 }} UNION {{
-                    FILTER(CONTAINS(LCASE(str(?s)), LCASE("{entity_esc}")))
+                    FILTER(CONTAINS(LCASE(str(?s)), LCASE("{entity}")))
                 }}
             }}
             UNION
             {{ 
                 ?s ?p ?o . 
                 {{
-                    ?o rdfs:label ?label . FILTER(CONTAINS(LCASE(str(?label)), LCASE("{entity_esc}")))
+                    ?o rdfs:label ?label . FILTER(CONTAINS(LCASE(str(?label)), LCASE("{entity}")))
                 }} UNION {{
-                    FILTER(CONTAINS(LCASE(str(?o)), LCASE("{entity_esc}")))
+                    FILTER(CONTAINS(LCASE(str(?o)), LCASE("{entity}")))
                 }}
             }}
             OPTIONAL {{ ?s rdfs:label ?sLabel }}
@@ -598,10 +591,7 @@ async def get_all_triples(
                 field = f.get("field")
                 val = f.get("value")
                 if not val: continue
-                # 작은따옴표 SPARQL 리터럴('{val}')에 삽입되므로 \ 와 ' 를 이스케이프
-                # (기존엔 " 만 이스케이프해 ' 로 인젝션 가능했음)
-                val = (val.replace("\\", "\\\\").replace("'", "\\'")
-                          .replace("\n", " ").replace("\r", " ").replace("\t", " "))
+                val = val.replace('"', '\\"') # Simple escape
                 
                 if field == "subject":
                     filter_clauses.append(f"(CONTAINS(LCASE(?sLabel), LCASE('{val}')) || CONTAINS(LCASE(STR(?s)), LCASE('{val}')))")

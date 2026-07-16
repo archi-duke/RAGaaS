@@ -347,7 +347,7 @@ export default function SearchResults({ chunks, kbId, graphBackend, logs, pipeli
                                                 className="badge"
                                                 onClick={() => {
                                                     if (kbId) {
-                                                        window.open(`/graph-viewer?kb_id=${kbId}&entity=${encodeURIComponent(entity)}&backend=${graphBackend || 'neo4j'}`, '_blank');
+                                                        window.open(`${import.meta.env.BASE_URL}graph-viewer?kb_id=${kbId}&entity=${encodeURIComponent(entity)}&backend=${graphBackend || 'neo4j'}`, '_blank');
                                                     }
                                                 }}
                                                 style={{

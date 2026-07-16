@@ -100,14 +100,11 @@ In this pattern:
         llm_endpoint: Optional[str] = None,
         llm_model: str = "gpt-4o",
         api_key: Optional[str] = None,
-        extra_headers: Optional[Dict[str, str]] = None,
     ):
         self.llm_endpoint = llm_endpoint or "https://api.openai.com/v1/chat/completions"
         self.llm_model = llm_model
         self.api_key = api_key
-        self.extra_headers = extra_headers or {}
-        # 사내 게이트웨이는 헤더 인증(extra_headers)만 쓸 수 있어 api_key 가 없을 수 있다.
-        if not self.api_key and not self.extra_headers:
+        if not self.api_key:
             raise ValueError("CypherGenerator model API key is not configured.")
 
     def generate(self, question: str, context: Optional[str] = None, mode: str = "graph", custom_prompt: Optional[str] = None, inverse_search_mode: str = "auto", kb_id: Optional[str] = None, use_dynamic_schema: bool = False) -> Dict:
@@ -170,24 +167,34 @@ In this pattern:
         if context:
             user_content += f"\n\n[추가 컨텍스트]\n{context}"
 
-        from app.core.llm import chat
-        cfg = {
-            "base_url": self.llm_endpoint,
-            "api_key": self.api_key,
-            "extra_headers": self.extra_headers,
-            "model": self.llm_model,
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+
+        # 모델이 gpt-4o가 아니면 gpt-4o-mini로 fallback (RAGaaS 기본값)
+        target_model = self.llm_model
+        
+        payload = {
+            "model": target_model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content}
+            ],
+            "temperature": 0.0,
         }
 
         try:
-            content = chat(
-                cfg,
-                [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_content},
-                ],
-                temperature=0.0,
+            response = requests.post(
+                self.llm_endpoint,
+                headers=headers,
+                json=payload,
+                timeout=180,  # 추론(thinking) 모델은 60초를 초과할 수 있음
             )
-
+            response.raise_for_status()
+            
+            content = response.json()["choices"][0]["message"]["content"]
+            
             # JSON 파싱
             content = content.strip()
             if "```json" in content:

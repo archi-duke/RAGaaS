@@ -273,8 +273,14 @@ class PipelineExecutor:
         enable_entity_expansion = params.get("enable_entity_expansion", False)
         # [NEW] Extract Prompt from Pipeline Params ensures it acts like a parameter
         sparql_prompt_template = params.get("sparql_prompt_template", None)
-        
+
+        # 모델 설정: 스테이지 자체 설정(llm_model) 우선, 없으면 실행 컨텍스트(KB/요청 레벨)
+        llm_model_config = params.get("llm_model") or ctx.metadata.get("llm_model_config") or {}
+
         strategy = retrieval_factory.get_strategy("hybrid_graph")
+        extra_kwargs = {}
+        if ctx.metadata.get("embedding_service") is not None:
+            extra_kwargs["embedding_service"] = ctx.metadata["embedding_service"]
         new_results = await strategy.search(
             ctx.kb_id,
             ctx.query,
@@ -290,8 +296,10 @@ class PipelineExecutor:
             use_dynamic_schema=use_dynamic_schema,
             custom_query_prompt=custom_query_prompt,
             enable_entity_expansion=enable_entity_expansion,
+            llm_model_config=llm_model_config,
             # Pass the pipeline parameter prompt
-            sparql_prompt_template=sparql_prompt_template
+            sparql_prompt_template=sparql_prompt_template,
+            **extra_kwargs
         )
         
         ctx.results = self._update_results_with_history(ctx.results, new_results, "Graph", merge_mode)

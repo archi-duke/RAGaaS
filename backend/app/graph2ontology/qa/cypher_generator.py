@@ -141,8 +141,7 @@ class CypherGenerator:
             )
             response.raise_for_status()
             
-            from app.core.llm import extract_content_from_dict
-            content = extract_content_from_dict(response.json())
+            content = response.json()["choices"][0]["message"]["content"]
             
             # JSON 파싱
             content = content.strip()

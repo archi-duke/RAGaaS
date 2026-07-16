@@ -30,13 +30,13 @@ async def startup_event():
     await init_db()
 
 # Include Routers
-app.include_router(knowledge_base.router, prefix="/api/v2/knowledge-bases", tags=["knowledge_bases"])
-app.include_router(document.router, prefix="/api/v2/knowledge-bases", tags=["documents"])
-app.include_router(retrieval.router, prefix="/api/v2/knowledge-bases", tags=["retrieval"])
-app.include_router(graph_viewer.router, prefix="/api/v2/graph", tags=["graph"])
+app.include_router(knowledge_base.router, prefix="/api/knowledge-bases", tags=["knowledge_bases"])
+app.include_router(document.router, prefix="/api/knowledge-bases", tags=["documents"])
+app.include_router(retrieval.router, prefix="/api/knowledge-bases", tags=["retrieval"])
+app.include_router(graph_viewer.router, prefix="/api/graph", tags=["graph"])
 app.include_router(websocket_endpoint.router, prefix="/api", tags=["websocket"])
 app.include_router(providers.router, prefix="/api", tags=["providers"])
 
-@app.get("/api/v2/health")
+@app.get("/api/health")
 async def health_check():
     return {"status": "ok"}
