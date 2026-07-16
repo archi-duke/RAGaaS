@@ -387,8 +387,21 @@ class Neo4jBackend(GraphBackend):
                 log_trace(f"[Neo4j] Executing Cypher:\n{cypher_text}")
                 return neo4j_client.execute_query(cypher_text, {"kb_id": kb_id})
 
+            # 스키마 검증 힌트: 실패한 Cypher 가 그래프에 없는 관계 타입을 참조하면
+            # 재시도 프롬프트에 "없는 관계 + 사용 가능 목록"을 주입한다 (실행 차단 아님).
+            allowed_rel_types: List[str] = []
+            try:
+                live_schema = generator._fetch_neo4j_schema(kb_id) or {}
+                allowed_rel_types = live_schema.get("relationship_types", []) or []
+            except Exception as e_schema:
+                log_trace(f"[Neo4j] WARNING: schema fetch for validation failed: {e_schema}")
+
+            def schema_hint_fn(failed_query: str):
+                from app.services.retrieval.query_validation import cypher_schema_hint
+                return cypher_schema_hint(failed_query, allowed_rel_types)
+
             loop = QueryGenerationLoop(max_retries=2)
-            loop_result = await loop.run(query_text, generate_fn, execute_fn)
+            loop_result = await loop.run(query_text, generate_fn, execute_fn, schema_hint_fn=schema_hint_fn)
 
             try:
                 model_name = getattr(generator, "llm_model", "") or ""

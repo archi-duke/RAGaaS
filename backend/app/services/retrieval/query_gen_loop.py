@@ -28,13 +28,14 @@ GenerateFn = Callable[[str, Optional[str]], Awaitable[Dict[str, Any]]]
 ExecuteFn = Callable[[str], Awaitable[List[Any]]]
 
 
-def _build_retry_context(query: Optional[str], error: Optional[str]) -> str:
+def _build_retry_context(query: Optional[str], error: Optional[str], schema_hint: Optional[str] = None) -> str:
     reason = error if error else "실행은 성공했으나 결과 0건"
+    hint_block = f"\n{schema_hint}" if schema_hint else ""
     return (
         "[이전 시도 실패]\n"
         "실패한 쿼리:\n"
         f"{query}\n"
-        f"실패 원인: {reason}\n"
+        f"실패 원인: {reason}{hint_block}\n"
         "위 실패를 참고해 수정된 쿼리를 생성하라. 존재하지 않는 관계/속성을 추측하지 말고, "
         "제공된 스키마 정보에 있는 것만 사용하라. 수정된 쿼리만 출력하라."
     )
@@ -52,10 +53,15 @@ class QueryGenerationLoop:
         question: str,
         generate_fn: GenerateFn,
         execute_fn: ExecuteFn,
+        schema_hint_fn=None,
     ) -> Dict[str, Any]:
         """
         generate_fn(question, retry_context) -> {"query": str|None, "raw": dict}
         execute_fn(query) -> list of result records (may raise)
+        schema_hint_fn(failed_query) -> Optional[str]  (선택)
+            실패한 쿼리가 그래프에 없는 관계/predicate 를 참조하면 재시도
+            프롬프트에 주입할 힌트 문자열을 반환. 실행을 차단하지 않으며,
+            이미 실패한 시도의 재시도 피드백만 강화한다.
 
         Returns: {"query": str|None, "results": list, "attempts": [AttemptLog...], "succeeded": bool}
         """
@@ -125,7 +131,14 @@ class QueryGenerationLoop:
                 }
 
             # Prepare retry context for the next attempt (if any remain).
-            retry_context = _build_retry_context(query, error)
+            # schema_hint_fn 은 실패한 쿼리를 스키마와 대조해 힌트를 만든다 (실행 차단 아님).
+            schema_hint = None
+            if schema_hint_fn is not None and query:
+                try:
+                    schema_hint = schema_hint_fn(query)
+                except Exception:
+                    schema_hint = None
+            retry_context = _build_retry_context(query, error, schema_hint)
 
             if time.monotonic() - start_time >= self.total_timeout:
                 break

@@ -550,8 +550,21 @@ class FusekiBackend(GraphBackend):
                 print(f"[DEBUG] No bindings found. Full results: {results}", flush=True)
             return bindings
 
+        # 스키마 검증 힌트: 실패한 SPARQL 이 그래프에 없는 predicate 를 참조하면
+        # 재시도 프롬프트에 "없는 predicate + 사용 가능 목록"을 주입한다 (실행 차단 아님).
+        allowed_predicates: List[str] = []
+        try:
+            live = active_generator._fetch_fuseki_schema(kb_id) or {}
+            allowed_predicates = live.get("predicates", []) or []
+        except Exception as e:
+            log_trace(f"[Fuseki] WARNING: schema fetch for validation failed: {e}")
+
+        def schema_hint_fn(failed_query: str):
+            from app.services.retrieval.query_validation import sparql_schema_hint
+            return sparql_schema_hint(failed_query, allowed_predicates)
+
         loop = QueryGenerationLoop(max_retries=2)
-        loop_result = await loop.run(query_text, generate_fn, execute_fn)
+        loop_result = await loop.run(query_text, generate_fn, execute_fn, schema_hint_fn=schema_hint_fn)
 
         try:
             model_name = getattr(active_generator, "llm_model", None) or "unknown"
