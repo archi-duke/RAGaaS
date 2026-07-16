@@ -46,6 +46,16 @@ async def create_knowledge_base(kb: KnowledgeBaseCreate):
         embedding_provider_id=kb.embedding_provider_id,
         llm_model_config=kb.llm_model_config or {},
     )
+    # 기본 필터: 'smalltalk' 게이트를 파이프라인 맨 앞에 추가한다.
+    # (인사/잡담은 검색 없이 바로 응답. 사용자가 파이프라인 빌더에서 삭제하면 비활성화됨.)
+    _provided = (kb.pipeline_config or {}).get("stages") if kb.pipeline_config else None
+    if _provided:
+        stages = list(_provided)
+        if not any(s.get("type") == "smalltalk" for s in stages):
+            stages = [{"type": "smalltalk", "params": {}}] + stages
+        db_kb.pipeline_config = {"stages": stages}
+    else:
+        db_kb.pipeline_config = {"stages": [{"type": "smalltalk", "params": {}}]}
     await db_kb.insert()
     
     # Create Milvus collection
