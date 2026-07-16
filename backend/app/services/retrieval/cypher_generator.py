@@ -1,6 +1,6 @@
 import json
 import requests
-from typing import Optional, Dict
+from typing import Optional, Dict, List
 
 class CypherGenerator:
     """LLM-based generator that converts natural language questions into Neo4j Cypher queries"""
@@ -107,7 +107,7 @@ In this pattern:
         if not self.api_key:
             raise ValueError("CypherGenerator model API key is not configured.")
 
-    def generate(self, question: str, context: Optional[str] = None, mode: str = "graph", custom_prompt: Optional[str] = None, inverse_search_mode: str = "auto", kb_id: Optional[str] = None, use_dynamic_schema: bool = False) -> Dict:
+    def generate(self, question: str, context: Optional[str] = None, mode: str = "graph", custom_prompt: Optional[str] = None, inverse_search_mode: str = "auto", kb_id: Optional[str] = None, use_dynamic_schema: bool = False, *, few_shot_examples: Optional[List[Dict]] = None) -> Dict:
         """사용자 질문을 Cypher로 변환"""
         
         print(f"[CypherGenerator] Generate called. KB: {kb_id}, DynamicSchema: {use_dynamic_schema}", flush=True)
@@ -166,6 +166,13 @@ In this pattern:
         user_content = f"사용자 질문: {question}"
         if context:
             user_content += f"\n\n[추가 컨텍스트]\n{context}"
+
+        if few_shot_examples:
+            examples_text = "\n\n".join(
+                f'질문: {ex.get("question")}\nCypher: {ex.get("query_text")}'
+                for ex in few_shot_examples
+            )
+            user_content += f"\n\n[참고 예시 — 이 KB에서 과거에 성공한 질문-쿼리 쌍]\n{examples_text}"
 
         headers = {
             "Authorization": f"Bearer {self.api_key}",

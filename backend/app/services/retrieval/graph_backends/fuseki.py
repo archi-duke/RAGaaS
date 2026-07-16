@@ -4,6 +4,11 @@ import logging
 from typing import List, Dict, Any, Tuple, Optional
 from .base import GraphBackend
 from app.core.fuseki import fuseki_client
+from app.services.retrieval.sparql_utils import escape_sparql_literal
+from app.services.retrieval.query_gen_loop import QueryGenerationLoop
+from app.services.retrieval.query_gen_attempt_logger import log_attempts
+from app.services.retrieval.query_gen_example_memory import ExampleMemory
+from app.services.embedding import embedding_service as default_embedding_service
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +71,9 @@ class FusekiBackend(GraphBackend):
             발견된 URI 문자열 또는 None
         """
         try:
+            # SPARQL 문자열 리터럴에 삽입하기 전 이스케이프 (원본 entity_text는 로깅용으로 보존)
+            safe_entity_text = escape_sparql_literal(entity_text)
+
             # 1. rdfs:label로 검색
             label_query = f"""
             PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
@@ -73,17 +81,17 @@ class FusekiBackend(GraphBackend):
             FROM <urn:x-arq:UnionGraph>
             WHERE {{
               ?uri rdfs:label ?label .
-              FILTER(CONTAINS(LCASE(STR(?label)), LCASE("{entity_text}")))
+              FILTER(CONTAINS(LCASE(STR(?label)), LCASE("{safe_entity_text}")))
             }}
             LIMIT 1
             """
-            
+
             results = fuseki_client.query_sparql(kb_id, label_query)
             bindings = results.get("results", {}).get("bindings", [])
-            
+
             if bindings:
                 return bindings[0]["uri"]["value"]
-            
+
             # 2. URI 마지막 부분으로 검색 (예: inst:Seong_Gi-hun)
             uri_query = f"""
             PREFIX inst: <http://rag.local/inst/>
@@ -91,7 +99,7 @@ class FusekiBackend(GraphBackend):
             FROM <urn:x-arq:UnionGraph>
             WHERE {{
               ?uri ?p ?o .
-              FILTER(CONTAINS(LCASE(STR(?uri)), LCASE("{entity_text}")))
+              FILTER(CONTAINS(LCASE(STR(?uri)), LCASE("{safe_entity_text}")))
               FILTER(STRSTARTS(STR(?uri), "http://rag.local/inst/"))
             }}
             LIMIT 1
@@ -325,6 +333,213 @@ class FusekiBackend(GraphBackend):
             print(f"[Fuseki] Error fetching relation between entities: {e}")
             return []
 
+    def _postprocess_sparql(self, raw_sparql: str, kb_id: str) -> str:
+        """LLM 출력 SPARQL의 프리픽스 제거 후 표준 프리픽스+UnionGraph FROM 재주입.
+
+        (기존 query() 인라인 로직을 그대로 이동. kb_id는 현재 사용하지 않지만
+        향후 KB별 네임스페이스 커스터마이징을 위해 시그니처에 유지한다.)
+        """
+        print(f"[DEBUG] Step 1: Generated SPARQL received, length={len(raw_sparql)}", flush=True)
+
+        # Remove any existing PREFIX declarations from LLM-generated query
+        # to avoid conflicts with our correct prefixes
+        sparql_body = re.sub(r'PREFIX\s+\w+:\s*<[^>]+>\s*', '', raw_sparql, flags=re.IGNORECASE)
+        sparql_body = sparql_body.strip()
+        print(f"[DEBUG] Step 2: Prefixes removed, body length={len(sparql_body)}", flush=True)
+
+        # Ensure standard prefixes with correct namespaces
+        # FIX: Must match Doc2Onto's default namespaces (example.org)
+        prefixes = """
+        PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+        PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+        PREFIX owl: <http://www.w3.org/2002/07/owl#>
+        PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+        PREFIX inst: <http://rag.local/inst/>
+        PREFIX rel: <http://rag.local/rel/>
+        PREFIX prop: <http://rag.local/prop/>
+        PREFIX class: <http://rag.local/class/>
+        """
+
+        # Inject FROM <urn:x-arq:UnionGraph> to search across all named graphs
+        # This is crucial because Doc2Onto loads data (base.trig) into named graphs
+        if re.search(r'WHERE', sparql_body, re.IGNORECASE):
+            # Simple injection: replace the first 'WHERE' with 'FROM <urn:x-arq:UnionGraph> WHERE'
+            print("[DEBUG] Step 3: Injecting UnionGraph...", flush=True)
+            sparql_query_content = re.sub(r'WHERE', "FROM <urn:x-arq:UnionGraph>\nWHERE", sparql_body, count=1, flags=re.IGNORECASE)
+        else:
+            print("[DEBUG] Step 3: WHERE clause NOT found in query!", flush=True)
+            sparql_query_content = sparql_body
+
+        full_query = prefixes + sparql_query_content
+
+        print(f"[DEBUG] Step 4: Final Query prepared, length={len(full_query)}", flush=True)
+        print(f"[DEBUG] Step 4: Full Query:\n{full_query}", flush=True)
+
+        return full_query
+
+    def _extract_relevance_keywords(self, query_text: str, known_entity_names: List[str]) -> List[str]:
+        """질문에서 관련성 체크용 핵심 키워드 추출 (엔티티명/불용어 제외).
+
+        기존 query() 685-712행 부근 로직을 그대로 이동한 것으로, Fast Path
+        relevance check와 LLM 경로 예시 저장 게이트가 동일한 로직을 공유하도록 한다.
+        """
+        query_tokens = query_text.replace("?", "").split()
+        relation_keywords = []
+
+        for t in query_tokens:
+            # 조사 제거
+            t_clean = t.rstrip("은는이가을를의와과로으로에게")
+            if len(t_clean) > 1 and t_clean not in known_entity_names:
+                # 질문 어미/조사 등 불용어 필터링 (간단히)
+                if t_clean not in ["누구", "무엇", "언제", "어디", "어떻게", "관계", "사람", "것"]:
+                    relation_keywords.append(t_clean)
+
+        return relation_keywords
+
+    def _check_triples_relevance(
+        self,
+        relation_keywords: List[str],
+        triples: List[Dict[str, str]],
+        include_subject: bool = False,
+    ) -> bool:
+        """추출된 키워드가 트리플 predicate/object 텍스트에 포함되는지 확인.
+
+        기존 query() 714-725행 부근 로직을 그대로 이동. 키워드가 비어 있으면
+        (원 로직대로) 관련 있는 것으로 간주한다.
+
+        include_subject=True 이면 subject 도 매칭 대상에 포함한다. 엔티티 해석이
+        실패해 엔티티가 키워드로 분류된 경우(예: '성기훈'이 주어인 트리플),
+        p/o 만 보면 정답 트리플이 무관 판정되는 것을 막기 위한 옵션으로,
+        ExampleMemory 저장 게이트에서만 사용한다 (Fast Path 폴백 판정은 기존
+        기본값 False 를 유지해 동작 불변).
+        """
+        if not relation_keywords:
+            return True
+
+        for triple in triples:
+            p = triple.get("predicate", "")
+            o = triple.get("object", "")
+            s = triple.get("subject", "") if include_subject else ""
+            for kw in relation_keywords:
+                if kw in p or kw in o or (include_subject and kw in s):
+                    return True
+        return False
+
+    async def _generate_and_execute_sparql(
+        self,
+        kb_id: str,
+        query_text: str,
+        active_generator: Any,
+        entities: List[str],
+        inv_mode: str,
+        schema_info: Optional[Dict],
+        dynamic_schema_enabled: bool,
+        context_predicates: Optional[List[str]],
+        custom_prompt: Optional[str],
+        log_trace,
+        emb_service: Any,
+    ) -> Dict[str, Any]:
+        """생성→후처리→실행을 QueryGenerationLoop로 감싸 실행.
+
+        Level 2 few-shot 조회(ExampleMemory.search)를 먼저 수행하고, 이를
+        generate_fn 클로저에 주입한다. 실행이 끝나면 Level 1 관측성 로깅
+        (log_attempts)을 수행한다. 두 부가 기능 모두 실패해도 검색 자체를
+        막지 않도록 try/except로 격리한다.
+
+        Returns:
+            {
+              "query": str | None,       # 후처리(prefix+UnionGraph)까지 끝난 최종 SPARQL
+              "results": list,           # bindings
+              "attempts": [AttemptLog...],
+              "succeeded": bool,
+              "few_shot_ids": list[str],
+              "raw_gen": dict,           # 마지막 시도의 SPARQLGenerator.generate() 원본 반환값
+            }
+        """
+        few_shot: List[Dict[str, Any]] = []
+        few_shot_ids: List[str] = []
+        try:
+            few_shot = await ExampleMemory().search(kb_id, "fuseki", query_text, emb_service)
+            few_shot_ids = [ex["id"] for ex in few_shot]
+        except Exception as e:
+            log_trace(f"[Fuseki] WARNING: few-shot example search failed: {e}")
+
+        last_raw_gen: Dict[str, Any] = {}
+
+        async def generate_fn(question: str, retry_context: Optional[str]) -> Dict[str, Any]:
+            nonlocal last_raw_gen
+
+            combined_prompt = custom_prompt
+            if retry_context:
+                combined_prompt = f"{combined_prompt}\n\n{retry_context}" if combined_prompt else retry_context
+
+            log_trace(f"[Fuseki] Calling LLM SPARQL Generator (retry={'yes' if retry_context else 'no'})")
+            print(f"[DEBUG] Calling SPARQLGenerator.generate() with inv_mode={inv_mode}", flush=True)
+            gen_result = active_generator.generate(
+                question=question,
+                context=f"Entities: {', '.join(entities)}",
+                mode="ontology",
+                inverse_relation=inv_mode,
+                schema_info=schema_info,
+                kb_id=kb_id,
+                use_dynamic_schema=dynamic_schema_enabled,
+                context_predicates=context_predicates if context_predicates else None,
+                custom_prompt=combined_prompt,
+                few_shot_examples=few_shot or None,
+            )
+            print(f"[DEBUG] SPARQLGenerator returned: {gen_result}", flush=True)
+            log_trace(f"[Fuseki] LLM returned: {gen_result}")
+            last_raw_gen = gen_result
+
+            raw_sparql = gen_result.get("sparql") if gen_result else None
+            print(f"[DEBUG] generated_sparql type: {type(raw_sparql)}, value: {raw_sparql[:200] if raw_sparql else None}", flush=True)
+            log_trace(f"[Fuseki] extracted generated_sparql: {raw_sparql}")
+
+            if not raw_sparql:
+                return {"query": None, "raw": gen_result}
+
+            # Prepend schema usage comment for Debug Log (SPARQL 주석이므로 실행에는 영향 없음)
+            if schema_info:
+                raw_sparql = f"# [Used Promoted Ontology Schema]\n{raw_sparql}"
+            log_trace(f"[Fuseki] Generated SPARQL:\n{raw_sparql}")
+
+            full_query = self._postprocess_sparql(raw_sparql, kb_id)
+            log_trace(f"[Fuseki] Executing SPARQL:\n{full_query}")
+
+            return {"query": full_query, "raw": gen_result}
+
+        async def execute_fn(full_query: str) -> List[Any]:
+            print(f"[DEBUG] Step 5: Calling fuseki_client.query_sparql()...", flush=True)
+            results = fuseki_client.query_sparql(kb_id, full_query)
+            print(f"[DEBUG] Step 6: Got results from Fuseki", flush=True)
+            bindings = results.get("results", {}).get("bindings", [])
+            print(f"[DEBUG] Step 7: Bindings count: {len(bindings)}", flush=True)
+            if len(bindings) > 0:
+                print(f"[DEBUG] First binding: {bindings[0]}", flush=True)
+            else:
+                print(f"[DEBUG] No bindings found. Full results: {results}", flush=True)
+            return bindings
+
+        loop = QueryGenerationLoop(max_retries=2)
+        loop_result = await loop.run(query_text, generate_fn, execute_fn)
+
+        try:
+            model_name = getattr(active_generator, "llm_model", None) or "unknown"
+            await log_attempts(
+                kb_id,
+                "fuseki",
+                query_text,
+                loop_result["attempts"],
+                model=model_name,
+                few_shot_used=few_shot_ids,
+            )
+        except Exception as e:
+            log_trace(f"[Fuseki] WARNING: failed to log query generation attempts: {e}")
+
+        loop_result["few_shot_ids"] = few_shot_ids
+        loop_result["raw_gen"] = last_raw_gen
+        return loop_result
+
     async def query(
         self,
         kb_id: str,
@@ -375,7 +590,7 @@ class FusekiBackend(GraphBackend):
                     except Exception as e_schema:
                         log_trace(f"[Fuseki] WARNING: Failed to fetch static schema info: {e_schema}")
 
-                dynamic_schema_enabled = kwargs.get("use_dynamic_schema", False)
+                dynamic_schema_enabled = kwargs.get("use_dynamic_schema", True)
                 log_trace(f"[Fuseki] Generating SPARQL using Internal Vibe Prompt | Dynamic Schema: {'ON' if dynamic_schema_enabled else 'OFF'} | KB: {kb_id}")
 
                 # [NEW] Entity-Centric Schema Fetching
@@ -383,6 +598,7 @@ class FusekiBackend(GraphBackend):
                 found_triples = []  # Fast Path에서 직접 찾은 트리플 저장
                 found_uris = set()  # Fast Path에서 직접 찾은 URI 저장
                 skip_llm_generation = False  # Fast Path 성공 시 True로 변경됨
+                resolved_uris = []  # Entity-Centric 블록을 건너뛰어도 이후 참조가 안전하도록 기본값 보장
                 entity_centric_enabled = kwargs.get("enable_entity_centric_schema", True)  # 기본 활성화
                 
                 # [OPTION 3] Multi-hop Pattern Detection - Skip Fast Path if multi-hop detected
@@ -442,7 +658,9 @@ class FusekiBackend(GraphBackend):
                         if num_entities == 1:
                             # 단일 엔티티: 패턴 1 또는 패턴 3 구분 필요
                             entity_name, entity_uri = resolved_uris[0]
-                            
+                            # SPARQL 문자열 리터럴 삽입용 이스케이프 (entity_name 원본은 조사 판별 등에 계속 사용)
+                            safe_entity_name = escape_sparql_literal(entity_name)
+
                             # 질문 분석: Object인지 Subject인지 판단
                             # 개선된 휴리스틱: 엔티티명 바로 뒤의 조사 확인
                             entity_idx = query_text.find(entity_name)
@@ -470,7 +688,7 @@ class FusekiBackend(GraphBackend):
                                         # Incoming: ?s -> ?p -> 엔티티 (엔티티가 목적어, 양방향 부분 일치)
                                         ?s ?p ?o .
                                         ?o rdfs:label ?oLabel .
-                                        FILTER(CONTAINS(LCASE(?oLabel), LCASE("{entity_name}")) || CONTAINS(LCASE("{entity_name}"), LCASE(?oLabel)))
+                                        FILTER(CONTAINS(LCASE(?oLabel), LCASE("{safe_entity_name}")) || CONTAINS(LCASE("{safe_entity_name}"), LCASE(?oLabel)))
                                         FILTER(STRLEN(?oLabel) > 1)
                                     }}
                                     UNION
@@ -478,7 +696,7 @@ class FusekiBackend(GraphBackend):
                                         # Outgoing: 엔티티 -> ?p -> ?o (엔티티가 주어, 양방향 부분 일치)
                                         ?s ?p ?o .
                                         ?s rdfs:label ?sLabel .
-                                        FILTER(CONTAINS(LCASE(?sLabel), LCASE("{entity_name}")) || CONTAINS(LCASE("{entity_name}"), LCASE(?sLabel)))
+                                        FILTER(CONTAINS(LCASE(?sLabel), LCASE("{safe_entity_name}")) || CONTAINS(LCASE("{safe_entity_name}"), LCASE(?sLabel)))
                                         FILTER(STRLEN(?sLabel) > 1)
                                     }}
                                     OPTIONAL {{ ?s rdfs:label ?sLabel }}
@@ -541,7 +759,7 @@ class FusekiBackend(GraphBackend):
                                         # Outgoing: 엔티티 -> ?p -> ?o (엔티티가 주어, 양방향 부분 일치)
                                         ?s ?p ?o .
                                         ?s rdfs:label ?sLabel .
-                                        FILTER(CONTAINS(LCASE(?sLabel), LCASE("{entity_name}")) || CONTAINS(LCASE("{entity_name}"), LCASE(?sLabel)))
+                                        FILTER(CONTAINS(LCASE(?sLabel), LCASE("{safe_entity_name}")) || CONTAINS(LCASE("{safe_entity_name}"), LCASE(?sLabel)))
                                         FILTER(STRLEN(?sLabel) > 1)
                                     }}
                                     UNION
@@ -549,7 +767,7 @@ class FusekiBackend(GraphBackend):
                                         # Incoming: ?s -> ?p -> 엔티티 (엔티티가 목적어, 양방향 부분 일치)
                                         ?s ?p ?o .
                                         ?o rdfs:label ?oLabel .
-                                        FILTER(CONTAINS(LCASE(?oLabel), LCASE("{entity_name}")) || CONTAINS(LCASE("{entity_name}"), LCASE(?oLabel)))
+                                        FILTER(CONTAINS(LCASE(?oLabel), LCASE("{safe_entity_name}")) || CONTAINS(LCASE("{safe_entity_name}"), LCASE(?oLabel)))
                                         FILTER(STRLEN(?oLabel) > 1)
                                     }}
                                     OPTIONAL {{ ?s rdfs:label ?sLabel }}
@@ -602,7 +820,10 @@ class FusekiBackend(GraphBackend):
                             # 예: "성기훈과 조상우의 관계는?"
                             entity1_name, uri1 = resolved_uris[0]
                             entity2_name, uri2 = resolved_uris[1]
-                            
+                            # SPARQL 문자열 리터럴 삽입용 이스케이프 (원본은 로깅 등에 계속 사용)
+                            safe_entity1_name = escape_sparql_literal(entity1_name)
+                            safe_entity2_name = escape_sparql_literal(entity2_name)
+
                             log_trace(f"[Fuseki] Pattern 2 detected: {entity1_name} -> ? -> {entity2_name}")
                             
                             # 직접 연결 확인 및 트리플 데이터 즉시 확보 (Fast Path with Partial Match)
@@ -616,8 +837,8 @@ class FusekiBackend(GraphBackend):
                                     ?s ?p ?o .
                                     ?s rdfs:label ?sLabel .
                                     ?o rdfs:label ?oLabel .
-                                    FILTER(CONTAINS(LCASE(?sLabel), LCASE("{entity1_name}")) || CONTAINS(LCASE("{entity1_name}"), LCASE(?sLabel)))
-                                    FILTER(CONTAINS(LCASE(?oLabel), LCASE("{entity2_name}")) || CONTAINS(LCASE("{entity2_name}"), LCASE(?oLabel)))
+                                    FILTER(CONTAINS(LCASE(?sLabel), LCASE("{safe_entity1_name}")) || CONTAINS(LCASE("{safe_entity1_name}"), LCASE(?sLabel)))
+                                    FILTER(CONTAINS(LCASE(?oLabel), LCASE("{safe_entity2_name}")) || CONTAINS(LCASE("{safe_entity2_name}"), LCASE(?oLabel)))
                                     FILTER(STRLEN(?sLabel) > 1)
                                     FILTER(STRLEN(?oLabel) > 1)
                                 }}
@@ -627,8 +848,8 @@ class FusekiBackend(GraphBackend):
                                     ?s ?p ?o .
                                     ?s rdfs:label ?sLabel .
                                     ?o rdfs:label ?oLabel .
-                                    FILTER(CONTAINS(LCASE(?sLabel), LCASE("{entity2_name}")) || CONTAINS(LCASE("{entity2_name}"), LCASE(?sLabel)))
-                                    FILTER(CONTAINS(LCASE(?oLabel), LCASE("{entity1_name}")) || CONTAINS(LCASE("{entity1_name}"), LCASE(?oLabel)))
+                                    FILTER(CONTAINS(LCASE(?sLabel), LCASE("{safe_entity2_name}")) || CONTAINS(LCASE("{safe_entity2_name}"), LCASE(?sLabel)))
+                                    FILTER(CONTAINS(LCASE(?oLabel), LCASE("{safe_entity1_name}")) || CONTAINS(LCASE("{safe_entity1_name}"), LCASE(?oLabel)))
                                     FILTER(STRLEN(?sLabel) > 1)
                                     FILTER(STRLEN(?oLabel) > 1)
                                 }}
@@ -685,67 +906,50 @@ class FusekiBackend(GraphBackend):
                 # [RELEVANCE CHECK]
                 # Fast Path가 무차별적으로 데이터를 가져오는 것을 방지
                 if skip_llm_generation and found_triples:
-                    # 1. 질문에서 핵심 키워드 추출 (엔티티 제외)
-                    # 간단한 방식: 공백 분리 후 엔티티 이름이 아닌 것들 중 명사형 추정
-                    query_tokens = query_text.replace("?", "").split()
-                    relation_keywords = []
                     # resolved_uris: List[Tuple[str, str]] -> (name, uri)
                     known_entity_names = [name for name, _ in resolved_uris] if resolved_uris else []
-                
-                    for t in query_tokens:
-                        # 조사 제거
-                        t_clean = t.rstrip("은는이가을를의와과로으로에게")
-                        if len(t_clean) > 1 and t_clean not in known_entity_names:
-                             # 질문 어미/조사 등 불용어 필터링 (간단히)
-                             if t_clean not in ["누구", "무엇", "언제", "어디", "어떻게", "관계", "사람", "것"]:
-                                 relation_keywords.append(t_clean)
-                
+                    relation_keywords = self._extract_relevance_keywords(query_text, known_entity_names)
                     log_trace(f"[Fuseki] Relevance Check Keywords: {relation_keywords}")
-                
-                    if relation_keywords:
-                        is_relevant = False
-                        for triple in found_triples:
-                            p = triple["predicate"]
-                            o = triple["object"]
-                            # 키워드가 Predicate나 Object에 포함되는지 확인
-                            for kw in relation_keywords:
-                                if kw in p or kw in o:
-                                    is_relevant = True
-                                    break
-                            if is_relevant:
-                                break
-                    
-                        if not is_relevant:
-                            log_trace(f"[Fuseki] ⚠️ Fast Path result seems irrelevant to keywords {relation_keywords}. Formatting Fallback to LLM.")
-                            skip_llm_generation = False
-                            found_triples = [] # Reset to avoid noise
-                            found_uris = set()
 
-                # LLM 호출 (Fast Path로 이미 답을 찾은 경우 건너뜀)
+                    is_relevant = self._check_triples_relevance(relation_keywords, found_triples)
+                    if not is_relevant:
+                        log_trace(f"[Fuseki] ⚠️ Fast Path result seems irrelevant to keywords {relation_keywords}. Formatting Fallback to LLM.")
+                        skip_llm_generation = False
+                        found_triples = [] # Reset to avoid noise
+                        found_uris = set()
+
+                # LLM 호출 (Fast Path로 이미 답을 찾은 경우 건너뜀) — QueryGenerationLoop로 감싸서
+                # 생성 실패/0건 시 최대 2회까지 에러 되먹임 재시도한다.
+                loop_result: Optional[Dict[str, Any]] = None
+                emb_service = kwargs.get("embedding_service", default_embedding_service)
                 if not skip_llm_generation:
                     log_trace(f"[Fuseki] Calling LLM SPARQL Generator (skip_llm_generation={skip_llm_generation})")
-                    print(f"[DEBUG] Calling SPARQLGenerator.generate() with inv_mode={inv_mode}", flush=True)
-                    gen_result = active_generator.generate(
-                        question=query_text,
-                        context=f"Entities: {', '.join(entities)}",
-                        mode="ontology",
-                        inverse_relation=inv_mode,
-                        schema_info=schema_info,
+
+                    custom_prompt = kwargs.get("custom_query_prompt")
+
+                    loop_result = await self._generate_and_execute_sparql(
                         kb_id=kb_id,
-                        use_dynamic_schema=dynamic_schema_enabled,
-                        context_predicates=context_predicates if context_predicates else None
+                        query_text=query_text,
+                        active_generator=active_generator,
+                        entities=entities,
+                        inv_mode=inv_mode,
+                        schema_info=schema_info,
+                        dynamic_schema_enabled=dynamic_schema_enabled,
+                        context_predicates=context_predicates,
+                        custom_prompt=custom_prompt,
+                        log_trace=log_trace,
+                        emb_service=emb_service,
                     )
-                    print(f"[DEBUG] SPARQLGenerator returned: {gen_result}", flush=True)
-                    log_trace(f"[Fuseki] LLM returned: {gen_result}")
+                    gen_result = loop_result.get("raw_gen") or {}
                 else:
                     log_trace("[Fuseki] Skipping LLM SPARQL generation (Fast Path already provided results)")
                     gen_result = {"sparql": None}  # LLM 결과 없음을 명시
-            
-            
-                generated_sparql = gen_result.get("sparql")
-                print(f"[DEBUG] generated_sparql type: {type(generated_sparql)}, value: {generated_sparql[:200] if generated_sparql else None}", flush=True)
-                log_trace(f"[Fuseki] extracted generated_sparql: {generated_sparql}")
-            
+
+                # loop_result["query"]는 이미 _postprocess_sparql까지 끝난 최종 SPARQL이다
+                # (프리픽스 제거 + 표준 프리픽스/UnionGraph 재주입).
+                generated_sparql = loop_result.get("query") if loop_result else None
+                log_trace(f"[Fuseki] extracted generated_sparql (postprocessed): {generated_sparql}")
+
                 # [NEW] Fast Path 데이터 우선 처리 (LLM 결과와 독립적)
                 if skip_llm_generation and found_triples:
                     # Fast Path로 이미 트리플을 찾았으므로 바로 결과에 반영
@@ -798,63 +1002,20 @@ class FusekiBackend(GraphBackend):
                 
             # SPARQL 실행 로직 (Fast Path 밖으로 이동)
                 if generated_sparql:
-                        # Prepend schema usage comment for Debug Log
-                        if schema_info:
-                             generated_sparql = f"# [Used Promoted Ontology Schema]\n{generated_sparql}"
+                        # generated_sparql은 _generate_and_execute_sparql() 안에서
+                        # QueryGenerationLoop가 이미 생성→후처리(prefix/UnionGraph)→실행까지
+                        # 마친 최종 쿼리이다. 여기서는 loop_result의 bindings를 그대로 사용한다.
+                        full_query = generated_sparql
+                        bindings = loop_result.get("results", []) if loop_result else []
 
-                        log_trace(f"[Fuseki] Generated SPARQL:\n{generated_sparql}")
-                        print(f"[DEBUG] Step 1: Generated SPARQL received, length={len(generated_sparql)}", flush=True)
-                    
-                        # Remove any existing PREFIX declarations from LLM-generated query
-                        # to avoid conflicts with our correct prefixes
-                        sparql_body = re.sub(r'PREFIX\s+\w+:\s*<[^>]+>\s*', '', generated_sparql, flags=re.IGNORECASE)
-                        sparql_body = sparql_body.strip()
-                        print(f"[DEBUG] Step 2: Prefixes removed, body length={len(sparql_body)}", flush=True)
-                    
-                        # Ensure standard prefixes with correct namespaces
-                        # FIX: Must match Doc2Onto's default namespaces (example.org)
-                        prefixes = """
-                        PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
-                        PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-                        PREFIX owl: <http://www.w3.org/2002/07/owl#>
-                        PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
-                        PREFIX inst: <http://rag.local/inst/> 
-                        PREFIX rel: <http://rag.local/rel/> 
-                        PREFIX prop: <http://rag.local/prop/>
-                        PREFIX class: <http://rag.local/class/>
-                        """
-                    
-                    
-                        # Inject FROM <urn:x-arq:UnionGraph> to search across all named graphs
-                        # This is crucial because Doc2Onto loads data (base.trig) into named graphs
-                        if re.search(r'WHERE', sparql_body, re.IGNORECASE):
-                            # Simple injection: replace the first 'WHERE' with 'FROM <urn:x-arq:UnionGraph> WHERE'
-                            print("[DEBUG] Step 3: Injecting UnionGraph...", flush=True)
-                            sparql_query_content = re.sub(r'WHERE', "FROM <urn:x-arq:UnionGraph>\nWHERE", sparql_body, count=1, flags=re.IGNORECASE)
-                        else:
-                            print("[DEBUG] Step 3: WHERE clause NOT found in query!", flush=True)
-                            sparql_query_content = sparql_body
-
-                        full_query = prefixes + sparql_query_content
-                    
-                        print(f"[DEBUG] Step 4: Final Query prepared, length={len(full_query)}", flush=True)
-                        print(f"[DEBUG] Step 4: Full Query:\n{full_query}", flush=True)
-                        log_trace(f"[Fuseki] Executing SPARQL:\n{full_query}")
-                    
-                        # Execute
-                        print(f"[DEBUG] Step 5: Calling fuseki_client.query_sparql()...", flush=True)
-                        results = fuseki_client.query_sparql(kb_id, full_query)
-                        print(f"[DEBUG] Step 6: Got results from Fuseki", flush=True)
-                        bindings = results.get("results", {}).get("bindings", [])
-                    
                         print(f"[DEBUG] Step 7: Bindings count: {len(bindings)}", flush=True)
                         if len(bindings) > 0:
                             print(f"[DEBUG] First binding: {bindings[0]}", flush=True)
                         else:
-                            print(f"[DEBUG] No bindings found. Full results: {results}", flush=True)
+                            print(f"[DEBUG] No bindings found.", flush=True)
                         if bindings:
                              sparql_query = full_query
-                         
+
                         if bindings:
                             # Process results from generator query
                             found_entities = set()
@@ -1023,9 +1184,25 @@ class FusekiBackend(GraphBackend):
                             # Use real_triples if found, otherwise fall back to dummy triples (which will fail mapping but show entity)
                             final_triples = real_triples if real_triples else triples
 
+                            # [Level 2] LLM 생성 쿼리가 성공(1건 이상)했고 결과가 질문과 관련 있어 보이면
+                            # ExampleMemory에 저장한다. 반환 결과 자체에는 영향을 주지 않는다
+                            # (저장 실패는 검색 응답을 막지 않도록 격리).
+                            if loop_result and loop_result.get("succeeded"):
+                                try:
+                                    # 저장 게이트는 엔티티를 제외하지 않는다: 질문의 어떤 내용어든
+                                    # (엔티티 포함) 결과 트리플 s/p/o 에 나타나면 좋은 예시로 본다.
+                                    # (엔티티 제외는 Fast Path 폴백 판정용 의미론 — 저장 게이트에
+                                    # 그대로 쓰면 "성기훈은 누구랑 관계있어?"처럼 엔티티만 매칭되는
+                                    # 정답 쿼리가 저장에서 탈락한다.)
+                                    store_keywords = self._extract_relevance_keywords(query_text, [])
+                                    if self._check_triples_relevance(store_keywords, final_triples, include_subject=True):
+                                        await ExampleMemory().store(kb_id, "fuseki", query_text, full_query, emb_service)
+                                except Exception as e_store:
+                                    log_trace(f"[Fuseki] WARNING: failed to store query gen example: {e_store}")
+
                             return {
                                 "chunk_ids": list(discovered_chunk_ids),  # Fuseki Reification에서 직접 추출
-                                "sparql_query": generated_sparql.strip(),
+                                "sparql_query": full_query.strip(),
                                 "triples": final_triples,
                                 "found_entities": list(found_entities),
                                 "trace_logs": trace_logs
@@ -1034,11 +1211,11 @@ class FusekiBackend(GraphBackend):
                             # If inverse search is disabled and LLM query returned no results,
                             # don't fall back to generic search - return empty results
                             # UNLESS it is a promoted KB (schema_info exists), then we want fallback to capture anything.
-                
+
                             if inv_mode == "none" and not schema_info:
                                 return {
                                     "chunk_ids": [],
-                                    "sparql_query": generated_sparql.strip(),
+                                    "sparql_query": full_query.strip(),
                                     "triples": [],
                                     "found_entities": [],
                                     "trace_logs": trace_logs

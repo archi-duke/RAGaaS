@@ -9,6 +9,7 @@ import logging
 import re
 import urllib.parse
 from app.services.embedding import embedding_service as default_embedding_service
+from app.services.retrieval.sparql_utils import escape_sparql_regex
 import numpy as np
 
 logger = logging.getLogger(__name__)
@@ -393,13 +394,7 @@ class GraphRetrievalStrategy(RetrievalStrategy):
         else:
             # Fuseki (SPARQL) Expansion
             # Escape entities for SPARQL Regex (avoiding re.escape which adds too many backslashes)
-            def sparql_escape(s):
-                chars_to_escape = r".*+?^${}()|[]\\"
-                for char in chars_to_escape:
-                    s = s.replace(char, "\\" + char)
-                return s
-
-            safe_entities = [sparql_escape(e) for e in entities]
+            safe_entities = [escape_sparql_regex(e) for e in entities]
             regex_pattern = "|".join(safe_entities)
             
             # Find entities connected to the initial entities

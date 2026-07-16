@@ -143,6 +143,7 @@ You MUST respond in JSON format:
         entities: Optional[List[str]] = None,
         live_schema: Optional[Dict] = None, # [NEW]
         context_predicates: Optional[List[str]] = None, # [NEW] Entity-Centric
+        few_shot_examples: Optional[List[Dict]] = None,
     ) -> str:
         """Build the user message following the Vibe Coding Input Contract."""
         
@@ -196,7 +197,14 @@ STRONGLY PREFER using these predicates over inventing new ones or relying on gen
         
         if context:
             user_content += f"\n[Additional Context]\n{context}"
-        
+
+        if few_shot_examples:
+            examples_text = "\n\n".join(
+                f'질문: {ex.get("question")}\nSPARQL: {ex.get("query_text")}'
+                for ex in few_shot_examples
+            )
+            user_content += f"\n\n[참고 예시 — 이 KB에서 과거에 성공한 질문-쿼리 쌍]\n{examples_text}"
+
         return user_content
 
     def _fetch_fuseki_schema(self, kb_id: str) -> Optional[Dict]:
@@ -291,7 +299,8 @@ STRONGLY PREFER using these predicates over inventing new ones or relying on gen
         entities: Optional[List[str]] = None,
         kb_id: Optional[str] = None,     # [NEW]
         use_dynamic_schema: bool = True,  # Default to True
-        context_predicates: Optional[List[str]] = None  # [NEW] Entity-Centric Schema
+        context_predicates: Optional[List[str]] = None,  # [NEW] Entity-Centric Schema
+        few_shot_examples: Optional[List[Dict]] = None,
     ) -> Dict:
         """Convert natural language question to SPARQL using Vibe Coding pipeline."""
         print(f"[SPARQLGenerator] Generate called. KB: {kb_id}, DynamicSchema: {use_dynamic_schema}", flush=True)
@@ -356,7 +365,8 @@ STRONGLY PREFER using these predicates over inventing new ones or relying on gen
             schema_info=schema_info,
             entities=entities,
             live_schema=live_schema, # [NEW]
-            context_predicates=context_predicates # [NEW]
+            context_predicates=context_predicates, # [NEW]
+            few_shot_examples=few_shot_examples,
         )
 
         headers = {
