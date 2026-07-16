@@ -705,15 +705,25 @@ class FusekiBackend(GraphBackend):
                             safe_entity_name = escape_sparql_literal(entity_name)
 
                             # 질문 분석: Object인지 Subject인지 판단
-                            # 개선된 휴리스틱: 엔티티명 바로 뒤의 조사 확인
-                            entity_idx = query_text.find(entity_name)
-                            if entity_idx != -1:
-                                after_entity = query_text[entity_idx + len(entity_name):entity_idx + len(entity_name) + 2]
-                                is_object_pattern = after_entity.startswith(("을", "를"))
-                                is_subject_pattern = after_entity.startswith(("의", "이", "가"))
+                            # 1차: LLM 이 판별한 엔티티 역할(entity_roles), 없으면 조사(Josa) 폴백
+                            entity_roles = kwargs.get("entity_roles") or {}
+                            role = entity_roles.get(entity_name)
+                            if role == "object":
+                                is_object_pattern, is_subject_pattern = True, False
+                                log_trace(f"[Fuseki] Role by LLM: '{entity_name}' = object → Pattern 1")
+                            elif role == "subject":
+                                is_object_pattern, is_subject_pattern = False, True
+                                log_trace(f"[Fuseki] Role by LLM: '{entity_name}' = subject → Pattern 3")
                             else:
-                                is_object_pattern = False
-                                is_subject_pattern = False
+                                # 폴백: 엔티티명 바로 뒤의 조사 확인 (기존 동작 불변)
+                                entity_idx = query_text.find(entity_name)
+                                if entity_idx != -1:
+                                    after_entity = query_text[entity_idx + len(entity_name):entity_idx + len(entity_name) + 2]
+                                    is_object_pattern = after_entity.startswith(("을", "를"))
+                                    is_subject_pattern = after_entity.startswith(("의", "이", "가"))
+                                else:
+                                    is_object_pattern = False
+                                    is_subject_pattern = False
                             
                             if is_object_pattern:
                                 # 패턴 1: ? -> P -> O (Subject 미상)

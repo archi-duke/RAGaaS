@@ -91,16 +91,27 @@ class Neo4jBackend(GraphBackend):
                 
                 if num_entities == 1:
                     entity_name = resolved_entities[0]
-                    
+
                     # Detect Pattern 1 vs Pattern 3
-                    entity_idx = query_text.find(entity_name)
-                    if entity_idx != -1:
-                        after_entity = query_text[entity_idx + len(entity_name):entity_idx + len(entity_name) + 2]
-                        is_object_pattern = after_entity.startswith(("을", "를"))
-                        is_subject_pattern = after_entity.startswith(("의", "이", "가"))
+                    # 1차: LLM 이 판별한 엔티티 역할(entity_roles) 사용, 없으면 조사(Josa) 폴백
+                    entity_roles = kwargs.get("entity_roles") or {}
+                    role = entity_roles.get(entity_name)
+                    if role == "object":
+                        is_object_pattern, is_subject_pattern = True, False
+                        log_trace(f"[Neo4j] Role by LLM: '{entity_name}' = object → Pattern 1")
+                    elif role == "subject":
+                        is_object_pattern, is_subject_pattern = False, True
+                        log_trace(f"[Neo4j] Role by LLM: '{entity_name}' = subject → Pattern 3")
                     else:
-                        is_object_pattern = False
-                        is_subject_pattern = False
+                        # 폴백: 조사 휴리스틱 (기존 동작 불변)
+                        entity_idx = query_text.find(entity_name)
+                        if entity_idx != -1:
+                            after_entity = query_text[entity_idx + len(entity_name):entity_idx + len(entity_name) + 2]
+                            is_object_pattern = after_entity.startswith(("을", "를"))
+                            is_subject_pattern = after_entity.startswith(("의", "이", "가"))
+                        else:
+                            is_object_pattern = False
+                            is_subject_pattern = False
                     
                     if is_object_pattern:
                         # Pattern 1: ? -> P -> O (Subject unknown)
