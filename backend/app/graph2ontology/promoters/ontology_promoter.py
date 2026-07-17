@@ -19,6 +19,11 @@ load_dotenv()
 EVIDENCE = Namespace("http://example.org/evidence/")
 PROV = Namespace("http://www.w3.org/ns/prov#")
 
+# Step 2 그래프 프로파일링 상한 (design-ontology-schema-extraction-v2.md §3 참고)
+MAX_RELATIONS = 60
+SAMPLES_PER_RELATION = 5
+MAX_FREQUENT_CONCEPTS = 80
+
 
 class OntologyPromoter:
     """7단계 Ontology 승격 파이프라인
@@ -278,9 +283,128 @@ class OntologyPromoter:
             print(f"[OntologyPromoter] LLM Call Failed: {e}")
             return {}
 
+    def _label_of(self, g: Graph, uri) -> str:
+        """URI의 표시용 라벨을 반환.
+
+        rdfs:label이 있으면 그 값을 사용(여러 개면 정렬 후 첫 번째),
+        없으면 URI 로컬네임으로 폴백. Literal이 들어오면 그대로 문자열화.
+        """
+        if isinstance(uri, Literal):
+            return str(uri)
+        if not isinstance(uri, URIRef):
+            return str(uri)
+        labels = sorted(str(l) for l in g.objects(uri, RDFS.label))
+        if labels:
+            return labels[0]
+        return str(uri).split('/')[-1].split('#')[-1]
+
+    def _build_graph_profile(self, g: Graph) -> dict:
+        """그래프를 단일 순회하여 관계 프로파일/개념 빈도/타입 힌트를 추출.
+
+        design-ontology-schema-extraction-v2.md §3.2 참고.
+        """
+        built_in_namespaces = [str(RDF), str(RDFS), str(OWL), str(XSD), str(SKOS)]
+
+        relation_counts = defaultdict(int)
+        relation_triples = defaultdict(list)  # predicate localname -> [(s, o)]
+        relation_pairs = defaultdict(list)     # predicate localname -> [(subj_uri, obj_uri)] (URIRef만)
+        entity_counts = defaultdict(int)
+        type_hints = defaultdict(list)         # class localname -> [instance label]
+
+        for s, p, o in g:
+            # rdf:type 엣지는 관계 목록이 아니라 type_hints 수집용으로 별도 처리
+            if p == RDF.type:
+                if o == RDF.Statement:
+                    continue
+                if isinstance(o, URIRef):
+                    cls_local = str(o).split('/')[-1].split('#')[-1]
+                    type_hints[cls_local].append(self._label_of(g, s))
+                continue
+
+            p_str = str(p)
+            # Built-in 네임스페이스 predicate 제외
+            if any(p_str.startswith(ns) for ns in built_in_namespaces):
+                continue
+            # rdfs:label은 라벨 조회 전용이므로 관계 목록에서 제외 (위 built-in 체크에 이미 포함되지만 명시)
+            if p == RDFS.label:
+                continue
+
+            p_local = p_str.split('/')[-1].split('#')[-1]
+            relation_counts[p_local] += 1
+            relation_triples[p_local].append((s, o))
+
+            # 인스턴스 타이핑(§3.5)에 쓸 실제 URIRef 쌍만 별도 보관
+            if isinstance(s, URIRef) and isinstance(o, URIRef):
+                relation_pairs[p_local].append((s, o))
+
+            # 개념(엔티티) 빈도: subject / URIRef object만 카운트
+            entity_counts[s] += 1
+            if isinstance(o, URIRef):
+                entity_counts[o] += 1
+
+        # 관계 정렬(빈도 내림차순) + 상한 적용 (무음 절단 금지)
+        sorted_relation_names = sorted(
+            relation_counts.keys(), key=lambda k: relation_counts[k], reverse=True
+        )
+        if len(sorted_relation_names) > MAX_RELATIONS:
+            dropped = len(sorted_relation_names) - MAX_RELATIONS
+            print(
+                f"[OntologyPromoter] _build_graph_profile: {dropped} relations dropped "
+                f"(exceeded MAX_RELATIONS={MAX_RELATIONS})"
+            )
+            sorted_relation_names = sorted_relation_names[:MAX_RELATIONS]
+
+        relations = []
+        for name in sorted_relation_names:
+            pairs = relation_triples[name]
+            # 서로 다른 subject를 우선 채택해 예시 다양성 확보
+            seen_subjects = set()
+            ordered = []
+            remainder = []
+            for s, o in pairs:
+                if s not in seen_subjects:
+                    seen_subjects.add(s)
+                    ordered.append((s, o))
+                else:
+                    remainder.append((s, o))
+            examples_src = (ordered + remainder)[:SAMPLES_PER_RELATION]
+
+            examples = [
+                {
+                    "s": self._label_of(g, s),
+                    "o": self._label_of(g, o),
+                    "o_is_literal": isinstance(o, Literal),
+                }
+                for s, o in examples_src
+            ]
+
+            relations.append({
+                "name": name,
+                "count": relation_counts[name],
+                "examples": examples,
+            })
+
+        # 빈도 상위 개념 (상한 초과분은 로그로 남기고 절단)
+        sorted_entities = sorted(entity_counts.keys(), key=lambda k: entity_counts[k], reverse=True)
+        if len(sorted_entities) > MAX_FREQUENT_CONCEPTS:
+            dropped = len(sorted_entities) - MAX_FREQUENT_CONCEPTS
+            print(
+                f"[OntologyPromoter] _build_graph_profile: {dropped} frequent concepts dropped "
+                f"(exceeded MAX_FREQUENT_CONCEPTS={MAX_FREQUENT_CONCEPTS})"
+            )
+        top_entities = sorted_entities[:MAX_FREQUENT_CONCEPTS]
+        frequent_concepts = [self._label_of(g, e) for e in top_entities]
+
+        return {
+            "relations": relations,
+            "frequent_concepts": frequent_concepts,
+            "type_hints": dict(type_hints),
+            "_relation_pairs": dict(relation_pairs),
+        }
+
     def _step2_schema_stabilization(self, g: Graph) -> Graph:
         """Step 2: Schema Stabilization - Class/Property 확정 (LLM 활용)"""
-        
+
         # 0. 그래프 요약 (Concept & Relation 추출)
         # LLM에게 보낼 컨텍스트를 만들기 위해 그래프의 주요 요소(주어, 목적어, 서술어)를 수집
         subjects = set(g.subjects())
@@ -288,28 +412,38 @@ class OntologyPromoter:
         for o in g.objects():
             if isinstance(o, URIRef):
                 objects.add(o)
-                
+
         predicates = set(g.predicates())
-        
-        # 필터링: Built-in 제외
-        built_in_namespaces = [str(RDF), str(RDFS), str(OWL), str(XSD), str(SKOS)]
-        
-        candidate_concepts = set()
-        candidate_relations = set()
-        
-        # Concept 후보: URI의 로컬 이름만 추출하여 리스트업
-        for uris in [subjects, objects]:
-            for u in uris:
-                s_u = str(u)
-                if any(s_u.startswith(ns) for ns in built_in_namespaces): continue
-                candidate_concepts.add(s_u.split('/')[-1].split('#')[-1])
-                
-        # Relation 후보
-        for p in predicates:
-            s_p = str(p)
-            if any(s_p.startswith(ns) for ns in built_in_namespaces): continue
-            candidate_relations.add(s_p.split('/')[-1].split('#')[-1])
-            
+
+        # 그래프 프로파일 생성: 관계별 빈도/예시 트리플, 개념 빈도, 타입 힌트
+        # (design-ontology-schema-extraction-v2.md §3.2)
+        profile = self._build_graph_profile(g)
+
+        # 프롬프트용 렌더링: 관계 (빈도, 예시 트리플)
+        relations_lines = []
+        for rel in profile["relations"]:
+            example_strs = []
+            for ex in rel["examples"]:
+                o_display = f"{ex['o']}[lit]" if ex["o_is_literal"] else ex["o"]
+                example_strs.append(f"{ex['s']}→{o_display}")
+            relations_lines.append(f"- {rel['name']} ({rel['count']}×): {', '.join(example_strs)}")
+        relations_block = '\n'.join(relations_lines) if relations_lines else "(no relations observed)"
+
+        frequent_concepts_str = (
+            ', '.join(profile["frequent_concepts"]) if profile["frequent_concepts"] else "(none)"
+        )
+
+        type_hints = profile.get("type_hints", {})
+        if not type_hints:
+            known_types_str = "none — infer from patterns"
+        else:
+            type_lines = []
+            for cls_name, instances in type_hints.items():
+                sample = instances[:10]
+                suffix = f", ... (+{len(instances) - 10} more)" if len(instances) > 10 else ""
+                type_lines.append(f"{cls_name}: {', '.join(sample)}{suffix}")
+            known_types_str = '; '.join(type_lines)
+
         # 1. LLM에게 스키마 생성 요청 (Structured 7-Step Prompt)
         prompt = f"""You are an ontology schema extraction agent.
 
@@ -319,13 +453,14 @@ but no explicit ontology schema is defined.
 
 You must reverse-engineer the ontology schema from graph patterns.
 
-## INPUT DATA
+## OBSERVED GRAPH PATTERNS
 
-Concepts extracted from graph nodes (Total: {len(candidate_concepts)}):
-{', '.join(sorted(list(candidate_concepts))[:500])}
+Relations (name, frequency, example triples):
+{relations_block}
 
-Relations extracted from graph edges (Total: {len(candidate_relations)}):
-{', '.join(sorted(list(candidate_relations))[:100])}
+Frequent entities: {frequent_concepts_str}
+
+Known types: {known_types_str}
 
 ## STRICT RULES
 
@@ -333,7 +468,7 @@ Relations extracted from graph edges (Total: {len(candidate_relations)}):
 2. Do NOT output instances or individuals.
 3. Do NOT invent concepts not supported by graph patterns.
 4. Do NOT assume domain knowledge outside the graph.
-5. Prefer general, reusable concepts over overly specific ones.
+5. Prefer general, reusable concepts over overly specific ones. However, keep meaningful recurring distinctions as separate classes; do not over-merge.
 6. If something is ambiguous, exclude it.
 7. Do NOT create artificial root classes like "Thing", "Entity", "Object", "Concept", or "Resource".
 8. Every class MUST be connected to at least one other class - NO orphan classes allowed.
@@ -354,12 +489,15 @@ STEP 3. Object Property Extraction
 - Identify relationship types between nodes.
 - Normalize relationship names into ontology-style predicates.
 - Treat relationships as ObjectProperties, not classes.
+- For each ObjectProperty, record in `source_relations` the ORIGINAL relation name(s)
+  from the Relations list above that it was derived from. Copy them VERBATIM as shown
+  (e.g. "출연"), even if you renamed the property. This is required for instance typing.
 
 STEP 4. Domain & Range Identification (CRITICAL)
 - For each ObjectProperty, determine:
   - Domain class (source node type)
   - Range class (target node type)
-- Use observed graph patterns only.
+- Determine domain/range ONLY from the subject/object types observed in the example triples above.
 - EVERY ObjectProperty MUST have both domain and range defined.
 
 STEP 5. Intermediate Node Evaluation
@@ -387,6 +525,7 @@ STEP 7. Connectivity Verification
       "name": "propertyName",
       "domain": "SourceClass",
       "range": "TargetClass",
+      "source_relations": ["<original relation name(s) from the Relations list above, verbatim>"],
       "description": "Brief description"
     }}
   ],
@@ -414,10 +553,10 @@ For a TV show domain with concepts [성기훈, 오일남, 프론트맨, 시즌1,
     {{"name": "Game", "description": "A game event in the show"}}
   ],
   "object_properties": [
-    {{"name": "appearsIn", "domain": "Person", "range": "Episode", "description": "Character appears in episode"}},
-    {{"name": "participatesIn", "domain": "Person", "range": "Game", "description": "Character participates in game"}},
-    {{"name": "hasSeason", "domain": "Episode", "range": "Season", "description": "Episode belongs to season"}},
-    {{"name": "featuresGame", "domain": "Episode", "range": "Game", "description": "Episode features a game"}}
+    {{"name": "appearsIn", "domain": "Person", "range": "Episode", "source_relations": ["출연", "등장"], "description": "Character appears in episode"}},
+    {{"name": "participatesIn", "domain": "Person", "range": "Game", "source_relations": ["참가"], "description": "Character participates in game"}},
+    {{"name": "hasSeason", "domain": "Episode", "range": "Season", "source_relations": ["포함"], "description": "Episode belongs to season"}},
+    {{"name": "featuresGame", "domain": "Episode", "range": "Game", "source_relations": ["포함"], "description": "Episode features a game"}}
   ],
   "data_properties": [
     {{"name": "name", "domain": "Person", "range": "xsd:string"}},
@@ -425,6 +564,10 @@ For a TV show domain with concepts [성기훈, 오일남, 프론트맨, 시즌1,
   ],
   "class_hierarchy": []
 }}
+
+NOTE: The example above is for FORMAT ONLY. It is a small illustration of the JSON shape and naming
+style — it is NOT a target size. The number of classes and properties you output MUST match the
+actual complexity of the OBSERVED GRAPH PATTERNS above, not the size of this example.
 
 IMPORTANT: Output schema ONLY (TBox). Do NOT include example instances. Do NOT explain the graph itself.
 Now analyze the input and generate the schema.
@@ -540,6 +683,50 @@ Now analyze the input and generate the schema.
                 parent_name = hier.get("parent", "")
                 if child_name in class_uri_map and parent_name in class_uri_map:
                     g.add((class_uri_map[child_name], RDFS.subClassOf, class_uri_map[parent_name]))
+
+        # E. 인스턴스-타입 링크 부여 (design-ontology-schema-extraction-v2.md §3.5, 버그 ④ 수정)
+        # domain/range가 모두 확정된 ObjectProperty에 한해, 프로파일에서 수집해 둔
+        # 실제 (subject, object) URI 쌍에 rdf:type을 부여한다. LLM이 관계명을 정규화(rename)
+        # 하므로, 원본 관계명은 LLM이 반환한 source_relations로 매칭한다. (없으면 name으로 폴백)
+        relation_pairs = profile.get("_relation_pairs", {})
+        instance_types_assigned = 0
+        typed_pairs_seen = set()  # (subj, cls) / (obj, cls) 중복 카운트 방지
+        for prop in raw_obj_props:
+            if not isinstance(prop, dict):
+                continue
+            prop_name = prop.get("name", "")
+            domain_name = prop.get("domain", "")
+            range_name = prop.get("range", "")
+            if not prop_name or not domain_name or not range_name:
+                continue
+
+            domain_uri = class_uri_map.get(domain_name)
+            range_uri = class_uri_map.get(range_name)
+            if domain_uri is None or range_uri is None:
+                continue
+
+            # 원본 관계명 후보: source_relations 우선, 없으면 정규화된 name으로 폴백
+            source_rels = prop.get("source_relations")
+            if isinstance(source_rels, str):
+                source_rels = [source_rels]
+            elif not isinstance(source_rels, list) or not source_rels:
+                source_rels = [prop_name]
+
+            for rel_name in source_rels:
+                pairs = relation_pairs.get(rel_name)
+                if not pairs:
+                    continue
+                for subj_uri, obj_uri in pairs:
+                    if (subj_uri, domain_uri) not in typed_pairs_seen:
+                        g.add((subj_uri, RDF.type, domain_uri))
+                        typed_pairs_seen.add((subj_uri, domain_uri))
+                        instance_types_assigned += 1
+                    if (obj_uri, range_uri) not in typed_pairs_seen:
+                        g.add((obj_uri, RDF.type, range_uri))
+                        typed_pairs_seen.add((obj_uri, range_uri))
+                        instance_types_assigned += 1
+
+        print(f"[OntologyPromoter] Instance-type assignment: {instance_types_assigned} type edges added")
 
         # 3. 통계 및 Info 업데이트
         self.stats["step2_classes"] = len(explicit_classes)

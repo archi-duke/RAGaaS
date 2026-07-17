@@ -146,6 +146,18 @@ async def promote_knowledge_base(
     
     # If payload has 'action' == 'revert', demote
     if payload.get("action") == "revert":
+        # ontology 백엔드는 승격 시 urn:ontology:{kb_id} 그래프에 스키마를 업로드하므로,
+        # revert 시 해당 그래프도 삭제해야 잔여 스키마가 남지 않는다. (클린업 누락 버그 수정)
+        if kb.graph_backend == 'ontology':
+            try:
+                from app.core.fuseki import fuseki_client
+                ontology_graph_uri = f"urn:ontology:{kb_id}"
+                print(f"[Revert] Dropping ontology graph: {ontology_graph_uri}")
+                fuseki_client.drop_graph(kb_id, ontology_graph_uri)
+                print(f"[Revert] ✅ Ontology graph dropped")
+            except Exception as e:
+                # 그래프 삭제 실패가 revert 자체를 막지 않도록 경고만 남긴다.
+                print(f"[Revert] ⚠️ Failed to drop ontology graph: {e}")
         kb.is_promoted = False
         kb.promotion_metadata = {}
         await kb.save()
