@@ -18,7 +18,10 @@ class KnowledgeBaseBase(BaseModel):
     llm_model_config: Dict[str, Any] = {}
 
 class KnowledgeBaseCreate(KnowledgeBaseBase):
-    pass
+    # 생성 시 커스텀 파이프라인을 전달할 수 있다(선택). 없으면 create 로직이
+    # 기본 Gate(smalltalk) 스테이지를 주입한다. 이 필드가 없으면 create 에서
+    # kb.pipeline_config 접근 시 AttributeError 로 KB 생성 자체가 실패한다.
+    pipeline_config: Optional[Dict[str, Any]] = None
 
 class KnowledgeBase(KnowledgeBaseBase):
     id: str
