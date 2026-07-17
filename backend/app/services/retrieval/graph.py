@@ -1,3 +1,4 @@
+import asyncio
 from typing import List, Dict, Any, Optional, Tuple
 from .base import RetrievalStrategy
 from .graph_backends import GraphBackendFactory
@@ -504,19 +505,29 @@ class GraphRetrievalStrategy(RetrievalStrategy):
         # Get existing collection
         collection_name = f"kb_{kb_id.replace('-', '_')}"
         from pymilvus import Collection
-        collection = Collection(collection_name)
-        collection.load()
-        
+
         # Limit to avoid huge query
         target_ids = chunk_ids[:100] # Safety limit
-        
         expr = f'chunk_id in {json.dumps(target_ids)}'
-        
-        results = collection.query(
-            expr=expr,
-            output_fields=["content", "doc_id", "chunk_id", "vector"]
-        )
-        
+
+        # Milvus load/query 는 블로킹이며, 이 서버는 특정 컬렉션이 load 되지 않고
+        # 타임아웃되는 고질 이슈가 있다(무한 행 → 이벤트 루프 블로킹). 스레드로 오프로딩 +
+        # wait_for 로 시간 격리하고, 실패 시 청크 없이 진행한다(답변은 트리플로 생성됨).
+        def _sync_fetch():
+            collection = Collection(collection_name)
+            collection.load(timeout=15)
+            return collection.query(
+                expr=expr,
+                output_fields=["content", "doc_id", "chunk_id", "vector"],
+                timeout=15,
+            )
+
+        try:
+            results = await asyncio.wait_for(asyncio.to_thread(_sync_fetch), timeout=20)
+        except Exception as e:
+            logger.warning(f"[Graph] _fetch_chunks Milvus 조회 실패/타임아웃 — 청크 없이 진행: {str(e)[:120]}")
+            return []
+
         retrieved = []
         
         # Calculate cosine similarity for scoring (so we can merge with vector results)

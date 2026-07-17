@@ -1015,9 +1015,12 @@ class FusekiBackend(GraphBackend):
                     # Chunk ID 조회를 위해 found_uris 사용
                     if found_uris:
                         uri_list = " ".join([f"<{u}>" for u in found_uris])
+                        # [FIX] SELECT 절이 누락돼 있어 QueryBadFormed 로 항상 0 청크를 반환하던 버그.
+                        # LLM 경로(하단 reification_query)와 동일하게 SELECT DISTINCT ?sourceNodeId 추가.
                         reification_query = f"""
                         PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
                         PREFIX meta: <http://rag.local/meta/>
+                        SELECT DISTINCT ?sourceNodeId
                         FROM <urn:x-arq:UnionGraph>
                         WHERE {{
                           VALUES ?target {{ {uri_list} }} .
