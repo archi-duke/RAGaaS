@@ -99,6 +99,7 @@ class IngestRequest(BaseModel):
     normalization_algorithm: str = "embedding"  # embedding | string | llm
     normalization_threshold: float = 0.85
     enable_normalization_confirmation: bool = False  # User review before applying
+    enable_entity_typing: bool = False  # Opt-in ingestion-time entity type classification (rdf:type)
     callback_url: Optional[str] = None
     sampling_size: Optional[int] = None # For Doc2Graph Dictionary (Phase 1)
     entity_dictionary: Optional[Dict[str, Any]] = None # Pre-computed dictionary
@@ -225,6 +226,7 @@ async def process_ingest_job(job_id: str, request: IngestRequest):
             enable_entity_normalization=request.enable_entity_normalization,
             normalization_algorithm=request.normalization_algorithm,
             normalization_threshold=request.normalization_threshold,
+            enable_entity_typing=request.enable_entity_typing,
             entity_dictionary=request.entity_dictionary,
             sampling_size=request.sampling_size,
             kb_id=request.kb_id,  # ✅ 추가
@@ -495,6 +497,7 @@ class PreviewRequest(BaseModel):
     normalization_algorithm: str = "embedding"
     normalization_threshold: float = 0.85
     enable_normalization_confirmation: bool = False
+    enable_entity_typing: bool = False  # Opt-in ingestion-time entity type classification (rdf:type)
     sampling_size: Optional[int] = None  # For Doc2Graph Dictionary (Phase 1)
     entity_dictionary: Optional[Dict[str, Any]] = None # Pre-computed dictionary
     callback_url: Optional[str] = None # For granular status updates
@@ -585,6 +588,7 @@ async def create_preview(request: PreviewRequest):
             enable_entity_normalization=request.enable_entity_normalization,
             normalization_algorithm=request.normalization_algorithm,
             normalization_threshold=request.normalization_threshold,
+            enable_entity_typing=request.enable_entity_typing,
             entity_dictionary=request.entity_dictionary,
             sampling_size=request.sampling_size,
             kb_id=request.kb_id,  # ✅ 추가

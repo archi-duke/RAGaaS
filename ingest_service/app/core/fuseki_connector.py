@@ -14,12 +14,17 @@ from app.core.config import settings
 
 class FusekiConnector:
     """Fuseki SPARQL Store Connector"""
-    
+
+    # [NEW][B안] 인제스트 시점 엔티티 타입(rdf:type) 네임스페이스.
+    # enable_entity_typing이 활성일 때만 triple dict에 subject_type/object_type이 붙으므로,
+    # 비활성 시(필드 없음/None)에는 아래 로직이 아무 것도 방출하지 않아 기존 동작과 동일하다.
+    CLASS_NS = "http://rag.local/class/"
+
     def __init__(self):
         self.base_url = settings.FUSEKI_URL
         self.namespace_entity = "http://rag.local/inst/"
         self.namespace_relation = "http://rag.local/rel/"
-    
+
     def _sanitize_uri(self, text: str) -> str:
         """URI에 사용할 수 있도록 텍스트 정리"""
         clean = re.sub(r'[^a-zA-Z0-9_\uAC00-\uD7A3\u0400-\u04FF]+', '_', text.strip())
@@ -57,7 +62,25 @@ class FusekiConnector:
             rdf_lines.append(f'{s_uri} <http://www.w3.org/2000/01/rdf-schema#label> {subj_label} .')
             rdf_lines.append(f'{p_uri} <http://www.w3.org/2000/01/rdf-schema#label> {pred_label} .')
             rdf_lines.append(f'{o_uri} <http://www.w3.org/2000/01/rdf-schema#label> {obj_label} .')
-            
+
+            # [NEW][B안, opt-in] rdf:type 엣지 추가
+            # subject_type/object_type은 enable_entity_typing이 활성일 때만 트리플 dict에 존재한다.
+            # "Entity"(안전 폴백)는 의미 없는 잡음이므로 방출하지 않는다.
+            subject_type = t.get("subject_type")
+            if subject_type and subject_type != "Entity":
+                subj_cls = self._sanitize_uri(subject_type)
+                if subj_cls:
+                    rdf_lines.append(
+                        f'{s_uri} <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <{self.CLASS_NS}{subj_cls}> .'
+                    )
+            object_type = t.get("object_type")
+            if object_type and object_type != "Entity":
+                obj_cls = self._sanitize_uri(object_type)
+                if obj_cls:
+                    rdf_lines.append(
+                        f'{o_uri} <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <{self.CLASS_NS}{obj_cls}> .'
+                    )
+
             # ✅ 메타데이터 트리플 추가: source_node_id를 별도 트리플로 저장
             # 트리플 statement URI 생성
             source_node_id = t.get("source_node_id", "")

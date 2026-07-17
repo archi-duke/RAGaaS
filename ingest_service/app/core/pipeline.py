@@ -664,7 +664,26 @@ class IngestPipeline:
         
         num_workers = config.get("num_workers", 5)
         sem = asyncio.Semaphore(num_workers)
-        
+
+        # [NEW] Seam B (B안): entity_dictionary가 있으면 canonical name/variant -> type
+        # 역인덱스를 한 번만 구축해 트리플 생성 시 subject/object 타입을 조회한다.
+        # entity_dictionary가 없으면(=enable_entity_typing 비활성 등) 인덱스는 비어 있고
+        # _lookup_type은 항상 None을 반환한다 (기존 트리플 dict shape과 100% 동일).
+        type_lookup: Dict[str, str] = {}
+        if entity_dictionary:
+            for canon, info in entity_dictionary.items():
+                entity_type = info.get("type")
+                if not entity_type:
+                    continue
+                type_lookup[canon] = entity_type
+                for variant in info.get("variants", []):
+                    type_lookup.setdefault(variant, entity_type)
+
+        def _lookup_type(name: str) -> Optional[str]:
+            if not type_lookup or not name:
+                return None
+            return type_lookup.get(name)
+
         async def process_node(node, idx):
             async with sem:
                 try:
@@ -717,23 +736,31 @@ Triplets:"""
                     if parsed_json:
                         for t in parsed_json.get("triples", []):
                             if all(k in t for k in ["subject", "predicate", "object"]):
+                                subj = str(t["subject"]).strip()
+                                obj = str(t["object"]).strip()
                                 node_triples.append({
-                                    "subject": str(t["subject"]).strip(),
+                                    "subject": subj,
                                     "predicate": str(t["predicate"]).strip(),
-                                    "object": str(t["object"]).strip(),
+                                    "object": obj,
                                     "source_node_id": node.node_id,
                                     "confidence": t.get("confidence", 0.8),
+                                    "subject_type": _lookup_type(subj),
+                                    "object_type": _lookup_type(obj),
                                 })
                         # Also extract properties (entity attributes) as triples
                         properties = parsed_json.get("properties", [])
                         for prop in properties:
                             if all(k in prop for k in ["entity", "property", "value"]):
+                                subj = str(prop["entity"]).strip()
+                                obj = str(prop["value"]).strip()
                                 node_triples.append({
-                                    "subject": str(prop["entity"]).strip(),
+                                    "subject": subj,
                                     "predicate": f"has_{prop['property']}",
-                                    "object": str(prop["value"]).strip(),
+                                    "object": obj,
                                     "source_node_id": node.node_id,
                                     "confidence": 0.9,
+                                    "subject_type": _lookup_type(subj),
+                                    "object_type": _lookup_type(obj),
                                 })
                     else:
                         for line in response_text.split('\n'):
@@ -750,13 +777,15 @@ Triplets:"""
                                     o = parts[2].strip()
                                     
                                     # Basic validation
-                                    if s and p and o and len(s) < 50 and len(p) < 50: 
+                                    if s and p and o and len(s) < 50 and len(p) < 50:
                                         node_triples.append({
                                             "subject": s,
                                             "predicate": p,
                                             "object": o,
                                             "source_node_id": node.node_id,
                                             "confidence": 0.7,
+                                            "subject_type": _lookup_type(s),
+                                            "object_type": _lookup_type(o),
                                         })
                     return node_triples
                 except Exception as e:
@@ -811,6 +840,7 @@ Triplets:"""
         enable_entity_normalization: bool = False,
         normalization_algorithm: str = "embedding",
         normalization_threshold: float = 0.85,
+        enable_entity_typing: bool = False,  # Opt-in: 인제스트 시점 엔티티 타입 분류 (B안, 기본 False)
         entity_dictionary: Optional[Dict[str, Dict[str, Any]]] = None,
         sampling_size: Optional[int] = None, # User-defined sampling size
         kb_id: Optional[str] = None,  # ✅ 추가: 임시 파일 저장용
@@ -851,7 +881,8 @@ Triplets:"""
         # PHASE 1: Entity Extraction (Global Dictionary)
         t1 = time.time()
         # ✅ Graph 추출이 없으면 Entity Dictionary도 불필요 (Non-Graph KB 최적화)
-        if enable_entity_normalization and not entity_dictionary and graph_extractor_type != GraphExtractorType.NONE:
+        # entity_dictionary는 정규화 또는 타입 분류(B안) 중 하나라도 활성이면 필요하다.
+        if (enable_entity_normalization or enable_entity_typing) and not entity_dictionary and graph_extractor_type != GraphExtractorType.NONE:
             if job_id and jobs.get(job_id, {}).get("status") == JobStatus.CANCELLED: return {}
             
             if status_callback:
@@ -866,11 +897,28 @@ Triplets:"""
             )
             effective_sampling_size = sampling_size if sampling_size else 10000
             entity_dictionary = await dict_builder.build_from_text(text, sampling_size=effective_sampling_size)
-            
+
             # ✅ 엔티티 추출 완료 상태 전송
             if status_callback:
                 await status_callback("ENTITY_EXTRACTED")
-            
+
+            # [NEW][Opt-in] Phase 1.5: Entity Type Classification (B안, enable_entity_typing)
+            # 플래그가 False면 이 블록은 전혀 실행되지 않아 기존 동작과 100% 동일하다.
+            if enable_entity_typing and entity_dictionary:
+                if job_id and jobs.get(job_id, {}).get("status") == JobStatus.CANCELLED: return {}
+                print(f"[Pipeline] Phase 1.5: Classifying entity types (enable_entity_typing=True)...")
+                from app.core.entity_type_classifier import EntityTypeClassifier
+                type_classifier = EntityTypeClassifier(active_ingest_llm, llm_config=ingest_llm)
+                type_map = await type_classifier.classify(entity_dictionary)
+                typed_count = 0
+                for name, info in entity_dictionary.items():
+                    resolved_type = type_map.get(name)
+                    if resolved_type:
+                        info["type"] = resolved_type
+                        if resolved_type != "Entity":
+                            typed_count += 1
+                print(f"[Pipeline] Phase 1.5: Assigned non-generic type to {typed_count}/{len(entity_dictionary)} entities.")
+
             # ✅ 임시 파일 저장: 엔티티 사전
             if kb_id and doc_id and entity_dictionary:
                 from app.utils.temp_storage import temp_storage
