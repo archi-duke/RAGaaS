@@ -785,7 +785,14 @@ async def _save_preview_data(
         
         # 1. Save to Milvus
         print(f"[Confirm] Saving {cached['node_count']} chunks to Milvus...")
-        chunks_data = [{"content": node.get_content(), "metadata": node.metadata} for node in cached["nodes"]]
+        # [FIX] node_id 를 포함해야 Milvus chunk_id 가 그래프 reification 의 source_node_id 와
+        # 일치한다. 누락하면 milvus_connector 가 {doc_id}_{i} 폴백 ID 를 써서 그래프-벡터
+        # 조인이 깨진다(직접 인제스트 경로는 이미 node_id 포함).
+        chunks_data = [{
+            "content": node.get_content(),
+            "metadata": node.metadata,
+            "node_id": node.node_id,
+        } for node in cached["nodes"]]
         await milvus_connector.insert_chunks(
             kb_id,
             doc_id,

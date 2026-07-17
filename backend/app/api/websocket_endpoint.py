@@ -12,9 +12,11 @@ async def websocket_endpoint(websocket: WebSocket, kb_id: str):
     The kb_id path parameter should be the UUID of the KB.
     We prefix it with 'kb_' internally to match the broadcast channel.
     """
-    # Verify the channel name consistency with document.py
-    channel_id = f"kb_{kb_id}"
-    
+    # [FIX] 채널 키를 broadcast 호출부와 통일한다. 모든 manager.broadcast 는 접두어 없는
+    # 원본 kb_id 를 넘기는데(document.py/cleanup_service.py 등), 여기서만 "kb_" 접두어를
+    # 붙여 등록하면 키가 절대 일치하지 않아 WS 알림이 아무에게도 도달하지 않았다.
+    channel_id = kb_id
+
     await manager.connect(websocket, channel_id)
     try:
         while True:
