@@ -598,9 +598,38 @@ async def upload_document(
     doc_dict['file_path'] = file_path
     return Document(**doc_dict)
 
+
+# §4.4 stuck 상태 리커버리 — 조회 시 경량 타임아웃 판정 (읽기 전용, doc.save() 호출하지 않음)
+_STALE_THRESHOLD_SECONDS = {
+    DocumentStatus.PROCESSING.value: 10 * 60,  # 10분
+    DocumentStatus.DELETING.value: 5 * 60,     # 5분
+}
+
+
+def _mark_stale_if_stuck(doc: DocModel) -> DocModel:
+    threshold_seconds = _STALE_THRESHOLD_SECONDS.get(doc.status)
+    if not threshold_seconds:
+        return doc
+    updated_at = doc.updated_at
+    if updated_at is None:
+        return doc
+    # updated_at은 보통 naive UTC(datetime.utcnow() 기본값)로 저장되지만,
+    # 혹시 tz-aware 값이 들어와도 안전하게 비교할 수 있도록 정규화한다.
+    now = datetime.utcnow()
+    if updated_at.tzinfo is not None:
+        updated_at = updated_at.replace(tzinfo=None) - updated_at.utcoffset()
+    elapsed = (now - updated_at).total_seconds()
+    if elapsed > threshold_seconds:
+        doc.stale = True
+    return doc
+
+
 @router.get("/{kb_id}/documents", response_model=List[Document])
 async def list_documents(kb_id: str):
-    return await DocModel.find(DocModel.kb_id == kb_id).to_list()
+    docs = await DocModel.find(DocModel.kb_id == kb_id).to_list()
+    for doc in docs:
+        _mark_stale_if_stuck(doc)
+    return docs
 
 @router.delete("/{kb_id}/documents/{doc_id}")
 async def delete_document(kb_id: str, doc_id: str):
@@ -655,6 +684,7 @@ class IngestCallback(BaseModel):
     pipeline_status: Optional[str] = None
     result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
+    progress: Optional[int] = None
 
 @router.post("/ingest/callback")
 async def ingest_callback(payload: IngestCallback):
@@ -692,11 +722,15 @@ async def ingest_callback(payload: IngestCallback):
                 
     elif payload.status == "failed":
         doc.status = DocumentStatus.ERROR.value
+        doc.error = payload.error
     else:
         # Intermediate status (processing)
         doc.status = DocumentStatus.PROCESSING.value
         if payload.pipeline_status:
             doc.pipeline_status = payload.pipeline_status
+
+    if payload.progress is not None:
+        doc.progress = payload.progress
 
     await doc.save()
 
@@ -708,7 +742,9 @@ async def ingest_callback(payload: IngestCallback):
         "pipeline_status": doc.pipeline_status,
         "chunk_count": doc.chunk_count,
         "entity_count": doc.entity_count,
-        "triple_count": doc.triple_count
+        "triple_count": doc.triple_count,
+        "progress": doc.progress,
+        "error": doc.error
     })
 
     # Cleanup source file if completed
