@@ -739,18 +739,21 @@ async def get_all_triples(
         if include_chunk_text and chunk_ids_to_fetch:
             try:
                 from app.core.milvus import create_collection
-                collection = create_collection(kb_id)
-                collection.load()
-                
+                # Milvus load/query 는 블로킹 — 손상된 컬렉션 load 가 무한 타임아웃되면
+                # 이벤트 루프 전체를 막으므로 스레드 오프로딩 + wait_for 로 시간 격리.
+                import asyncio
                 chunk_id_list = list(chunk_ids_to_fetch)[:100]  # 최대 100개
-                # chunk_id 필드로 조회
-                expr = f'chunk_id in {chunk_id_list}'
-                results = collection.query(
-                    expr=expr,
-                    output_fields=["chunk_id", "content"],
-                    limit=100
-                )
-                
+                def _sync_fetch_chunk_texts():
+                    collection = create_collection(kb_id)
+                    collection.load(timeout=15)
+                    return collection.query(
+                        expr=f'chunk_id in {chunk_id_list}',
+                        output_fields=["chunk_id", "content"],
+                        limit=100,
+                        timeout=15,
+                    )
+                results = await asyncio.wait_for(asyncio.to_thread(_sync_fetch_chunk_texts), timeout=20)
+
                 for r in results:
                     chunk_text_map[r.get("chunk_id")] = r.get("content", "")[:500]
                     

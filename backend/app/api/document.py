@@ -808,16 +808,25 @@ async def get_document_chunks(kb_id: str, doc_id: str):
             logger.warning(f"Collection {collection_name} does not exist")
             return {"chunks": []}
         
-        # Get collection and load it
-        collection = Collection(collection_name)
-        collection.load()
-        
-        # Query for chunks with this doc_id
-        results = collection.query(
-            expr=f'doc_id == "{doc_id}"',
-            output_fields=["chunk_id", "content", "metadata", "doc_id"],
-            limit=10000  # Large limit to get all chunks
-        )
+        # Get collection and load it.
+        # Milvus load/query 는 블로킹이며, 손상된 컬렉션은 load 가 무한 타임아웃되어
+        # 이벤트 루프 전체를 막는다(다른 KB·목록까지 멈춤). 스레드 오프로딩 + wait_for
+        # 로 시간 격리하고, 실패 시 빈 청크로 degrade 한다.
+        import asyncio
+        def _sync_query_chunks():
+            collection = Collection(collection_name)
+            collection.load(timeout=15)
+            return collection.query(
+                expr=f'doc_id == "{doc_id}"',
+                output_fields=["chunk_id", "content", "metadata", "doc_id"],
+                limit=10000,
+                timeout=15,
+            )
+        try:
+            results = await asyncio.wait_for(asyncio.to_thread(_sync_query_chunks), timeout=20)
+        except Exception as e:
+            logger.warning(f"[get_document_chunks] Milvus 조회 실패/타임아웃 — 빈 청크 반환: {str(e)[:120]}")
+            return {"chunks": []}
         
         # Format response
         chunks = []
