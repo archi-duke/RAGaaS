@@ -158,6 +158,7 @@ export default function ChunkDetailModal({ isOpen, onClose, chunk, title = 'Chun
         normalization_threshold: 0.85,
         max_sample_size: 50000,
         enable_normalization_confirmation: false,
+        enable_entity_typing: false,
     });
 
     useEffect(() => {
