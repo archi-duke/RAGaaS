@@ -61,24 +61,34 @@ class Neo4jConnector:
                 continue
             
             try:
-                # APOC을 사용하여 동적 관계 타입 생성
+                # [B안] 엔티티 타입이 있으면 동적 라벨 부여 (기본 :Entity 라벨은 유지 —
+                # 검색/삭제가 :Entity 매칭에 의존). 타입이 없거나 "Entity"면 빈 리스트로
+                # no-op이 되어 타이핑 비활성 시 기존 동작과 동일하다.
+                subj_labels = self._type_labels(triple.get("subject_type"))
+                obj_labels = self._type_labels(triple.get("object_type"))
+
+                # APOC을 사용하여 동적 관계 타입 생성 + 동적 노드 라벨 부여
                 query = """
                 MERGE (s:Entity {name: $subj, kb_id: $kb_id})
                 MERGE (o:Entity {name: $obj, kb_id: $kb_id})
                 WITH s, o
+                CALL apoc.create.addLabels(s, $subj_labels) YIELD node AS _s
+                WITH _s AS s, o
+                CALL apoc.create.addLabels(o, $obj_labels) YIELD node AS _o
+                WITH s, _o AS o
                 CALL apoc.merge.relationship(s, $pred, {}, $props, o, $props) YIELD rel
                 SET rel.source_node_id = $source_node_id
                 SET rel.doc_id = $doc_id
                 RETURN rel
                 """
-                
+
                 source_node_id = triple.get("source_node_id", "")
                 props = {
                     "doc_id": doc_id,
                     "is_inverse": triple.get("is_inverse", False),
                     "source_node_id": source_node_id,
                 }
-                
+
                 self.execute_query(query, {
                     "subj": subject,
                     "obj": obj,
@@ -86,7 +96,9 @@ class Neo4jConnector:
                     "kb_id": kb_id,
                     "props": props,
                     "source_node_id": source_node_id,
-                    "doc_id": doc_id
+                    "doc_id": doc_id,
+                    "subj_labels": subj_labels,
+                    "obj_labels": obj_labels
                 })
                 inserted_count += 1
                 
@@ -125,6 +137,23 @@ class Neo4jConnector:
         print(f"[Neo4j] ✅ Successfully inserted {inserted_count} relationships.")
         return inserted_count
     
+    def _type_labels(self, entity_type: Optional[str]) -> List[str]:
+        """엔티티 타입을 안전한 Neo4j 라벨 리스트로 변환.
+
+        타입이 없거나 "Entity"(안전 폴백)면 빈 리스트를 반환해 addLabels가
+        no-op이 되게 한다. 라벨은 영숫자/언더스코어로 정제하고, 숫자로 시작하면
+        접두사를 붙인다(라벨은 숫자로 시작할 수 없음).
+        """
+        if not entity_type or entity_type == "Entity":
+            return []
+        import re
+        safe = re.sub(r'[^0-9A-Za-z_가-힣]', '', str(entity_type).strip())
+        if not safe:
+            return []
+        if safe[0].isdigit():
+            safe = f"T_{safe}"
+        return [safe]
+
     def _get_inverse_predicate(self, predicate: str) -> Optional[str]:
         """역관계 프레디케이트 생성"""
         inverse_map = {
