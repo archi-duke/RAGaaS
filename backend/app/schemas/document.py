@@ -42,6 +42,13 @@ class Document(DocumentBase):
     pipeline_status: Optional[str] = None
     pipeline_metadata: Optional[dict] = None
 
+    # Progress / Error reporting (§4.2, §4.3)
+    progress: Optional[int] = 0
+    error: Optional[str] = None
+
+    # Stuck-state recovery flag, computed read-only at query time (§4.4)
+    stale: Optional[bool] = False
+
     class Config:
         from_attributes = True
 

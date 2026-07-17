@@ -5,7 +5,7 @@ import ModelSelector, { DEFAULT_LLM_CONFIG, DEFAULT_EMBEDDING_CONFIG, type Model
 import { useModelSettings } from '../hooks/useModelSettings';
 
 // Stage type definitions
-export type StageType = 'ann' | 'bm25' | 'brute_force' | 'graph' | 'rerank' | 'ner_filter';
+export type StageType = 'smalltalk' | 'ann' | 'bm25' | 'brute_force' | 'graph' | 'rerank' | 'ner_filter';
 
 export interface PipelineStage {
     type: StageType;
@@ -37,7 +37,14 @@ const FILTER_STAGES: { type: StageType; label: string; category: 'filter' }[] = 
     { type: 'ner_filter', label: 'NER Filter', category: 'filter' },
 ];
 
+// 게이트 스테이지: 검색 앞단. Small-talk(인사/잡담)이면 검색 없이 LLM 이 바로 응답하고 중단.
+// KB 생성 시 기본 추가되며, 사용자가 삭제하면 스몰톡 처리도 비활성화된다.
+const GATE_STAGES: { type: StageType; label: string; category: 'gate' }[] = [
+    { type: 'smalltalk', label: 'Gate', category: 'gate' },
+];
+
 const DEFAULT_PARAMS: Record<StageType, Record<string, any>> = {
+    smalltalk: { llm_model: DEFAULT_LLM_CONFIG },
     ann: { top_k: 10, threshold: 0.5, index_type: 'IVF_FLAT', embedding_model: DEFAULT_EMBEDDING_CONFIG },
     bm25: { top_k: 50, use_multi_pos: true },
     brute_force: { top_k: 3, threshold: 1.5 },
@@ -131,10 +138,14 @@ export default function PipelineBuilder({
         ['ann', 'bm25', 'brute_force', 'graph'].includes(s.type)
     );
 
+    // smalltalk 게이트는 하나만 의미가 있으므로 이미 있으면 목록에서 제외
+    const hasSmalltalk = stages.some(s => s.type === 'smalltalk');
+    const gateStages = hasSmalltalk ? [] : GATE_STAGES;
+
     // Available stages based on current state
     const availableStages = hasSearchStage
-        ? [...SEARCH_STAGES, ...FILTER_STAGES]
-        : SEARCH_STAGES;
+        ? [...gateStages, ...SEARCH_STAGES, ...FILTER_STAGES]
+        : [...gateStages, ...SEARCH_STAGES];
 
     // Filter graph if no graph backend
     const filteredStages = graphBackend && graphBackend !== 'none'
@@ -145,7 +156,7 @@ export default function PipelineBuilder({
     useEffect(() => {
         const loadPipeline = async () => {
             try {
-                const response = await fetch(`/api/knowledge-bases/${kbId}/pipeline`);
+                const response = await fetch(`${import.meta.env.BASE_URL}api/knowledge-bases/${kbId}/pipeline`);
                 if (response.ok) {
                     const config = await response.json();
                     if (config.stages && config.stages.length > 0) {
@@ -193,7 +204,7 @@ export default function PipelineBuilder({
 
         const saveTimeout = setTimeout(async () => {
             try {
-                await fetch(`/api/knowledge-bases/${kbId}/pipeline`, {
+                await fetch(`${import.meta.env.BASE_URL}api/knowledge-bases/${kbId}/pipeline`, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ stages })
@@ -216,7 +227,7 @@ export default function PipelineBuilder({
         setIsLoadingPrompt(true);
         setPromptError('');
         try {
-            const response = await fetch('/api/knowledge-bases/settings/rerank-prompt');
+            const response = await fetch(`${import.meta.env.BASE_URL}api/knowledge-bases/settings/rerank-prompt`);
             if (!response.ok) throw new Error('Failed to load global prompt');
             const data = await response.json();
             setTempPrompt(data.content);
@@ -234,7 +245,7 @@ export default function PipelineBuilder({
             const backendType = graphBackend === 'neo4j'
                 ? 'neo4j'
                 : (isOntologyPromoted ? 'ontology_plus' : 'ontology_minus');
-            const response = await fetch(`/api/knowledge-bases/query-prompt/content?type=${backendType}`);
+            const response = await fetch(`${import.meta.env.BASE_URL}api/knowledge-bases/query-prompt/content?type=${backendType}`);
             if (!response.ok) throw new Error('Failed to load default graph prompt');
             const data = await response.json();
             setTempPrompt(data.content);
@@ -258,7 +269,7 @@ export default function PipelineBuilder({
         try {
             if (editingPromptStage === -1) {
                 // Global Rerank Prompt → txt file
-                const response = await fetch('/api/knowledge-bases/settings/rerank-prompt', {
+                const response = await fetch(`${import.meta.env.BASE_URL}api/knowledge-bases/settings/rerank-prompt`, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ content: tempPrompt })
@@ -269,7 +280,7 @@ export default function PipelineBuilder({
                 const backendType = graphBackend === 'neo4j'
                     ? 'neo4j'
                     : (isOntologyPromoted ? 'ontology_plus' : 'ontology_minus');
-                const response = await fetch('/api/knowledge-bases/query-prompt/save', {
+                const response = await fetch(`${import.meta.env.BASE_URL}api/knowledge-bases/query-prompt/save`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ content: tempPrompt, type: backendType })
@@ -295,6 +306,9 @@ export default function PipelineBuilder({
             // we could add ingest_embedding to useModelSettings. 
             // But let's use the current settings for now.
         }
+        if (type === 'smalltalk') {
+            params.llm_model = settings.chat_llm;
+        }
         if (type === 'graph') {
             params.use_schema_mode = isOntologyPromoted ?? false;
             params.llm_model = settings.graph_query_llm;
@@ -307,7 +321,8 @@ export default function PipelineBuilder({
             type,
             params
         };
-        setStages([...stages, newStage]);
+        // smalltalk 는 검색 앞단 게이트 → 맨 앞에 배치, 그 외는 맨 뒤에 추가
+        setStages(type === 'smalltalk' ? [newStage, ...stages] : [...stages, newStage]);
         setShowDropdown(false);
     };
 
@@ -334,10 +349,11 @@ export default function PipelineBuilder({
     };
 
     const renderStageCard = (stage: PipelineStage, index: number) => {
-        const stageInfo = [...SEARCH_STAGES, ...FILTER_STAGES].find(s => s.type === stage.type);
+        const stageInfo = [...GATE_STAGES, ...SEARCH_STAGES, ...FILTER_STAGES].find(s => s.type === stage.type);
         const isSearch = SEARCH_STAGES.some(s => s.type === stage.type);
 
         const usesLLM =
+            stage.type === 'smalltalk' ||
             stage.type === 'graph' ||
             (stage.type === 'rerank' && stage.params.use_llm);
 
@@ -503,6 +519,18 @@ export default function PipelineBuilder({
         const params = stage.params;
 
         switch (stage.type) {
+            case 'smalltalk':
+                return (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', flexWrap: 'wrap', paddingTop: '0.15rem' }}>
+                        <span style={{ fontSize: '0.7rem', color: '#475569', flexShrink: 0 }}>Model</span>
+                        <ModelSelector
+                            type="llm"
+                            value={params.llm_model || DEFAULT_LLM_CONFIG}
+                            onChange={(cfg) => handleParamChange(index, 'llm_model', cfg)}
+                        />
+                    </div>
+                );
+
             case 'ann':
                 return (
                     <div style={{ display: 'flex', flexDirection: 'row', gap: '0.3rem', alignItems: 'flex-start' }}>
@@ -892,6 +920,30 @@ export default function PipelineBuilder({
                             zIndex: 9999,
                             padding: '0.5rem 0'
                         }}>
+                            {filteredStages.some(s => s.category === 'gate') && (
+                                <>
+                                    <div style={{ padding: '0.25rem 1rem', fontSize: '0.75rem', color: '#94a3b8', fontWeight: 600 }}>
+                                        Gate
+                                    </div>
+                                    {filteredStages.filter(s => s.category === 'gate').map(stage => (
+                                        <div
+                                            key={stage.type}
+                                            onClick={() => handleAddStage(stage.type)}
+                                            style={{
+                                                padding: '0.5rem 1rem',
+                                                cursor: 'pointer',
+                                                fontSize: '0.9rem',
+                                                color: '#334155'
+                                            }}
+                                            onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#f1f5f9')}
+                                            onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+                                        >
+                                            {stage.label}
+                                        </div>
+                                    ))}
+                                    <div style={{ borderTop: '1px solid #e2e8f0', margin: '0.25rem 0' }} />
+                                </>
+                            )}
                             {!hasSearchStage && (
                                 <div style={{ padding: '0.25rem 1rem', fontSize: '0.75rem', color: '#94a3b8', fontWeight: 600 }}>
                                     Search

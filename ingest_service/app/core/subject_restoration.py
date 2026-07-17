@@ -4,10 +4,20 @@ Subject Restoration Preprocessing Module
 Resolves omitted subjects in Korean text using LLM.
 Example: "이며 Duke의 제자이다" → "오일남은 Duke의 제자이다"
 """
+from openai import OpenAI
 from typing import Optional, Dict, Any
 
-from app.core.llm import chat, LLMError
 
+def _build_client(llm_config: Optional[Dict[str, Any]] = None) -> OpenAI:
+    cfg = llm_config or {}
+    if not cfg.get("api_key"):
+        raise ValueError("Subject restoration model API key is not configured.")
+    client_kwargs: Dict[str, Any] = {"api_key": cfg.get("api_key")}
+    if cfg.get("base_url"):
+        client_kwargs["base_url"] = cfg["base_url"]
+    if cfg.get("extra_headers"):
+        client_kwargs["default_headers"] = cfg["extra_headers"]
+    return OpenAI(**client_kwargs)
 
 SYSTEM_PROMPT = """당신은 한국어 텍스트 전처리 전문가입니다.
 주어진 텍스트에서 **생략된 주어를 복원**하는 작업을 수행합니다.
@@ -46,14 +56,18 @@ async def restore_subjects(
 
         cfg = llm_config or {}
         active_model = cfg.get("model") or model
-        restored_text = chat(
-            cfg,
-            [
+        client = _build_client(cfg)
+        response = client.chat.completions.create(
+            model=active_model,
+            messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": text},
+                {"role": "user", "content": text}
             ],
-            model=active_model, temperature=0.1, max_tokens=len(text) * 2,
-        ).strip()
+            temperature=0.1,
+            max_tokens=len(text) * 2  # Allow some expansion
+        )
+        
+        restored_text = response.choices[0].message.content.strip()
         reduced_text = restored_text[:20].lower()
         if any(x in reduced_text for x in ["죄송", "sorry", "i cannot", "unable to", "제공된 텍스트", "cannot fulfill"]):
             print(f"[SubjectRestoration] ⚠️ Startup detected refusal/chat pattern. Reverting to original text.")
@@ -63,8 +77,6 @@ async def restore_subjects(
         
         return restored_text
         
-    except LLMError:
-        raise
     except Exception as e:
         print(f"[SubjectRestoration] ⚠️ Error: {e}. Returning original text.")
         return text

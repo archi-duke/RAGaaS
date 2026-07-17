@@ -1,6 +1,10 @@
 import logging
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Optional, Tuple
 from app.core.neo4j_client import neo4j_client
+from app.services.retrieval.query_gen_loop import QueryGenerationLoop
+from app.services.retrieval.query_gen_attempt_logger import log_attempts
+from app.services.retrieval.query_gen_example_memory import ExampleMemory
+from app.services.embedding import embedding_service as default_embedding_service
 from .base import GraphBackend
 
 logger = logging.getLogger(__name__)
@@ -87,16 +91,27 @@ class Neo4jBackend(GraphBackend):
                 
                 if num_entities == 1:
                     entity_name = resolved_entities[0]
-                    
+
                     # Detect Pattern 1 vs Pattern 3
-                    entity_idx = query_text.find(entity_name)
-                    if entity_idx != -1:
-                        after_entity = query_text[entity_idx + len(entity_name):entity_idx + len(entity_name) + 2]
-                        is_object_pattern = after_entity.startswith(("을", "를"))
-                        is_subject_pattern = after_entity.startswith(("의", "이", "가"))
+                    # 1차: LLM 이 판별한 엔티티 역할(entity_roles) 사용, 없으면 조사(Josa) 폴백
+                    entity_roles = kwargs.get("entity_roles") or {}
+                    role = entity_roles.get(entity_name)
+                    if role == "object":
+                        is_object_pattern, is_subject_pattern = True, False
+                        log_trace(f"[Neo4j] Role by LLM: '{entity_name}' = object → Pattern 1")
+                    elif role == "subject":
+                        is_object_pattern, is_subject_pattern = False, True
+                        log_trace(f"[Neo4j] Role by LLM: '{entity_name}' = subject → Pattern 3")
                     else:
-                        is_object_pattern = False
-                        is_subject_pattern = False
+                        # 폴백: 조사 휴리스틱 (기존 동작 불변)
+                        entity_idx = query_text.find(entity_name)
+                        if entity_idx != -1:
+                            after_entity = query_text[entity_idx + len(entity_name):entity_idx + len(entity_name) + 2]
+                            is_object_pattern = after_entity.startswith(("을", "를"))
+                            is_subject_pattern = after_entity.startswith(("의", "이", "가"))
+                        else:
+                            is_object_pattern = False
+                            is_subject_pattern = False
                     
                     if is_object_pattern:
                         # Pattern 1: ? -> P -> O (Subject unknown)
@@ -274,40 +289,15 @@ class Neo4jBackend(GraphBackend):
             # [RELEVANCE CHECK]
             # Fast Path가 무차별적으로 데이터를 가져오는 것을 방지
             if skip_llm_generation and found_triples:
-                # 1. 질문에서 핵심 키워드 추출 (엔티티 제외)
-                # 간단한 방식: 공백 분리 후 엔티티 이름이 아닌 것들 중 명사형 추정
-                query_tokens = query_text.replace("?", "").split()
-                relation_keywords = []
-                known_entity_names = [e for e in resolved_entities]
-                
-                for t in query_tokens:
-                    # 조사 제거
-                    t_clean = t.rstrip("은는이가을를의와과로으로에게")
-                    if len(t_clean) > 1 and t_clean not in known_entity_names:
-                         # 질문 어미/조사 등 불용어 필터링 (간단히)
-                         if t_clean not in ["누구", "무엇", "언제", "어디", "어떻게", "관계", "사람", "것"]:
-                             relation_keywords.append(t_clean)
-                
+                relation_keywords = self._extract_relevance_keywords(query_text, resolved_entities)
                 log_trace(f"[Neo4j] Relevance Check Keywords: {relation_keywords}")
-                
-                if relation_keywords:
-                    is_relevant = False
-                    for triple in found_triples:
-                        p = triple["predicate"]
-                        o = triple["object"]
-                        # 키워드가 Predicate나 Object에 포함되는지 확인
-                        for kw in relation_keywords:
-                            if kw in p or kw in o:
-                                is_relevant = True
-                                break
-                        if is_relevant:
-                            break
-                    
-                    if not is_relevant:
-                        log_trace(f"[Neo4j] ⚠️ Fast Path result seems irrelevant to keywords {relation_keywords}. Formatting Fallback to LLM.")
-                        skip_llm_generation = False
-                        found_triples = [] # Reset to avoid noise
-                        found_chunk_ids = set()
+
+                is_relevant = self._check_relevance(query_text, resolved_entities, found_triples, relation_keywords)
+                if not is_relevant:
+                    log_trace(f"[Neo4j] ⚠️ Fast Path result seems irrelevant to keywords {relation_keywords}. Formatting Fallback to LLM.")
+                    skip_llm_generation = False
+                    found_triples = [] # Reset to avoid noise
+                    found_chunk_ids = set()
 
             # If Fast Path succeeded, return immediately
             if skip_llm_generation:
@@ -330,23 +320,21 @@ class Neo4jBackend(GraphBackend):
             from app.core.models_resolver import resolve_model_config
             resolved_llm = await resolve_model_config(llm_model_config)
             cypher_api_key = resolved_llm.get("api_key")
-            cypher_extra_headers = resolved_llm.get("extra_headers") or {}
-            # 사내 게이트웨이는 헤더 인증(extra_headers)만 쓸 수 있으므로 키/헤더 중 하나면 통과.
-            if not cypher_api_key and not cypher_extra_headers:
+            if not cypher_api_key:
                 raise ValueError("Graph query API key is not configured.")
-            from app.core.llm import chat_endpoint
+            cypher_base_url = resolved_llm.get("base_url")
+            cypher_endpoint = f"{cypher_base_url.rstrip('/')}/chat/completions" if cypher_base_url else None
             generator = CypherGenerator(
-                llm_endpoint=chat_endpoint(resolved_llm.get("base_url")),
-                llm_model=resolved_llm.get("model") or "gpt-4o",
                 api_key=cypher_api_key,
-                extra_headers=cypher_extra_headers,
+                llm_endpoint=cypher_endpoint,
+                llm_model=resolved_llm.get("model") or "gpt-4o",
             )
             context = f"관련 엔티티 후보: {', '.join(entities)}" if entities else None
             
             # Determine inverse relation mode
             inv_mode = kwargs.get("inverse_extraction_mode", "auto")
             enable_inverse = kwargs.get("enable_inverse_search", False)
-            dynamic_schema_enabled = kwargs.get("use_dynamic_schema", False)
+            dynamic_schema_enabled = kwargs.get("use_dynamic_schema", True)
             
             if not enable_inverse:
                 inv_mode = "none"
@@ -365,52 +353,103 @@ class Neo4jBackend(GraphBackend):
 """
                 custom_prompt = no_inverse_instruction + custom_prompt
             
-            # LLM 호출 (상세 로깅)
-            log_trace(f"[Neo4j] Calling LLM Cypher Generator (inv_mode={inv_mode}, dynamic_schema={dynamic_schema_enabled})")
-            print(f"[DEBUG] Calling CypherGenerator.generate() with inv_mode={inv_mode}, dynamic_schema={dynamic_schema_enabled}", flush=True)
-            
-            gen_result = generator.generate(
-                query_text, 
-                context=context, 
-                custom_prompt=custom_prompt if custom_prompt else None,
-                inverse_search_mode=inv_mode,
-                kb_id=kb_id,
-                use_dynamic_schema=dynamic_schema_enabled
-            )
-            
-            print(f"[DEBUG] CypherGenerator returned: {gen_result}", flush=True)
-            log_trace(f"[Neo4j] LLM returned: {gen_result}")
-            
-            cypher_query = gen_result.get("cypher")
-            thought = gen_result.get("thought")
-            
-            print(f"[DEBUG] extracted cypher_query type: {type(cypher_query)}, value: {cypher_query[:200] if cypher_query else None}", flush=True)
-            log_trace(f"[Neo4j] Extracted Cypher query: {cypher_query}")
-            log_trace(f"[Neo4j] Generated Cypher:\n{cypher_query}")
+            # [Query Generation Loop] Few-shot lookup (best-effort; never blocks the search)
+            emb_service = kwargs.get("embedding_service", default_embedding_service)
+            few_shot: List[Dict[str, Any]] = []
+            few_shot_ids: List[str] = []
+            try:
+                few_shot = await ExampleMemory().search(kb_id, "neo4j", query_text, emb_service)
+                few_shot_ids = [ex["id"] for ex in few_shot if ex.get("id")]
+                log_trace(f"[Neo4j] Few-shot examples retrieved: {len(few_shot)}")
+            except Exception as e_fewshot:
+                log_trace(f"[Neo4j] Few-shot lookup failed (non-fatal): {e_fewshot}")
+
+            # generate_fn/execute_fn close over `generator`, `context`, `inv_mode`,
+            # `dynamic_schema_enabled`, `custom_prompt`, `few_shot`, `kb_id` established above.
+            # `last_raw_gen` preserves the last generate_fn() JSON payload (e.g. "thought") since
+            # QueryGenerationLoop.attempts only tracks {query, error, result_count, ...}.
+            last_raw_gen: Dict[str, Any] = {}
+
+            async def generate_fn(question: str, retry_context: Optional[str]) -> Dict[str, Any]:
+                nonlocal last_raw_gen
+                combined_prompt = custom_prompt if custom_prompt else None
+                if retry_context:
+                    combined_prompt = f"{custom_prompt}\n\n{retry_context}" if custom_prompt else retry_context
+
+                log_trace(f"[Neo4j] Calling LLM Cypher Generator (inv_mode={inv_mode}, dynamic_schema={dynamic_schema_enabled}, retry={'yes' if retry_context else 'no'})")
+                print(f"[DEBUG] Calling CypherGenerator.generate() with inv_mode={inv_mode}, dynamic_schema={dynamic_schema_enabled}", flush=True)
+
+                gen = generator.generate(
+                    question,
+                    context=context,
+                    custom_prompt=combined_prompt,
+                    inverse_search_mode=inv_mode,
+                    kb_id=kb_id,
+                    use_dynamic_schema=dynamic_schema_enabled,
+                    few_shot_examples=few_shot or None,
+                )
+                print(f"[DEBUG] CypherGenerator returned: {gen}", flush=True)
+                log_trace(f"[Neo4j] LLM returned: {gen}")
+                last_raw_gen = gen or {}
+                return {"query": (gen or {}).get("cypher"), "raw": gen}
+
+            async def execute_fn(cypher_text: str) -> List[Any]:
+                print(f"[DEBUG] Executing Cypher on Neo4j...", flush=True)
+                log_trace(f"[Neo4j] Executing Cypher:\n{cypher_text}")
+                return neo4j_client.execute_query(cypher_text, {"kb_id": kb_id})
+
+            # 스키마 검증 힌트: 실패한 Cypher 가 그래프에 없는 관계 타입을 참조하면
+            # 재시도 프롬프트에 "없는 관계 + 사용 가능 목록"을 주입한다 (실행 차단 아님).
+            allowed_rel_types: List[str] = []
+            try:
+                live_schema = generator._fetch_neo4j_schema(kb_id) or {}
+                allowed_rel_types = live_schema.get("relationship_types", []) or []
+            except Exception as e_schema:
+                log_trace(f"[Neo4j] WARNING: schema fetch for validation failed: {e_schema}")
+
+            def schema_hint_fn(failed_query: str):
+                from app.services.retrieval.query_validation import cypher_schema_hint
+                return cypher_schema_hint(failed_query, allowed_rel_types)
+
+            loop = QueryGenerationLoop(max_retries=2)
+            loop_result = await loop.run(query_text, generate_fn, execute_fn, schema_hint_fn=schema_hint_fn)
+
+            try:
+                model_name = getattr(generator, "llm_model", "") or ""
+                await log_attempts(
+                    kb_id,
+                    "neo4j",
+                    query_text,
+                    loop_result["attempts"],
+                    model=model_name,
+                    few_shot_used=few_shot_ids,
+                )
+            except Exception as e_log:
+                log_trace(f"[Neo4j] Attempt logging failed (non-fatal): {e_log}")
+
+            cypher_query = loop_result["query"]
+            records = loop_result["results"] or []
+            thought = last_raw_gen.get("thought")
+
+            print(f"[DEBUG] QueryGenerationLoop finished: succeeded={loop_result['succeeded']}, attempts={len(loop_result['attempts'])}, record_count={len(records)}", flush=True)
+            log_trace(f"[Neo4j] Query Generation Loop finished: succeeded={loop_result['succeeded']}, attempts={len(loop_result['attempts'])}")
+            log_trace(f"[Neo4j] Final Cypher:\n{cypher_query}")
             log_trace(f"[Neo4j] Reason: {thought}")
-            
+
             if not cypher_query:
                 log_trace("[Neo4j] No Cypher query generated. Returning empty results.")
                 return {"chunk_ids": [], "sparql_query": "Generation Failed", "triples": [], "trace_logs": trace_logs}
-            
-            # Execute generated query
-            print(f"[DEBUG] Step 1: Cypher query prepared, length={len(cypher_query)}", flush=True)
-            print(f"[DEBUG] Step 2: Executing Cypher on Neo4j...", flush=True)
-            log_trace(f"[Neo4j] Executing Cypher:\n{cypher_query}")
-            
-            records = neo4j_client.execute_query(cypher_query, {"kb_id": kb_id})
-            
-            print(f"[DEBUG] Step 3: Got results from Neo4j, record count: {len(records)}", flush=True)
+
             log_trace(f"[Neo4j] Query returned {len(records)} records")
-            
+
             discovered_entities = set()
-            
+
             for record in records:
                 for key, value in record.items():
                     if hasattr(value, "labels"):
                         labels = set(value.labels)
                         props = dict(value)
-                        
+
                         if "Entity" in labels or "Class" in labels or "Instance" in labels:
                             label_ko = props.get("label_ko") or props.get("name")
                             if label_ko:
@@ -418,9 +457,9 @@ class Neo4jBackend(GraphBackend):
                     elif isinstance(value, str):
                         if value and len(value) > 1:
                             discovered_entities.add(value)
-                            
+
             log_trace(f"[Neo4j] Discovered entities from query result: {len(discovered_entities)}")
-            
+
             if inv_mode == "none" and len(discovered_entities) == 0:
                 return {
                     "chunk_ids": [],
@@ -430,9 +469,25 @@ class Neo4jBackend(GraphBackend):
                     "found_entities": [],
                     "trace_logs": trace_logs
                 }
-            
+
             # Fetch triples from graph
             triples, chunk_ids = self._fetch_triples_from_graph(kb_id, entities, list(discovered_entities), trace_logs)
+
+            # [Query Generation Loop] Store successful, relevant examples for future few-shot use.
+            # This gate only controls what gets persisted to ExampleMemory -- it must never filter
+            # the triples/results returned to the caller.
+            if loop_result["succeeded"]:
+                try:
+                    # 저장 게이트는 엔티티를 키워드에서 제외하지 않는다(빈 리스트 전달):
+                    # 질문의 어떤 내용어든(엔티티 포함) 트리플 s/p/o 에 있으면 저장.
+                    is_relevant_for_storage = self._check_relevance(query_text, [], triples, include_subject=True)
+                    if is_relevant_for_storage:
+                        await ExampleMemory().store(kb_id, "neo4j", query_text, cypher_query, emb_service)
+                        log_trace("[Neo4j] Stored successful query as few-shot example.")
+                    else:
+                        log_trace("[Neo4j] Successful query did not pass relevance gate; not stored as example.")
+                except Exception as e_store:
+                    log_trace(f"[Neo4j] Example memory store failed (non-fatal): {e_store}")
 
             return {
                 "chunk_ids": chunk_ids,
@@ -463,13 +518,78 @@ class Neo4jBackend(GraphBackend):
         """Extract potential entity names from the question text."""
         # Simple implementation: return fallback entities
         return fallback_entities if fallback_entities else []
-    
+
+    def _extract_relevance_keywords(self, query_text: str, known_entity_names: List[str]) -> List[str]:
+        """Extract candidate relation/object keywords from the question, excluding known entities.
+
+        Extracted verbatim from the original Fast Path relevance-check block so both the Fast
+        Path and the LLM fallback path can reuse the exact same heuristic.
+        """
+        query_tokens = query_text.replace("?", "").split()
+        relation_keywords = []
+        # 불용어 접두 매칭: 굴절형("누구랑","누구야","관계있어","관계는")도 걸러낸다.
+        # exact-match 만 하면 필러 단어가 살아남아 정상 트리플까지 무관 판정으로 폐기됨.
+        stopword_roots = ("누구", "무엇", "언제", "어디", "어떻게", "왜", "관계", "관련", "연결", "사람", "것", "무슨", "어떤")
+        for t in query_tokens:
+            # 조사 제거
+            t_clean = t.rstrip("은는이가을를의와과로으로에게랑")
+            if len(t_clean) > 1 and t_clean not in known_entity_names:
+                # 질문 어미/조사 등 불용어 필터링 (접두 매칭)
+                if not any(t_clean.startswith(sw) for sw in stopword_roots):
+                    relation_keywords.append(t_clean)
+        return relation_keywords
+
+    def _check_relevance(
+        self,
+        query_text: str,
+        known_entity_names: List[str],
+        triples: List[Dict[str, Any]],
+        relation_keywords: Optional[List[str]] = None,
+        include_subject: bool = False,
+    ) -> bool:
+        """Check whether the given triples are relevant to the question.
+
+        Same semantics as the original Fast Path relevance check: if no relation keywords can
+        be extracted from the question, triples are considered relevant by default (no filter
+        possible). Otherwise, at least one keyword must appear in a triple's predicate or object.
+
+        include_subject=True adds the subject to the match targets. Used only by the
+        ExampleMemory storage gate: when entity resolution fails, the entity token becomes a
+        "keyword" and only ever appears in triple subjects, so a p/o-only check would wrongly
+        reject good examples. The Fast Path fallback decision keeps the default (False).
+        """
+        if relation_keywords is None:
+            relation_keywords = self._extract_relevance_keywords(query_text, known_entity_names)
+
+        if not relation_keywords:
+            return True
+
+        for triple in triples:
+            p = triple.get("predicate", "") or ""
+            o = triple.get("object", "") or ""
+            s = (triple.get("subject", "") or "") if include_subject else ""
+            for kw in relation_keywords:
+                if kw in p or kw in o or (include_subject and kw in s):
+                    return True
+        return False
+
     def _check_entity_exists(self, kb_id: str, entity_name: str) -> bool:
-        """Check if an entity exists in the Neo4j graph."""
+        """Check if an entity exists in the Neo4j graph.
+
+        완전일치뿐 아니라 대소문자 무시 양방향 부분매칭까지 허용한다. 완전일치만
+        보면 표기 변이("Seong Gi-hun")나 조사 잔존 토큰이 게이트에서 탈락해 Fast
+        Path 자체가 스킵되는 문제가 있었다. 실제 Fast Path Cypher 들은 이미
+        bidirectional CONTAINS 로 매칭하므로, 게이트도 같은 기준으로 맞춘다.
+        """
         try:
             query = """
             MATCH (n:Entity)
-            WHERE n.kb_id = $kb_id AND n.name = $entity_name
+            WHERE n.kb_id = $kb_id
+              AND (
+                n.name = $entity_name
+                OR toLower(n.name) CONTAINS toLower($entity_name)
+                OR toLower($entity_name) CONTAINS toLower(n.name)
+              )
             RETURN count(n) as count
             """
             records = neo4j_client.execute_query(query, {"kb_id": kb_id, "entity_name": entity_name})

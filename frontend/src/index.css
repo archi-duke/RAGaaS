@@ -30,7 +30,8 @@ button {
   width: 100%;
   max-width: 100%;
   margin: 0;
-  padding: 1.5rem;
+  /* 셸 임베드 시 standalone 의 #root padding 이 안 먹으므로 컨테이너가 여백을 책임진다. */
+  padding: 2rem 2.5rem;
 }
 
 .card {

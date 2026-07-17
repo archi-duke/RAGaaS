@@ -6,6 +6,8 @@ from pydantic import BaseModel, Field
 import openai
 import os
 import time
+import json
+import re
 
 router = APIRouter()
 
@@ -56,8 +58,14 @@ def _write_model_to_kb_storage(kb, kind: str, model_cfg: dict) -> bool:
     changed = False
     for src, dst in mapping.items():
         value = model_cfg.get(src)
-        if value in (None, ""):
+        # provider/model 은 값이 있을 때만 갱신하되, base_url/provider_id 는
+        # 새 선택에 값이 없으면 명시적으로 비운다(None). 그러지 않으면 커스텀
+        # 프로바이더(z.ai 등) → 빌트인(OpenAI 등) 전환 시 이전 base_url 이
+        # 잔존해 "gpt 모델을 z.ai 로 보내는" 설정 오염이 재발한다.
+        if src in ("provider", "model") and value in (None, ""):
             continue
+        if value == "":
+            value = None
         if cfg.get(dst) != value:
             cfg[dst] = value
             changed = True
@@ -361,26 +369,107 @@ async def chat_with_kb(
     metric_type = kb.metric_type or "COSINE"
     kb_emb_service = await get_embedding_service(kb)
 
-    # Check if pipeline mode is enabled
+    # 파이프라인(= 필터 체인) 결정 — 요청 우선, 없으면 KB 저장본.
     pipeline_config = None
     if request.pipeline:
-        # Use provided pipeline
         pipeline_config = request.pipeline
         print(f"[Pipeline] Using request-provided pipeline with {len(pipeline_config.get('stages', []))} stages")
     elif kb.pipeline_config and kb.pipeline_config.get("stages"):
-        # Use KB's saved pipeline
         pipeline_config = kb.pipeline_config
         print(f"[Pipeline] Using KB saved pipeline with {len(pipeline_config.get('stages', []))} stages")
-    
+
+    # 'smalltalk' 필터 스테이지가 파이프라인에 있을 때만 스몰톡 게이트가 동작한다.
+    # (파이프라인 빌더에서 이 스테이지를 삭제하면 스몰톡 처리도 비활성 → 그냥 검색.)
+    _has_smalltalk_stage = bool(pipeline_config) and any(
+        s.get("type") == "smalltalk" for s in (pipeline_config.get("stages") or [])
+    )
+
+    # --- Gate: 지정된 LLM 이 '검색 필요 여부'를 판별. 검색이 불필요하면(인사·잡담·자기소개 등)
+    #     바로 응답하고 파이프라인을 중단한다. 검색이 필요하면 아래 검색 흐름으로 통과시킨다. ---
+    if _has_smalltalk_stage:
+        from app.core.models_resolver import resolve_model_config
+        # 모델 우선순위: Gate 스테이지에 지정된 llm_model → KB 모델 → 기본 모델
+        _gate_stage = next(
+            (s for s in (pipeline_config.get("stages") or []) if s.get("type") == "smalltalk"),
+            {},
+        )
+        _gate_model = (_gate_stage.get("params") or {}).get("llm_model")
+        st_cfg = (
+            _gate_model if (_gate_model or {}).get("model")
+            else (kb.llm_model_config if (kb.llm_model_config or {}).get("model")
+                  else (llm_default_config or {}))
+        )
+        st_resolved = await resolve_model_config(st_cfg or {})
+        if st_resolved.get("api_key"):
+            try:
+                st_kwargs = {"api_key": st_resolved["api_key"]}
+                if st_resolved.get("base_url"):
+                    st_kwargs["base_url"] = st_resolved["base_url"]
+                if st_resolved.get("extra_headers"):
+                    st_kwargs["default_headers"] = st_resolved["extra_headers"]
+                st_client = openai.OpenAI(**st_kwargs)
+                gate_kwargs = dict(
+                    model=st_resolved.get("model"),
+                    messages=[
+                        {"role": "system", "content": (
+                            "당신은 RAGaaS 지식베이스 어시스턴트의 '게이트' 분류기입니다.\n"
+                            "사용자 입력이 (A) 지식베이스 문서에서 정보를 찾아야 답할 수 있는 질문인지, "
+                            "(B) 검색 없이 답할 수 있는 인사·감사·잡담·자기소개/능력 질문 등 일반 대화인지 "
+                            "판별하세요.\n"
+                            "반드시 아래 JSON 한 줄로만 출력하세요 (그 외 텍스트·설명·사고과정 금지):\n"
+                            '{"needs_search": true|false, "answer": "..."}\n'
+                            "- needs_search=true 이면 answer 는 빈 문자열.\n"
+                            "- needs_search=false 이면 answer 에 한국어로 1~2문장의 친근한 최종 답변만 담을 것."
+                        )},
+                        {"role": "user", "content": request.query},
+                    ],
+                    temperature=0.0, max_tokens=400,
+                )
+                # 추론 모델(z.ai GLM 등)이 사고과정을 content 로 흘리지 않도록 thinking 비활성
+                if "glm" in str(st_resolved.get("model", "")).lower():
+                    gate_kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+                gate_resp = st_client.chat.completions.create(**gate_kwargs)
+                raw = (gate_resp.choices[0].message.content or "").strip()
+                # JSON 추출 (코드펜스/여분 텍스트 방어)
+                verdict = None
+                try:
+                    verdict = json.loads(raw)
+                except Exception:
+                    m = re.search(r"\{.*\}", raw, re.DOTALL)
+                    if m:
+                        try:
+                            verdict = json.loads(m.group(0))
+                        except Exception:
+                            verdict = None
+                if isinstance(verdict, dict) and not verdict.get("needs_search", True):
+                    return ChatResponse(
+                        answer=verdict.get("answer") or "",
+                        chunks=[],
+                        execution_time=time.time() - start_time,
+                        strategy="Gate (검색 생략)",
+                        execution_log=["[Gate] LLM 판별: 검색 불필요 — 직접 응답"],
+                        pipeline_config=None,
+                    )
+                print("[Gate] LLM 판별: 검색 필요 — 파이프라인 진행")
+            except Exception as e:
+                print(f"[Gate] 판별 실패, 일반 파이프라인으로 진행: {e}")
+        # 모델 미설정/실패/검색필요 시 아래 일반 검색 흐름으로 진행
+
     execution_logs = []
-    
+
+    # 검색 스테이지 = smalltalk(비검색 게이트)를 제외한 실제 검색 필터들
+    search_stages = [
+        s for s in (pipeline_config.get("stages") or [] if pipeline_config else [])
+        if s.get("type") != "smalltalk"
+    ]
+
     # Pipeline mode execution
-    if pipeline_config and pipeline_config.get("stages"):
+    if search_stages:
         from app.services.retrieval.pipeline_executor import pipeline_executor
         from app.schemas.pipeline import PipelineConfig, PipelineStage
-        
-        # Convert dict to PipelineConfig
-        stages = [PipelineStage(**s) for s in pipeline_config["stages"]]
+
+        # Convert dict to PipelineConfig (smalltalk 스테이지는 이미 제외됨)
+        stages = [PipelineStage(**s) for s in search_stages]
         config = PipelineConfig(stages=stages)
         
         llm_config = llm_default_config
@@ -521,11 +610,20 @@ async def chat_with_kb(
                 detail="모델 지정이 안되었습니다: LLM 모델을 먼저 선택해주세요.",
             )
         from app.core.models_resolver import resolve_model_config
-        from app.core.llm import has_credentials
         resolved = await resolve_model_config(config)
-        if not has_credentials(resolved):
-            raise HTTPException(status_code=500, detail="LLM API key/헤더가 설정되지 않았습니다.")
-        return resolved, resolved.get("model")
+        api_key = resolved["api_key"]
+        base_url = resolved["base_url"]
+        model = resolved["model"]
+        extra_headers = resolved.get("extra_headers") or {}
+        if not api_key:
+            raise HTTPException(status_code=500, detail="LLM API key (OpenAI or Custom) not configured")
+        kwargs = {"api_key": api_key}
+        if base_url:
+            kwargs["base_url"] = base_url
+        if extra_headers:
+            kwargs["default_headers"] = extra_headers
+        client = openai.OpenAI(**kwargs)
+        return client, model
 
     # 4. Generate LLM response based on retrieved chunks
     if not results:
@@ -566,20 +664,25 @@ async def chat_with_kb(
     # LLM 모델 설정: model_config (프론트) / pipeline_model_config (백엔드) 호환
     llm_config = llm_default_config or {}
     
-    llm_cfg, llm_model = await get_openai_client(llm_config)
-
+    client, llm_model = await get_openai_client(llm_config)
+    
     system_prompt = _load_chat_system_prompt()
 
     try:
-        from app.core.llm import achat
-        answer = await achat(
-            llm_cfg,
-            [
+        create_kwargs = dict(
+            model=llm_model,
+            messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {request.query}\n\nPlease provide a comprehensive answer based on the context above. If there are multiple answers, please list them all."},
             ],
-            model=llm_model, temperature=0.3, max_tokens=1000,
+            temperature=0.3,
+            max_tokens=1000,
         )
+        # 추론 모델(glm 계열)이 사고과정을 답변에 섞지 않도록 thinking 비활성 (OpenAI 등엔 미적용)
+        if "glm" in (llm_model or "").lower():
+            create_kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+        response = client.chat.completions.create(**create_kwargs)
+        answer = response.choices[0].message.content
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to generate response: {str(e)}")
     
@@ -588,6 +691,8 @@ async def chat_with_kb(
         # Pipeline Mode
         stage_names = []
         for stage in pipeline_config["stages"]:
+            if stage.get("type") == "smalltalk":
+                continue  # smalltalk 는 검색 단계가 아니므로 전략명에서 제외
             s_type = stage.get("type", "unknown").upper()
             if s_type == "ANN": s_type = "Vector"
             stage_names.append(s_type)

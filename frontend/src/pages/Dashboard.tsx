@@ -72,11 +72,7 @@ export default function Dashboard() {
 
     return (
         <div className="container">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
-                <div>
-                    <h1 style={{ fontSize: '1.875rem', fontWeight: 700, margin: 0 }}>Knowledge Bases</h1>
-                    <p style={{ color: 'var(--text-secondary)', marginTop: '0.5rem' }}>Manage your RAG knowledge bases</p>
-                </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginBottom: '2rem' }}>
                 <button className="btn btn-primary" onClick={() => setIsModalOpen(true)}>
                     <Plus size={20} />
                     Create Knowledge Base

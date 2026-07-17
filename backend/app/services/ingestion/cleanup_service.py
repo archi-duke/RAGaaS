@@ -47,31 +47,32 @@ class CleanupService:
                 print(f"[Cleanup] Job cancel warning: {e}")
     
             # 1. Fetch Chunk IDs from Milvus (Source of Truth for Doc-Chunk mapping)
+            # Milvus load/query 는 블로킹이며, 실패한 인제스트로 빈/손상된 컬렉션은 load 가
+            # 무한 타임아웃되어 이벤트 루프 전체를 막는다. 스레드 오프로딩 + wait_for 로
+            # 시간 격리하고, num_entities==0 이면 조회 자체를 건너뛴다(hang 회피).
             chunk_ids = []
+            collection_name = f"kb_{kb_id.replace('-', '_')}"
             try:
                 from pymilvus import Collection, utility
-                collection_name = f"kb_{kb_id.replace('-', '_')}"
-                if utility.has_collection(collection_name):
-                    collection = Collection(collection_name)
-                    try:
-                        collection.load()
-                    except:
-                        pass  # Already loaded
-                    
-                    # Query all chunks for this doc
-                    expr = f'doc_id == "{doc_id}"'
-                    try:
-                        # Limit 10000 to be safe, if more, might need paging but unlikely for single doc
-                        res = collection.query(expr, output_fields=["chunk_id"], limit=10000)
-                        chunk_ids = [r["chunk_id"] for r in res]
-                        print(f"[Cleanup] Identified {len(chunk_ids)} chunks for doc {doc_id}")
-                    except Exception as e:
-                        print(f"[Cleanup] Failed to query chunks for doc {doc_id}: {e}")
+
+                def _sync_fetch_chunk_ids():
+                    if not utility.has_collection(collection_name):
+                        return None
+                    col = Collection(collection_name)
+                    if col.num_entities == 0:
+                        return []
+                    col.load(timeout=15)
+                    res = col.query(f'doc_id == "{doc_id}"', output_fields=["chunk_id"], limit=10000, timeout=15)
+                    return [r["chunk_id"] for r in res]
+
+                result = await asyncio.wait_for(asyncio.to_thread(_sync_fetch_chunk_ids), timeout=25)
+                if result is None:
+                    print(f"[Cleanup] Milvus collection {collection_name} does not exist. Skipping chunk query.")
                 else:
-                    print(f"[Cleanup] Milvus collection {collection_name} does not exist. Skipping chunk query and continuing cleanup.")
-                    
+                    chunk_ids = result
+                    print(f"[Cleanup] Identified {len(chunk_ids)} chunks for doc {doc_id}")
             except Exception as e:
-                print(f"[Cleanup] ❌ Milvus connection failed: {e}")
+                print(f"[Cleanup] ⚠️ Milvus chunk query 실패/타임아웃 — 건너뜀: {str(e)[:120]}")
                 # Don't return yet, try to proceed with what we can
     
             # 2. Fuseki Cleanup (Graph) - Only if Graph RAG is enabled and backend is ontology
@@ -213,38 +214,31 @@ class CleanupService:
             else:
                 print(f"[Cleanup] ⏭️ Skipping Neo4j deletion (enable_graph_rag={enable_graph_rag}, graph_backend={graph_backend})")
     
-            # 4. Milvus Cleanup (Vector)
+            # 4. Milvus Cleanup (Vector) — 블로킹 연산 스레드 격리 + 빈/손상 컬렉션 스킵.
+            # 실패/타임아웃 시 raise 하지 않고 degrade 한다(손상 컬렉션 때문에 문서 삭제
+            # 자체가 막히면 안 됨. 빈 새 컬렉션은 삭제할 벡터도 없음).
             try:
-                if not collection: # In case connection failed in Step 1
-                    from pymilvus import Collection, utility
-                    collection_name = f"kb_{kb_id.replace('-', '_')}"
-                    if utility.has_collection(collection_name):
-                        collection = Collection(collection_name)
-                        try:
-                            collection.load()
-                        except:
-                            pass  # Already loaded or error
-                    else:
-                        print(f"[Cleanup] Milvus collection {collection_name} does not exist. Skipping delete.")
-                        collection = None
-                
-                if collection:
-                    expr = f'doc_id == "{doc_id}"'
-                    collection.delete(expr)
-                    collection.flush()
-                    
-                    print(f"[Cleanup] ✅ Milvus deletion flushed for {doc_id}")
-                    
+                from pymilvus import Collection, utility
+
+                def _sync_milvus_delete():
+                    if not utility.has_collection(collection_name):
+                        return "missing"
+                    col = Collection(collection_name)
+                    if col.num_entities == 0:
+                        return "empty"
+                    col.load(timeout=15)
+                    col.delete(f'doc_id == "{doc_id}"', timeout=15)
+                    col.flush(timeout=15)
                     try:
-                        collection.release()
-                    except: 
+                        col.release()
+                    except Exception:
                         pass
-                else:
-                    print(f"[Cleanup] ⏭️ Skipping Milvus deletion for {doc_id} as collection is missing")
-                    
+                    return "deleted"
+
+                status = await asyncio.wait_for(asyncio.to_thread(_sync_milvus_delete), timeout=30)
+                print(f"[Cleanup] Milvus deletion for {doc_id}: {status}")
             except Exception as e:
-                print(f"[Cleanup] ❌ Milvus cleanup failed: {e}")
-                raise RuntimeError(f"Failed to delete vector data from Milvus: {e}")
+                print(f"[Cleanup] ⚠️ Milvus deletion 실패/타임아웃 — degrade(문서 삭제는 계속): {str(e)[:120]}")
     
             # 3. File System Cleanup (Artifacts) - Non-critical
             try:
@@ -318,14 +312,18 @@ class CleanupService:
                 remaining_docs = await Document.find(Document.kb_id == kb_id).count()
                 if remaining_docs == 0:
                     print(f"[Cleanup] No more documents in KB {kb_id}, cleaning up empty collection...")
-                    from pymilvus import utility
+                    from pymilvus import utility, Collection
                     from app.core.milvus import connect_milvus
-                    connect_milvus()
-                    collection_name = f"kb_{kb_id.replace('-', '_')}"
-                    if utility.has_collection(collection_name):
-                        from pymilvus import Collection
-                        col = Collection(collection_name)
-                        col.drop()
+
+                    def _sync_drop_collection():
+                        connect_milvus()
+                        if utility.has_collection(collection_name):
+                            Collection(collection_name).drop()
+                            return True
+                        return False
+
+                    dropped = await asyncio.wait_for(asyncio.to_thread(_sync_drop_collection), timeout=20)
+                    if dropped:
                         print(f"[Cleanup] ✅ Dropped empty Milvus collection: {collection_name}")
             except Exception as e:
                 print(f"[Cleanup] Warning - failed to check/cleanup empty collection: {e}")
@@ -393,20 +391,26 @@ class CleanupService:
         except:
             pass
 
-        # 3. Check Milvus
+        # 3. Check Milvus — 블로킹 load/query 스레드 격리 + 빈 컬렉션 스킵(hang 회피)
         try:
-            from pymilvus import Collection
+            from pymilvus import Collection, utility
             collection_name = f"kb_{kb_id.replace('-', '_')}"
-            collection = Collection(collection_name)
-            try:
-                collection.load()
-            except:
-                pass
-            res = collection.query(f'doc_id == "{doc_id}"', output_fields=["chunk_id"], limit=1)
-            if res:
+
+            def _sync_check_milvus():
+                if not utility.has_collection(collection_name):
+                    return False
+                col = Collection(collection_name)
+                if col.num_entities == 0:
+                    return False  # 벡터 없음 = 잔여 없음
+                col.load(timeout=15)
+                res = col.query(f'doc_id == "{doc_id}"', output_fields=["chunk_id"], limit=1, timeout=15)
+                return bool(res)
+
+            has_residual = await asyncio.wait_for(asyncio.to_thread(_sync_check_milvus), timeout=25)
+            if has_residual:
                 garbage_found.append("Milvus Vectors")
-        except:
-            pass
+        except Exception as e:
+            print(f"[Cleanup] verify Milvus check 실패/타임아웃 — 건너뜀: {str(e)[:100]}")
         
         if garbage_found:
             return False, ", ".join(garbage_found)

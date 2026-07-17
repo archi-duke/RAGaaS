@@ -170,7 +170,7 @@ const GraphViewer: React.FC = () => {
 
                 if (!backend) {
                     try {
-                        const kbResp = await fetch(`/api/knowledge-bases/${kbId}`);
+                        const kbResp = await fetch(`${import.meta.env.BASE_URL}api/knowledge-bases/${kbId}`);
                         if (kbResp.ok) {
                             const kbData = await kbResp.json();
                             if (kbData.graph_backend) {
@@ -189,10 +189,10 @@ const GraphViewer: React.FC = () => {
                 // Use mode directly as isSchemaMode state might not be updated yet
                 if (mode === 'schema') {
                     // Fetch schema data
-                    response = await fetch(`/api/graph/schema?kb_id=${kbId}&backend=${resolvedBackend}`);
+                    response = await fetch(`${import.meta.env.BASE_URL}api/graph/schema?kb_id=${kbId}&backend=${resolvedBackend}`);
                 } else {
                     // Fetch entity expansion data
-                    response = await fetch(`/api/graph/expand?kb_id=${kbId}&entity=${encodeURIComponent(entity || '')}&backend=${resolvedBackend}`);
+                    response = await fetch(`${import.meta.env.BASE_URL}api/graph/expand?kb_id=${kbId}&entity=${encodeURIComponent(entity || '')}&backend=${resolvedBackend}`);
                 }
 
                 if (!response.ok) {
@@ -392,12 +392,15 @@ const GraphViewer: React.FC = () => {
         try {
             let apiUrl: string;
 
+            // 초기 로드와 동일하게 BASE_URL(/ragaas/) 프리픽스를 붙여야 게이트웨이가
+            // RAGaaS 백엔드로 라우팅한다. (루트 상대경로 '/api/...' 는 셸로 빠져 확장 실패)
+            const apiBase = import.meta.env.BASE_URL;
             // In schema mode, clicking a class node fetches its instances
             if (isSchemaMode && node.isClass) {
-                apiUrl = `/api/graph/schema/instances?kb_id=${kbId}&class_uri=${encodeURIComponent(node.id)}&limit=20`;
+                apiUrl = `${apiBase}api/graph/schema/instances?kb_id=${kbId}&class_uri=${encodeURIComponent(node.id)}&limit=20`;
             } else {
                 // Normal entity expansion
-                apiUrl = `/api/graph/expand?kb_id=${kbId}&entity=${encodeURIComponent(node.label)}&backend=${backendType}`;
+                apiUrl = `${apiBase}api/graph/expand?kb_id=${kbId}&entity=${encodeURIComponent(node.label)}&backend=${backendType}`;
             }
 
             const response = await fetch(apiUrl);
@@ -467,6 +470,25 @@ const GraphViewer: React.FC = () => {
 
     if (loading) return <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', background: '#111', color: '#fff' }}>Loading Graph...</div>;
     if (error) return <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', background: '#111', color: '#ff4444' }}>Error: {error}</div>;
+    // 로드는 끝났지만 매칭되는 그래프 노드가 없는 경우(번역 변형·일반 개념어 등): 빈 화면 대신 안내.
+    if (!loading && graphData.nodes.length === 0) {
+        return (
+            <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', height: '100vh', background: '#000011', color: '#fff', textAlign: 'center', padding: '2rem' }}>
+                <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>🕸️</div>
+                <h2 style={{ margin: '0 0 0.5rem' }}>그래프 데이터가 없습니다</h2>
+                <p style={{ opacity: 0.75, maxWidth: 520, lineHeight: 1.6 }}>
+                    {isSchemaMode ? '이 지식베이스의 스키마' : <>“<b style={{ color: '#44ff88' }}>{entity}</b>” 엔티티</>}
+                    에 연결된 노드를 그래프({backendType})에서 찾지 못했습니다.
+                </p>
+                {!isSchemaMode && (
+                    <p style={{ opacity: 0.55, fontSize: '0.85rem', maxWidth: 520, lineHeight: 1.6, marginTop: '0.25rem' }}>
+                        번역된 이름(예: 영문 표기)이나 일반 개념어는 그래프에 저장돼 있지 않을 수 있습니다.
+                        원문 표기의 고유명사 엔티티를 클릭해 보세요.
+                    </p>
+                )}
+            </div>
+        );
+    }
 
     return (
         <div style={{ width: '100vw', height: '100vh', background: '#000011' }}>

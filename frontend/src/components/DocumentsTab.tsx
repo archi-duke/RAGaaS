@@ -34,6 +34,11 @@ interface Document {
     file_path?: string;
     chunking_strategy?: string;
     chunking_config?: any;
+    // Progress / Error reporting (§4.2, §4.3)
+    progress?: number;
+    error?: string;
+    // Stuck-state recovery flag (§4.4)
+    stale?: boolean;
 }
 
 interface DocumentsTabProps {
@@ -110,7 +115,7 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
     };
 
     // Helper to get status badge
-    const getStatusBadge = (status: string, pipeline_status?: string) => {
+    const getStatusBadge = (status: string, pipeline_status?: string, error?: string) => {
         // Royal Blue styling for standard 'completed' status
         const publishedStyle = { backgroundColor: '#4169E1', color: 'white', borderColor: '#4169E1' };
 
@@ -144,7 +149,16 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
         if (status === 'completed') return <span className="badge" style={publishedStyle}>Published</span>;
 
         const config = statusMap[status] || { class: 'badge-secondary', label: status };
-        return <span className={`badge ${config.class}`}>{config.label}</span>;
+        const isError = status.toLowerCase() === 'error';
+        return (
+            <span
+                className={`badge ${config.class}`}
+                title={isError && error ? error : undefined}
+                style={isError && error ? { cursor: 'help' } : undefined}
+            >
+                {config.label}
+            </span>
+        );
     };
 
     // Helper to get delete message
@@ -222,7 +236,7 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
                                         <td style={{ padding: '1rem' }}>
                                             <span className="badge badge-secondary" style={{ fontSize: '0.75rem' }}>{doc.file_type.toUpperCase()}</span>
                                         </td>
-                                        <td style={{ padding: '1rem' }}>{getStatusBadge(doc.status, doc.pipeline_status)}</td>
+                                        <td style={{ padding: '1rem' }}>{getStatusBadge(doc.status, doc.pipeline_status, doc.error)}</td>
                                         <td style={{ padding: '1rem', textAlign: 'center', fontSize: '0.85rem' }}>{doc.max_paths === 1000 ? '∞' : (doc.max_paths || '-')}</td>
                                         <td style={{ padding: '1rem', textAlign: 'center', fontSize: '0.85rem' }}>{doc.max_sample_size ? `${doc.max_sample_size / 1000}k` : '-'}</td>
                                         <td style={{ padding: '1rem', textAlign: 'center' }}>

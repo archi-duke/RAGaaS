@@ -15,8 +15,13 @@ logger = logging.getLogger(__name__)
 class NounExtractor:
     def __init__(self, llm=None, llm_config: Optional[Dict[str, Any]] = None):
         cfg = llm_config or {}
-        self.cfg = cfg
-        self.model = cfg.get("model")
+        client_kwargs: Dict[str, Any] = {"api_key": cfg.get("api_key") or settings.OPENAI_API_KEY}
+        if cfg.get("base_url"):
+            client_kwargs["base_url"] = cfg["base_url"]
+        if cfg.get("extra_headers"):
+            client_kwargs["default_headers"] = cfg["extra_headers"]
+        self.client = AsyncOpenAI(**client_kwargs)
+        self.model = cfg.get("model", "gpt-4o")
         self.system_prompt = """당신은 텍스트에서 지식 그래프 구축을 위한 주요 엔티티(인물, 조직, 장소, 사건, 개념 등)를 추출하는 전문가입니다.
 
 [추출 규칙]
@@ -33,7 +38,7 @@ class NounExtractor:
         # DEBUG: Check API Key
         import os
         from app.core.config import settings
-        key_prefix = (self.cfg.get("api_key") or "")[:15] or "None"
+        key_prefix = self.client.api_key[:15] if self.client.api_key else "None"
         env_key_prefix = settings.OPENAI_API_KEY[:15] if settings.OPENAI_API_KEY else "None"
         print(f"\n[NounExtractor DEBUG] Client Key: {key_prefix}...")
         print(f"[NounExtractor DEBUG] Settings Key: {env_key_prefix}...\n")
@@ -93,15 +98,15 @@ class NounExtractor:
                 f"텍스트:\n{text}"
             )
 
-            from app.core.llm import achat
-            content = await achat(
-                self.cfg,
-                [
+            response = await self.client.chat.completions.create(
+                model=self.model,
+                messages=[
                     {"role": "system", "content": "You are a helpful assistant that extracts nouns and compound nouns from Korean text."},
-                    {"role": "user", "content": user_prompt},
+                    {"role": "user", "content": user_prompt}
                 ],
-                model=self.model, temperature=0,
+                temperature=0
             )
+            content = response.choices[0].message.content
             
             # Split by newline and clean up
             entities = [line.strip() for line in content.split('\n') if line.strip()]

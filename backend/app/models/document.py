@@ -46,6 +46,14 @@ class Document(Document):
     entity_count: Optional[int] = 0
     triple_count: Optional[int] = 0
 
+    # Progress / Error reporting (§4.2, §4.3)
+    progress: Optional[int] = 0
+    error: Optional[str] = None
+
+    # Stuck-state recovery (§4.4) — computed at read time in list_documents,
+    # never persisted (doc.save() must not be called after setting this).
+    stale: Optional[bool] = False
+
     class Settings:
         name = "documents"
         indexes = [

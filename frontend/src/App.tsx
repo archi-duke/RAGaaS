@@ -1,103 +1,65 @@
-import { useEffect, useRef } from 'react';
-import {
-  BrowserRouter,
-  MemoryRouter,
-  Routes,
-  Route,
-  useLocation,
-  useNavigate,
-} from 'react-router-dom';
-// 셸 모드에서는 main.tsx 가 실행되지 않으므로 전역 스타일은 여기(노출 진입점)서 로드한다.
-// Kendo 테마 소유권은 Phase 2 에서 @platform/web-ui 로 이관 예정 (계약 04).
+import { useEffect } from 'react';
+import { BrowserRouter as Router, Routes, Route, useNavigate, useLocation } from 'react-router-dom';
+// 전역 스타일 — main.tsx(standalone)뿐 아니라 여기(MF remote 진입 './App')에서도
+// import 해야 셸 임베드 시 .container/.card/:root 변수 등이 실린다. 없으면 무스타일.
 import '@progress/kendo-theme-bootstrap/dist/all.css';
 import './index.css';
 import Dashboard from './pages/Dashboard';
 import KnowledgeBaseDetail from './pages/KnowledgeBaseDetail';
 import GraphViewer from './pages/KnowledgeGraphViewer';
 
-// 플랫폼 마운트 계약 (docs/platform-contract/01 §2)
-export interface RemoteAppProps {
-  /** introspect 로 확정된 사용자 loginid — 셸이 인증 완료 후에만 마운트하므로 항상 존재 */
-  user: string;
-  /** 권한 맵 (GET /Account/me 의 authority) */
-  authority: Record<string, number> | null;
-  /** 셸 탭 재클릭 등 초기 화면 복귀 요구 시 증가 */
+// 셸(NETRIX platform-app)이 MF remote 마운트 시 주입하는 props (계약: PLATFORM-MF-CONTRACT.md §1).
+// standalone(dev) 진입 시에는 전부 undefined — 없어도 동작.
+type ShellProps = {
+  user?: string;
+  authority?: Record<string, number>;
   resetKey?: number;
-  /** 셸이 배정한 URL 프리픽스 (라우팅 표준 도입 시) */
-  basePath?: string;
-  /** 내부 페이지 전환 보고 — 페이지 전환마다 + 마운트 직후 1회 */
-  onNavigate?: (page: string, ctx?: { projectCode?: string }) => void;
-  /** standalone 부트스트랩(main.tsx) 전용 — 셸은 전달하지 않는다 */
-  standalone?: boolean;
-}
+  page?: string;
+  onNavigate?: (page: string, ctx?: Record<string, unknown>) => void;
+};
 
-function pageKey(pathname: string): string {
-  if (pathname.startsWith('/kb/')) return 'kb';
-  if (pathname.startsWith('/graph-viewer')) return 'graphViewer';
-  return 'dashboard';
-}
-
-/** 페이지 전환(및 마운트 직후 1회)을 셸에 보고 — 계약 01 §2 */
-function NavigationReporter({ onNavigate }: Pick<RemoteAppProps, 'onNavigate'>) {
-  const location = useLocation();
-  const onNavigateRef = useRef(onNavigate);
-  onNavigateRef.current = onNavigate;
-  useEffect(() => {
-    onNavigateRef.current?.(pageKey(location.pathname), { projectCode: '' });
-  }, [location.pathname]);
-  return null;
-}
-
-/** resetKey 증가 시 초기 화면 복귀 */
-function ResetHandler({ resetKey }: Pick<RemoteAppProps, 'resetKey'>) {
+// 셸 ↔ 라우터 브리지 — 타이틀바 메뉴/홈 클릭을 라우팅으로, 내부 라우트를 셸 보고로.
+//   셸 → remote: page prop 변경(타이틀바 'Knowledges' 클릭 = 'knowledges') / resetKey 증가(브랜드 홈)
+//   remote → 셸: onNavigate(pageKey) — manifest.menus[].pages 와 같은 네임스페이스로 보고해
+//               셸이 활성 메뉴를 유지한다.
+function ShellBridge({ resetKey, page, onNavigate }: ShellProps) {
   const navigate = useNavigate();
-  const mounted = useRef(false);
+  const location = useLocation();
+
   useEffect(() => {
-    if (!mounted.current) {
-      mounted.current = true;
-      return;
-    }
-    navigate('/');
-  }, [resetKey, navigate]);
+    if (page === 'knowledges') navigate('/');
+  }, [page]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (resetKey && resetKey > 0) navigate('/');
+  }, [resetKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const p = location.pathname.startsWith('/kb/')
+      ? 'kb'
+      : location.pathname.startsWith('/graph-viewer')
+        ? 'graph'
+        : 'knowledges';
+    onNavigate?.(p, {});
+  }, [location.pathname]); // eslint-disable-line react-hooks/exhaustive-deps
+
   return null;
 }
 
-function AppRoutes(props: RemoteAppProps) {
+function App(props: ShellProps) {
+  // basename 은 trailing slash 제거 필수. 셸 스코프 URL 은 '/ragaas'(끝 슬래시 없음)인데
+  // basename 이 '/ragaas/'(BASE_URL 원값)면 react-router stripBasename 이 매칭 실패 →
+  // 어떤 라우트도 안 그려져 빈 화면. dev(base '/')는 '' → '/' 로 폴백.
+  const basename = (import.meta.env.BASE_URL || '/').replace(/\/+$/, '') || '/';
   return (
-    <>
-      <NavigationReporter onNavigate={props.onNavigate} />
-      <ResetHandler resetKey={props.resetKey} />
+    <Router basename={basename}>
+      <ShellBridge {...props} />
       <Routes>
         <Route path="/" element={<Dashboard />} />
         <Route path="/kb/:id" element={<KnowledgeBaseDetail />} />
         <Route path="/graph-viewer" element={<GraphViewer />} />
       </Routes>
-    </>
-  );
-}
-
-/**
- * RAGaaS remote 진입점 (MF expose './App').
- * 셸 모드: MemoryRouter — remote 내부 페이지는 셸 URL 에 반영하지 않는다 (계약 01 §2).
- * standalone: BrowserRouter — 개발 편의용 딥링크 유지.
- */
-function App(props: RemoteAppProps) {
-  if (props.standalone) {
-    // 게이트웨이 경유 standalone 은 URL 이 /ragaas/... 이므로 빌드 base 를 basename 으로
-    // (통지 2026-07-07 §2). 직접 접속(/)·dev(:3002)는 프리픽스가 없어 basename 미적용.
-    const base = import.meta.env.BASE_URL.replace(/\/$/, '');
-    const basename =
-      base && window.location.pathname.startsWith(base) ? base : undefined;
-    return (
-      <BrowserRouter basename={basename}>
-        <AppRoutes {...props} />
-      </BrowserRouter>
-    );
-  }
-  return (
-    <MemoryRouter>
-      <AppRoutes {...props} />
-    </MemoryRouter>
+    </Router>
   );
 }
 

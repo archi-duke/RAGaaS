@@ -138,13 +138,10 @@ async def _build_and_validate_upload_model_configs(
             status_code=500,
             detail="모델 지정이 안되었습니다: 임베딩 모델을 먼저 설정해주세요.",
         )
-    if (
-        embedding_cfg["embedding_request_format"] != "minimal"
-        and not (embedding_cfg.get("api_key") or embedding_cfg.get("extra_headers"))
-    ):
+    if embedding_cfg["embedding_request_format"] != "minimal" and not embedding_cfg.get("api_key"):
         raise HTTPException(
             status_code=500,
-            detail="모델 지정이 안되었습니다: 임베딩 모델 API Key 또는 인증 헤더를 먼저 등록해주세요.",
+            detail="모델 지정이 안되었습니다: 임베딩 모델 API Key를 먼저 등록해주세요.",
         )
 
     async def require_llm(kind: str, label: str) -> Dict[str, Any]:
@@ -154,11 +151,10 @@ async def _build_and_validate_upload_model_configs(
                 status_code=500,
                 detail=f"모델 지정이 안되었습니다: {label} 모델을 설정해주세요.",
             )
-        # 사내 게이트웨이는 헤더 인증(extra_headers)만 쓸 수 있어 api_key 가 없을 수 있다.
-        if not (cfg.get("api_key") or cfg.get("extra_headers")):
+        if not cfg.get("api_key"):
             raise HTTPException(
                 status_code=500,
-                detail=f"모델 지정이 안되었습니다: {label} 모델 API Key 또는 인증 헤더를 등록해주세요.",
+                detail=f"모델 지정이 안되었습니다: {label} 모델 API Key를 등록해주세요.",
             )
         return cfg
 
@@ -329,7 +325,7 @@ async def upload_text_document(
     graph_extraction_prompt = doc.custom_prompt
 
     callback_base = os.getenv("CALLBACK_BASE_URL", "http://127.0.0.1:8000")
-    callback_url = f"{callback_base.rstrip('/')}/api/v2/knowledge-bases/ingest/callback"
+    callback_url = f"{callback_base.rstrip('/')}/api/knowledge-bases/ingest/callback"
 
     async def call_ingest_service():
         try:
@@ -543,7 +539,7 @@ async def upload_document(
 
     # 6. Call Ingest Service (Async Task)
     callback_base = os.getenv("CALLBACK_BASE_URL", "http://127.0.0.1:8000")
-    callback_url = f"{callback_base.rstrip('/')}/api/v2/knowledge-bases/ingest/callback"
+    callback_url = f"{callback_base.rstrip('/')}/api/knowledge-bases/ingest/callback"
 
     async def call_ingest_service():
         try:
@@ -602,9 +598,38 @@ async def upload_document(
     doc_dict['file_path'] = file_path
     return Document(**doc_dict)
 
+
+# §4.4 stuck 상태 리커버리 — 조회 시 경량 타임아웃 판정 (읽기 전용, doc.save() 호출하지 않음)
+_STALE_THRESHOLD_SECONDS = {
+    DocumentStatus.PROCESSING.value: 10 * 60,  # 10분
+    DocumentStatus.DELETING.value: 5 * 60,     # 5분
+}
+
+
+def _mark_stale_if_stuck(doc: DocModel) -> DocModel:
+    threshold_seconds = _STALE_THRESHOLD_SECONDS.get(doc.status)
+    if not threshold_seconds:
+        return doc
+    updated_at = doc.updated_at
+    if updated_at is None:
+        return doc
+    # updated_at은 보통 naive UTC(datetime.utcnow() 기본값)로 저장되지만,
+    # 혹시 tz-aware 값이 들어와도 안전하게 비교할 수 있도록 정규화한다.
+    now = datetime.utcnow()
+    if updated_at.tzinfo is not None:
+        updated_at = updated_at.replace(tzinfo=None) - updated_at.utcoffset()
+    elapsed = (now - updated_at).total_seconds()
+    if elapsed > threshold_seconds:
+        doc.stale = True
+    return doc
+
+
 @router.get("/{kb_id}/documents", response_model=List[Document])
 async def list_documents(kb_id: str):
-    return await DocModel.find(DocModel.kb_id == kb_id).to_list()
+    docs = await DocModel.find(DocModel.kb_id == kb_id).to_list()
+    for doc in docs:
+        _mark_stale_if_stuck(doc)
+    return docs
 
 @router.delete("/{kb_id}/documents/{doc_id}")
 async def delete_document(kb_id: str, doc_id: str):
@@ -659,6 +684,7 @@ class IngestCallback(BaseModel):
     pipeline_status: Optional[str] = None
     result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
+    progress: Optional[int] = None
 
 @router.post("/ingest/callback")
 async def ingest_callback(payload: IngestCallback):
@@ -696,11 +722,15 @@ async def ingest_callback(payload: IngestCallback):
                 
     elif payload.status == "failed":
         doc.status = DocumentStatus.ERROR.value
+        doc.error = payload.error
     else:
         # Intermediate status (processing)
         doc.status = DocumentStatus.PROCESSING.value
         if payload.pipeline_status:
             doc.pipeline_status = payload.pipeline_status
+
+    if payload.progress is not None:
+        doc.progress = payload.progress
 
     await doc.save()
 
@@ -712,7 +742,9 @@ async def ingest_callback(payload: IngestCallback):
         "pipeline_status": doc.pipeline_status,
         "chunk_count": doc.chunk_count,
         "entity_count": doc.entity_count,
-        "triple_count": doc.triple_count
+        "triple_count": doc.triple_count,
+        "progress": doc.progress,
+        "error": doc.error
     })
 
     # Cleanup source file if completed
@@ -812,16 +844,25 @@ async def get_document_chunks(kb_id: str, doc_id: str):
             logger.warning(f"Collection {collection_name} does not exist")
             return {"chunks": []}
         
-        # Get collection and load it
-        collection = Collection(collection_name)
-        collection.load()
-        
-        # Query for chunks with this doc_id
-        results = collection.query(
-            expr=f'doc_id == "{doc_id}"',
-            output_fields=["chunk_id", "content", "metadata", "doc_id"],
-            limit=10000  # Large limit to get all chunks
-        )
+        # Get collection and load it.
+        # Milvus load/query 는 블로킹이며, 손상된 컬렉션은 load 가 무한 타임아웃되어
+        # 이벤트 루프 전체를 막는다(다른 KB·목록까지 멈춤). 스레드 오프로딩 + wait_for
+        # 로 시간 격리하고, 실패 시 빈 청크로 degrade 한다.
+        import asyncio
+        def _sync_query_chunks():
+            collection = Collection(collection_name)
+            collection.load(timeout=15)
+            return collection.query(
+                expr=f'doc_id == "{doc_id}"',
+                output_fields=["chunk_id", "content", "metadata", "doc_id"],
+                limit=10000,
+                timeout=15,
+            )
+        try:
+            results = await asyncio.wait_for(asyncio.to_thread(_sync_query_chunks), timeout=20)
+        except Exception as e:
+            logger.warning(f"[get_document_chunks] Milvus 조회 실패/타임아웃 — 빈 청크 반환: {str(e)[:120]}")
+            return {"chunks": []}
         
         # Format response
         chunks = []

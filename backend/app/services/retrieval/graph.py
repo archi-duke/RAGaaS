@@ -1,4 +1,5 @@
-from typing import List, Dict, Any, Optional
+import asyncio
+from typing import List, Dict, Any, Optional, Tuple
 from .base import RetrievalStrategy
 from .graph_backends import GraphBackendFactory
 from app.core.fuseki import fuseki_client
@@ -9,17 +10,15 @@ import logging
 import re
 import urllib.parse
 from app.services.embedding import embedding_service as default_embedding_service
+from app.services.retrieval.sparql_utils import escape_sparql_regex
 import numpy as np
 
 logger = logging.getLogger(__name__)
 
 class GraphRetrievalStrategy(RetrievalStrategy):
     def __init__(self):
-        # 실제 저장 네임스페이스와 일치시킴 (sparql_generator / fuseki_connector 와 동일).
-        # 과거 relation/·entity/ 로 잘못 지정돼 _expand_entities 의 rel:hasSource 제외
-        # 필터가 실데이터와 매치되지 않던 문제 수정.
-        self.namespace_entity = "http://rag.local/inst/"
-        self.namespace_relation = "http://rag.local/rel/"
+        self.namespace_entity = "http://rag.local/entity/"
+        self.namespace_relation = "http://rag.local/relation/"
 
     async def search(self, kb_id: str, query: str, top_k: int, **kwargs) -> List[Dict[str, Any]]:
         use_raw_log = kwargs.get("use_raw_log", False)
@@ -33,11 +32,14 @@ class GraphRetrievalStrategy(RetrievalStrategy):
             raise ValueError("Graph search model is not configured.")
         from app.core.models_resolver import resolve_model_config
         resolved_llm = await resolve_model_config(llm_model_config)
-        from app.core.llm import achat, has_credentials
-        if not has_credentials(resolved_llm):
-            raise ValueError("Graph search API key/헤더가 설정되지 않았습니다.")
-        llm_cfg = resolved_llm
-        llm_model_name = resolved_llm.get("model")
+        if not resolved_llm.get("api_key"):
+            raise ValueError("Graph search API key is not configured.")
+        llm_client = AsyncOpenAI(
+            api_key=resolved_llm.get("api_key"),
+            **({"base_url": resolved_llm["base_url"]} if resolved_llm.get("base_url") else {}),
+            **({"default_headers": resolved_llm["extra_headers"]} if resolved_llm.get("extra_headers") else {}),
+        )
+        llm_model_name = resolved_llm.get("model", "gpt-4o-mini")
         
         import time
         from datetime import datetime
@@ -67,12 +69,9 @@ class GraphRetrievalStrategy(RetrievalStrategy):
 
         log(f"🚀 Graph Search Start for query: {query}")
         
-        # 1. Analyze query for semantic understanding
-        query_analysis = await self._analyze_query(query, llm_cfg=llm_cfg, llm_model=llm_model_name)
-        log(f"DEBUG: Query Analysis -> Type: {query_analysis.get('query_type')}, Hops: {query_analysis.get('hops', 1)}, Rel: {query_analysis.get('relationship_type')}")
-        
-        # 2. Extract Entities from Query
-        entities = await self._extract_entities(kb_id, query, llm_cfg=llm_cfg, llm_model=llm_model_name)
+        # 1+2. Analyze query + extract entities in a SINGLE LLM call (병합: 2 호출 → 1)
+        entities, query_analysis = await self._analyze_and_extract(kb_id, query, llm_client=llm_client, llm_model=llm_model_name)
+        log(f"DEBUG: Query Analysis -> Type: {query_analysis.get('query_type')}, Hops: {query_analysis.get('hop_count', 1)}, Rel: {query_analysis.get('relationship_type')}, Roles: {query_analysis.get('entity_roles')}")
         log(f"DEBUG: 🔍 Extracted entities: {entities}")
         
         # 3. Expand entities - find related entities in graph (conditional)
@@ -99,10 +98,14 @@ class GraphRetrievalStrategy(RetrievalStrategy):
         # 4. SPARQL Search with semantic relationship understanding
         graph_hops = kwargs.get("graph_hops", 1)
         
-        # Detect if query asks for multi-hop relationships
-        if any(keyword in query.lower() for keyword in ["의 스승의", "의 제자의", "master's master", "student's student"]):
+        # Detect multi-hop: LLM hop_count 우선, 문자열매칭은 폴백
+        llm_hops = query_analysis.get("hop_count")
+        if isinstance(llm_hops, int) and llm_hops >= 2:
+            graph_hops = max(graph_hops, llm_hops)
+            log(f"DEBUG: 🔀 Multi-hop by LLM hop_count={llm_hops}, setting hops to {graph_hops}")
+        elif any(keyword in query.lower() for keyword in ["의 스승의", "의 제자의", "master's master", "student's student"]):
             graph_hops = max(graph_hops, 2)
-            log(f"DEBUG: 🔀 Detected multi-hop query, setting hops to {graph_hops}")
+            log(f"DEBUG: 🔀 Detected multi-hop query (fallback), setting hops to {graph_hops}")
         
         log(f"DEBUG: 🔎 Searching graph with hops={graph_hops}")
         
@@ -116,6 +119,7 @@ class GraphRetrievalStrategy(RetrievalStrategy):
             hops=graph_hops,
             query_type=query_analysis.get("query_type"),
             relationship_keywords=query_analysis.get("relationship_keywords", []),
+            entity_roles=query_analysis.get("entity_roles", {}),
             query_text=query,
             **kwargs
         )
@@ -170,12 +174,17 @@ class GraphRetrievalStrategy(RetrievalStrategy):
 
         
         # 7. Add graph metadata
+        # dead-chip 방지: 추출 엔티티 중 실제 그래프 노드로 존재하는 것만 clickable 로 표시.
+        # (번역 변이 "Seong Gi-hun" 이나 일반개념어는 그래프에 노드가 없어 뷰어가 빈 화면이 됨)
+        graph_triples = graph_result.get("triples", [])
+        clickable_entities = self._compute_clickable_entities(entities, graph_triples)
         metadata = {
             "sparql_query": graph_result.get("sparql_query", ""),
             "extracted_entities": entities,
+            "clickable_entities": clickable_entities,
             "expanded_entities": expanded_entities,
             "found_graph_entities": found_graph_entities, # Add this for debugging
-            "triples": graph_result.get("triples", []),
+            "triples": graph_triples,
             "total_chunks_found": len(results), # Use final results count (includes Entity-Guided chunks)
             "query_analysis": query_analysis,
             "trace_logs": trace_logs
@@ -198,147 +207,165 @@ class GraphRetrievalStrategy(RetrievalStrategy):
         
         return results
 
-    async def _extract_entities(self, kb_id: str, query: str, llm_cfg=None, llm_model: str = None) -> List[str]:
-        """Extract main entities from the query using LLM and spaCy Gazetteer."""
-        entities = set()
-        
-        # 1. LLM Extraction
-        prompt = f"""
-        Extract key entities (subjects, objects, concepts, proper nouns) from the search query.
-        Include specific terms that might be nodes in a knowledge graph.
-        Don't be too generic (e.g., avoid "technology" if a specific name is implied, but include "1인자" or "Master" if present).
-        
-        IMPORTANT: 
-        - Keep entities in their ORIGINAL language as they appear in the query. 
-        - Do NOT translate them (e.g., if query is "성기훈", entity must be "성기훈", not "Seong Gi-hun").
-        - If needed, you can provide English synonyms in a separate list.
-        
-        Query: {query}
-        
-        Output format: {{"entities": ["성기훈", "오일남"], "translated_entities": ["Seong Gi-hun", "Oh Il-nam"]}}
-        """
-        try:
-            from app.core.llm import achat
-            content = await achat(
-                llm_cfg,
-                [
-                    {"role": "system", "content": "You are a precise entity extractor for Knowledge Graphs. Output JSON only. Never translate entities in the main list."},
-                    {"role": "user", "content": prompt},
-                ],
-                model=llm_model, temperature=0, response_format={"type": "json_object"},
-            )
-            data = json.loads(content)
-            for e in data.get("entities", []):
-                entities.add(e)
-            
-            # Combine translated entities for broader recall
-            for e in data.get("translated_entities", []):
-                entities.add(e)
-                
-        except Exception as e:
-            logger.error(f"Error extracting query entities with LLM: {e}")
+    def _compute_clickable_entities(self, entities: List[str], triples: List[Dict[str, Any]]) -> List[str]:
+        """추출 엔티티 중 실제 그래프 노드(트리플 subject/object)로 존재하는 것만 반환.
 
-        # 2. spaCy Gazetteer Extraction (Use known entities)
-        try:
-            from app.services.ingestion.spacy_processor import SpacyGraphProcessor
-            # Instantiate processor to access known entities map
-            processor = SpacyGraphProcessor(kb_id)
-            
-            # Use inner nlp pipeline directly? Or add a method to processor to extract from query?
-            # Re-using extract_graph_elements seems too heavy as it builds triples.
-            # We just want the entities.
-            
-            # Let's use the processor's resources
-            doc = processor.nlp(query)
-            
-            # Matcher
-            matches = processor.matcher(doc)
-            for match_id, start, end in matches:
-                span = doc[start:end]
-                # Apply same normalization!
-                norm = processor._normalize_entity(span)
-                if norm:
-                    entities.add(norm)
-            
-            # NER (Optional: LLM usually covers this, but spaCy local might catch specific patterns)
-            for ent in doc.ents:
-                norm = processor._normalize_entity(ent)
-                if norm:
-                    entities.add(norm)
-                    
-        except Exception as e:
-            logger.warning(f"Error extracting query entities with spaCy: {e}")
-            
-        return list(entities)
-    
-    async def _analyze_query(self, query: str, llm_cfg=None, llm_model: str = None) -> Dict[str, Any]:
-        """Analyze query to understand semantic intent and relationship types."""
-        analysis = {
-            "query_type": "simple",  # simple, relationship, multi_hop
+        그래프 뷰어는 노드가 있는 엔티티만 확장 가능하므로, 노드가 없는 번역 변이나
+        일반개념어(dead-chip)를 UI 가 비활성화할 수 있도록 clickable 목록을 계산한다.
+        정규화(밑줄→공백, 소문자, trim) 후 완전일치, 또는 2자 이상 양방향 부분포함으로 판정.
+        """
+        def _norm(s: Any) -> str:
+            return str(s or "").replace("_", " ").strip().lower()
+
+        node_texts = set()
+        for t in triples or []:
+            for key in ("subject", "object"):
+                nt = _norm(t.get(key))
+                if nt:
+                    node_texts.add(nt)
+
+        clickable = []
+        for e in entities:
+            ne = _norm(e)
+            if not ne:
+                continue
+            if ne in node_texts:
+                clickable.append(e)
+                continue
+            # 2자 이상 양방향 부분포함 (예: "장풍" ↔ "전수받은 장풍")
+            if len(ne) >= 2 and any(
+                (len(nt) >= 2 and (ne in nt or nt in ne)) for nt in node_texts
+            ):
+                clickable.append(e)
+        return clickable
+
+    async def _analyze_and_extract(self, kb_id: str, query: str, llm_client=None, llm_model: str = "gpt-4o-mini") -> Tuple[List[str], Dict[str, Any]]:
+        """질의 분석 + 엔티티 추출을 단일 LLM 호출로 병합 (기존 2회 → 1회).
+
+        See docs/design-query-analysis-merge.md.
+
+        기존 _analyze_query + _extract_entities 두 LLM 호출을 하나로 합치고,
+        엔티티별 문법 역할(subject/object/ambiguous)을 추가로 뽑는다. spaCy
+        가제티어 추출은 로컬(비 LLM)이라 그대로 유지한다.
+
+        Returns:
+            (entities_list, query_analysis)
+            - entities_list: 원문 엔티티 + 번역 동의어 + spaCy 가제티어 (기존 반환 호환)
+            - query_analysis: query_type/relationship_keywords/alternatives/hop_count
+              + entity_roles({원본토큰: role}) — 백엔드 Pattern 분류의 1차 신호
+        """
+        analysis: Dict[str, Any] = {
+            "query_type": "simple",
             "relationship_keywords": [],
-            "direction": None  # forward, backward, bidirectional
+            "direction": None,
+            "alternatives": [],
+            "hop_count": 1,
+            "entity_roles": {},
         }
-        
-        # Detect relationship queries
+        entities = set()
+
+        # --- 키워드 기반 relationship_keywords 초안 (기존 _analyze_query 계승) ---
         relationship_patterns = {
             "master": ["스승", "선생", "master", "teacher", "mentor"],
             "student": ["제자", "학생", "student", "disciple"],
             "전수": ["전수", "전해", "배우", "가르치", "teach", "learn"],
-            "관계": ["관계", "연결", "relationship", "connection"]
+            "관계": ["관계", "연결", "relationship", "connection"],
         }
-        
         query_lower = query.lower()
-        
         for rel_type, keywords in relationship_patterns.items():
             if any(kw in query_lower for kw in keywords):
                 analysis["relationship_keywords"].append(rel_type)
-        
-        # Detect multi-hop queries
-        multi_hop_patterns = ["의 스승의", "의 제자의", "'s master's", "'s student's", "누구의 누구"]
-        if any(pattern in query_lower for pattern in multi_hop_patterns):
-            analysis["query_type"] = "multi_hop"
-            analysis["hops"] = 2  # Detect number of hops
-        elif any(kw in query_lower for kw in ["스승", "제자", "master", "student", "teacher"]):
-            analysis["query_type"] = "relationship"
-        
-        # Use LLM for better understanding
+
+        # --- 단일 LLM 호출: 엔티티(역할 포함) + 구조 분석 ---
+        prompt = f"""
+        Analyze this knowledge-graph search query and output JSON only.
+
+        Extract:
+        1. entities: key entities (subjects, objects, proper nouns) as objects with a grammatical "role".
+           - role = "subject" if the entity is the actor/owner of the relationship being asked,
+                    "object" if it is the target, "ambiguous" if unclear or symmetric.
+           - Keep entity "name" in its ORIGINAL language as it appears in the query. Do NOT translate.
+             (e.g. query "성기훈" -> name "성기훈", never "Seong Gi-hun")
+        2. translated_entities: English synonyms/aliases (for recall). Separate list of plain strings.
+        3. relationship_type: the relation asked (master/student/creator/etc) or null.
+        4. is_multi_hop: true if it chains relations (e.g. "A's B's C").
+        5. hop_count: 1, 2, or 3.
+        6. alternatives: alternative entity names or related entities.
+
+        Query: {query}
+
+        Output format:
+        {{
+          "entities": [{{"name": "성기훈", "role": "subject"}}, {{"name": "오일남", "role": "object"}}],
+          "translated_entities": ["Seong Gi-hun", "Oh Il-nam"],
+          "relationship_type": "master",
+          "is_multi_hop": false,
+          "hop_count": 1,
+          "alternatives": []
+        }}
+        """
         try:
-            prompt = f"""
-            Analyze this search query and extract:
-            1. The main subject/entity being asked about
-            2. The type of relationship being queried (if any)
-            3. Whether it's a multi-hop query (e.g., "A's B's C")
-            4. Potential alternative entity names or aliases
-            
-            Query: {query}
-            
-            Output format:
-            {{
-                "subject": "main entity name",
-                "relationship_type": "master/student/creator/etc or null",
-                "is_multi_hop": true/false,
-                "hop_count": 1 or 2 or 3,
-                "alternatives": ["alternative names or related entities"]
-            }}
-            """
-            
-            from app.core.llm import achat
-            content = await achat(
-                llm_cfg,
-                [
-                    {"role": "system", "content": "You are a query analyzer for graph search. Be precise and output only JSON."},
+            if llm_client is None:
+                raise ValueError("Graph search model client is not configured.")
+            response = await llm_client.chat.completions.create(
+                model=llm_model,
+                messages=[
+                    {"role": "system", "content": "You are a precise query analyzer and entity extractor for Knowledge Graphs. Output JSON only. Never translate entity names in the main 'entities' list."},
                     {"role": "user", "content": prompt},
                 ],
-                model=llm_model, temperature=0, response_format={"type": "json_object"},
+                temperature=0,
+                response_format={"type": "json_object"},
             )
-            llm_analysis = json.loads(content)
-            analysis.update(llm_analysis)
-            
+            data = json.loads(response.choices[0].message.content)
+
+            # 엔티티 + 역할
+            for ent in data.get("entities", []):
+                if isinstance(ent, dict):
+                    name = ent.get("name")
+                    if name:
+                        entities.add(name)
+                        role = ent.get("role")
+                        if role in ("subject", "object", "ambiguous"):
+                            analysis["entity_roles"][name] = role
+                elif isinstance(ent, str) and ent:
+                    entities.add(ent)
+            # 번역 동의어 (recall 보강, 역할 없음)
+            for e in data.get("translated_entities", []):
+                if e:
+                    entities.add(e)
+
+            # 구조 분석
+            if data.get("relationship_type"):
+                analysis["relationship_type"] = data["relationship_type"]
+            analysis["alternatives"] = data.get("alternatives", []) or []
+            hop_count = data.get("hop_count")
+            if isinstance(hop_count, int) and hop_count >= 1:
+                analysis["hop_count"] = hop_count
+            if data.get("is_multi_hop") or analysis["hop_count"] >= 2:
+                analysis["query_type"] = "multi_hop"
+            elif analysis["relationship_keywords"] or data.get("relationship_type"):
+                analysis["query_type"] = "relationship"
         except Exception as e:
-            logger.warning(f"Error in LLM query analysis: {e}")
-        
-        return analysis
-    
+            logger.warning(f"[Graph] Merged analyze/extract LLM call failed: {e}")
+
+        # --- spaCy 가제티어 (로컬, 비 LLM — 기존 _extract_entities 계승) ---
+        try:
+            from app.services.ingestion.spacy_processor import SpacyGraphProcessor
+            processor = SpacyGraphProcessor(kb_id)
+            doc = processor.nlp(query)
+            for match_id, start, end in processor.matcher(doc):
+                norm = processor._normalize_entity(doc[start:end])
+                if norm:
+                    entities.add(norm)
+            for ent in doc.ents:
+                norm = processor._normalize_entity(ent)
+                if norm:
+                    entities.add(norm)
+        except Exception as e:
+            logger.warning(f"Error extracting query entities with spaCy: {e}")
+
+        return list(entities), analysis
+
     async def _expand_entities(self, kb_id: str, entities: List[str], backend_type: str = "ontology") -> List[str]:
         """Expand entities by finding related entities in the graph."""
         if not entities:
@@ -385,13 +412,7 @@ class GraphRetrievalStrategy(RetrievalStrategy):
         else:
             # Fuseki (SPARQL) Expansion
             # Escape entities for SPARQL Regex (avoiding re.escape which adds too many backslashes)
-            def sparql_escape(s):
-                chars_to_escape = r".*+?^${}()|[]\\"
-                for char in chars_to_escape:
-                    s = s.replace(char, "\\" + char)
-                return s
-
-            safe_entities = [sparql_escape(e) for e in entities]
+            safe_entities = [escape_sparql_regex(e) for e in entities]
             regex_pattern = "|".join(safe_entities)
             
             # Find entities connected to the initial entities
@@ -484,19 +505,29 @@ class GraphRetrievalStrategy(RetrievalStrategy):
         # Get existing collection
         collection_name = f"kb_{kb_id.replace('-', '_')}"
         from pymilvus import Collection
-        collection = Collection(collection_name)
-        collection.load()
-        
+
         # Limit to avoid huge query
         target_ids = chunk_ids[:100] # Safety limit
-        
         expr = f'chunk_id in {json.dumps(target_ids)}'
-        
-        results = collection.query(
-            expr=expr,
-            output_fields=["content", "doc_id", "chunk_id", "vector"]
-        )
-        
+
+        # Milvus load/query 는 블로킹이며, 이 서버는 특정 컬렉션이 load 되지 않고
+        # 타임아웃되는 고질 이슈가 있다(무한 행 → 이벤트 루프 블로킹). 스레드로 오프로딩 +
+        # wait_for 로 시간 격리하고, 실패 시 청크 없이 진행한다(답변은 트리플로 생성됨).
+        def _sync_fetch():
+            collection = Collection(collection_name)
+            collection.load(timeout=15)
+            return collection.query(
+                expr=expr,
+                output_fields=["content", "doc_id", "chunk_id", "vector"],
+                timeout=15,
+            )
+
+        try:
+            results = await asyncio.wait_for(asyncio.to_thread(_sync_fetch), timeout=20)
+        except Exception as e:
+            logger.warning(f"[Graph] _fetch_chunks Milvus 조회 실패/타임아웃 — 청크 없이 진행: {str(e)[:120]}")
+            return []
+
         retrieved = []
         
         # Calculate cosine similarity for scoring (so we can merge with vector results)

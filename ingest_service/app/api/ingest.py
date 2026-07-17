@@ -130,22 +130,24 @@ class JobStatusResponse(BaseModel):
     error: Optional[str] = None
 
 
-async def send_pipeline_status(callback_url: str, job_id: str, doc_id: str, kb_id: str, status: str):
+async def send_pipeline_status(callback_url: str, job_id: str, doc_id: str, kb_id: str, status: str,
+                               progress: Optional[int] = None, error: Optional[str] = None):
     """Helper to send granular pipeline status to backend"""
     if not callback_url: return
     import httpx
     try:
-        # ✅ COMPLETED 상태일 때는 status를 'completed'로 전송
-        overall_status = "completed" if status == "COMPLETED" else "processing"
-        
-        from app.core.platform_auth import service_headers
+        # ✅ COMPLETED/FAILED 상태에 따라 overall status 결정
+        overall_status = {"COMPLETED": "completed", "FAILED": "failed"}.get(status, "processing")
+
         async with httpx.AsyncClient() as client:
-            await client.post(callback_url, headers=service_headers(), json={
+            await client.post(callback_url, json={
                 "job_id": job_id,
                 "doc_id": doc_id,
                 "kb_id": kb_id,
                 "status": overall_status,
-                "pipeline_status": status
+                "pipeline_status": status,
+                "progress": progress,
+                "error": error
             })
     except Exception as e:
         print(f"[Callback] Failed to send status {status}: {e}")
@@ -208,7 +210,8 @@ async def process_ingest_job(job_id: str, request: IngestRequest):
         
         # 3. Process with IngestPipeline (Now handles dictionary + chunks + triples in order)
         async def pipeline_callback(status):
-            await send_pipeline_status(request.callback_url, job_id, request.doc_id, request.kb_id, status)
+            await send_pipeline_status(request.callback_url, job_id, request.doc_id, request.kb_id, status,
+                                       progress=jobs[job_id].get("progress"))
 
         result = await ingest_pipeline.process(
             text=text,
@@ -252,7 +255,8 @@ async def process_ingest_job(job_id: str, request: IngestRequest):
              return
         
         # ✅ STORING 상태 전송 (DB 저장 시작)
-        await send_pipeline_status(request.callback_url, job_id, request.doc_id, request.kb_id, "STORING")
+        await send_pipeline_status(request.callback_url, job_id, request.doc_id, request.kb_id, "STORING",
+                                   progress=jobs[job_id].get("progress"))
         
         # 5. Save (Milvus, Neo4j/Fuseki)
         print(f"[IngestJob] Saving to databases for doc {request.doc_id}...")
@@ -346,28 +350,23 @@ async def process_ingest_job(job_id: str, request: IngestRequest):
         print(f"[IngestJob] ✅ Job {job_id} COMPLETED for doc {request.doc_id}")
         
         # ✅ COMPLETED 상태 전송 (완료)
-        await send_pipeline_status(request.callback_url, job_id, request.doc_id, request.kb_id, "COMPLETED")
+        await send_pipeline_status(request.callback_url, job_id, request.doc_id, request.kb_id, "COMPLETED",
+                                   progress=jobs[job_id].get("progress"))
 
 
         
         # 6. Call callback (Optional)
-        # 잡은 이미 COMPLETED 이고 데이터도 저장 완료됨. 콜백 POST 실패가
-        # 전체 except 로 전파돼 성공한 잡을 FAILED 로 뒤집지 않도록 개별 보호한다.
         if request.callback_url:
-            try:
-                import httpx
-                from app.core.platform_auth import service_headers
-                async with httpx.AsyncClient() as client:
-                    await client.post(request.callback_url, headers=service_headers(), json={
-                        "job_id": job_id,
-                        "doc_id": request.doc_id,
-                        "kb_id": request.kb_id,
-                        "status": "completed",
-                        "result": jobs[job_id]["result"],
-                    })
-            except Exception as cb_err:
-                print(f"[IngestJob] ⚠️ 완료 콜백 전송 실패(잡은 COMPLETED 유지): {cb_err}", flush=True)
-
+            import httpx
+            async with httpx.AsyncClient() as client:
+                await client.post(request.callback_url, json={
+                    "job_id": job_id,
+                    "doc_id": request.doc_id,
+                    "kb_id": request.kb_id,
+                    "status": "completed",
+                    "result": jobs[job_id]["result"],
+                })
+        
     except Exception as e:
         import traceback
         print(f"[IngestJob] ❌ Job {job_id} FAILED: {e}")
@@ -375,6 +374,11 @@ async def process_ingest_job(job_id: str, request: IngestRequest):
         jobs[job_id]["status"] = JobStatus.FAILED
         jobs[job_id]["error"] = _format_model_error_message(str(e))
         jobs[job_id]["updated_at"] = datetime.utcnow().isoformat()
+        try:
+            await send_pipeline_status(request.callback_url, job_id, request.doc_id, request.kb_id, "FAILED",
+                                       progress=jobs[job_id].get("progress"), error=jobs[job_id]["error"])
+        except Exception as _cb_e:
+            print(f"[IngestJob] 실패 콜백 전송 실패: {_cb_e}")
 
 
 
@@ -788,11 +792,19 @@ async def _save_preview_data(
         doc_id = cached["doc_id"]
         
         # [New] Send STORING status
-        await send_pipeline_status(callback_url, job_id, doc_id, kb_id, "STORING")
+        await send_pipeline_status(callback_url, job_id, doc_id, kb_id, "STORING",
+                                   progress=jobs[job_id].get("progress"))
         
         # 1. Save to Milvus
         print(f"[Confirm] Saving {cached['node_count']} chunks to Milvus...")
-        chunks_data = [{"content": node.get_content(), "metadata": node.metadata} for node in cached["nodes"]]
+        # [FIX] node_id 를 포함해야 Milvus chunk_id 가 그래프 reification 의 source_node_id 와
+        # 일치한다. 누락하면 milvus_connector 가 {doc_id}_{i} 폴백 ID 를 써서 그래프-벡터
+        # 조인이 깨진다(직접 인제스트 경로는 이미 node_id 포함).
+        chunks_data = [{
+            "content": node.get_content(),
+            "metadata": node.metadata,
+            "node_id": node.node_id,
+        } for node in cached["nodes"]]
         await milvus_connector.insert_chunks(
             kb_id,
             doc_id,
@@ -847,14 +859,14 @@ async def _save_preview_data(
         print(f"[Confirm] ✅ Preview {preview_id} saved successfully")
         
         # ✅ COMPLETED 상태 전송 (완료)
-        await send_pipeline_status(callback_url, job_id, doc_id, kb_id, "COMPLETED")
+        await send_pipeline_status(callback_url, job_id, doc_id, kb_id, "COMPLETED",
+                                   progress=jobs[job_id].get("progress"))
         
         # Callback
         if callback_url:
             import httpx
-            from app.core.platform_auth import service_headers
             async with httpx.AsyncClient() as client:
-                await client.post(callback_url, headers=service_headers(), json={
+                await client.post(callback_url, json={
                     "job_id": job_id,
                     "doc_id": doc_id,
                     "kb_id": kb_id,
@@ -869,6 +881,11 @@ async def _save_preview_data(
         jobs[job_id]["status"] = JobStatus.FAILED
         jobs[job_id]["error"] = _format_model_error_message(str(e))
         jobs[job_id]["updated_at"] = datetime.utcnow().isoformat()
+        try:
+            await send_pipeline_status(callback_url, job_id, jobs[job_id].get("doc_id"), jobs[job_id].get("kb_id"),
+                                       "FAILED", progress=jobs[job_id].get("progress"), error=jobs[job_id]["error"])
+        except Exception as _cb_e:
+            print(f"[Confirm] 실패 콜백 전송 실패: {_cb_e}")
 
 
 @router.delete("/preview/{preview_id}")
