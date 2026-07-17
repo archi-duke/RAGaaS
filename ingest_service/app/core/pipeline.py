@@ -948,11 +948,11 @@ Triplets:"""
             print(f"[Pipeline] Phase 4: Running final entity normalization...")
             
             normalization_suggestions = await entity_normalizer.generate_normalization_suggestions(
-                triples, 
+                triples,
                 algorithm=normalization_algorithm,
                 threshold=normalization_threshold,
-                embed_model=self.embed_model,
-                llm=self.llm
+                embed_model=active_embed_model,
+                llm=active_ingest_llm
             )
             
             if normalization_suggestions:
