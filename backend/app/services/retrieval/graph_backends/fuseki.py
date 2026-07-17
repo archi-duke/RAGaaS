@@ -416,12 +416,15 @@ class FusekiBackend(GraphBackend):
         query_tokens = query_text.replace("?", "").split()
         relation_keywords = []
 
+        # 불용어 접두 매칭: 굴절형("누구랑","누구야","관계있어","관계는")도 걸러낸다.
+        # exact-match 만 하면 필러 단어가 살아남아 정상 트리플까지 무관 판정으로 폐기됨.
+        stopword_roots = ("누구", "무엇", "언제", "어디", "어떻게", "왜", "관계", "관련", "연결", "사람", "것", "무슨", "어떤")
         for t in query_tokens:
             # 조사 제거
-            t_clean = t.rstrip("은는이가을를의와과로으로에게")
+            t_clean = t.rstrip("은는이가을를의와과로으로에게랑")
             if len(t_clean) > 1 and t_clean not in known_entity_names:
-                # 질문 어미/조사 등 불용어 필터링 (간단히)
-                if t_clean not in ["누구", "무엇", "언제", "어디", "어떻게", "관계", "사람", "것"]:
+                # 질문 어미/조사 등 불용어 필터링 (접두 매칭)
+                if not any(t_clean.startswith(sw) for sw in stopword_roots):
                     relation_keywords.append(t_clean)
 
         return relation_keywords
