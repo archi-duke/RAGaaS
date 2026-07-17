@@ -77,6 +77,7 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
         extraction_examples_yaml: '',
         custom_prompt: '',
         enable_entity_normalization: true,
+        enable_entity_typing: false,
         normalization_algorithm: 'embedding' as 'embedding' | 'string' | 'llm',
         normalization_threshold: 0.85,
         max_sample_size: 50000,

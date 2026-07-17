@@ -14,6 +14,7 @@ interface GraphParams {
     extraction_examples_yaml: string;
     custom_prompt: string;
     enable_entity_normalization: boolean;
+    enable_entity_typing: boolean;
     normalization_algorithm: 'embedding' | 'string' | 'llm';
     normalization_threshold: number;
     max_sample_size: number;
@@ -239,6 +240,22 @@ export default function GraphExtractionSettings({
                             </div>
                         </div>
                     )}
+
+                    {/* Entity Typing */}
+                    <div style={{ marginBottom: '1rem' }}>
+                        <label style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem', cursor: 'pointer' }}>
+                            <input
+                                type="checkbox"
+                                checked={graphParams.enable_entity_typing}
+                                onChange={(e) => updateParams({ enable_entity_typing: e.target.checked })}
+                                style={{ width: '1.1rem', height: '1.1rem', accentColor: '#3b82f6', flexShrink: 0, marginTop: '2px' }}
+                            />
+                            <div>
+                                <span style={{ color: '#334155', fontWeight: 500, fontSize: '0.9rem' }}>엔티티 타입 자동 분류 (rdf:type)</span>
+                                <div style={{ fontSize: '0.75rem', color: '#64748b' }}>인제스트 시 각 엔티티에 클래스 타입을 부여합니다 (온톨로지 승격 품질 향상)</div>
+                            </div>
+                        </label>
+                    </div>
                 </div>
 
                 {/* Customization Column */}
