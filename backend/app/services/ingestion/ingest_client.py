@@ -78,7 +78,101 @@ class IngestServiceClient:
             )
             response.raise_for_status()
             return response.json()
-    
+
+    async def create_preview(
+        self,
+        kb_id: str,
+        doc_id: str,
+        file_path: str,
+        chunking_config: Dict[str, Any],
+        graph_config: Dict[str, Any],
+        graph_store: str = "neo4j",
+        enable_text_cleaning: bool = False,
+        enable_subject_restoration: bool = True,
+        extraction_examples_yaml: Optional[str] = None,
+        custom_prompt: Optional[str] = None,
+        enable_entity_normalization: bool = False,
+        normalization_algorithm: str = "embedding",
+        normalization_threshold: float = 0.85,
+        enable_normalization_confirmation: bool = False,
+        enable_entity_typing: bool = False,
+        callback_url: Optional[str] = None,
+        entity_dictionary: Optional[Dict[str, Any]] = None,
+        sampling_size: Optional[int] = None,
+        ingest_llm: Optional[Dict[str, Any]] = None,
+        chunk_grouping_llm: Optional[Dict[str, Any]] = None,
+        subject_restoration_llm: Optional[Dict[str, Any]] = None,
+        noun_extraction_llm: Optional[Dict[str, Any]] = None,
+        embedding_model: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """구조화 문서(온톨로지 승격 KB) 인제스트 프리뷰 생성.
+
+        payload 형태는 create_ingest_job과 동일 — ingest_service가
+        정렬(alignment) 제안이 필요한지 판단해 preview 응답에 포함시킨다.
+        """
+        payload = {
+            "kb_id": kb_id,
+            "doc_id": doc_id,
+            "file_path": file_path,
+            "chunking": chunking_config,
+            "graph": graph_config,
+            "graph_store": graph_store,
+            "enable_text_cleaning": enable_text_cleaning,
+            "enable_subject_restoration": enable_subject_restoration,
+            "extraction_examples_yaml": extraction_examples_yaml,
+            "custom_prompt": custom_prompt,
+            "enable_entity_normalization": enable_entity_normalization,
+            "normalization_algorithm": normalization_algorithm,
+            "normalization_threshold": normalization_threshold,
+            "enable_normalization_confirmation": enable_normalization_confirmation,
+            "enable_entity_typing": enable_entity_typing,
+            "callback_url": callback_url,
+            "entity_dictionary": entity_dictionary,
+            "sampling_size": sampling_size,
+            "ingest_llm": ingest_llm,
+            "chunk_grouping_llm": chunk_grouping_llm,
+            "subject_restoration_llm": subject_restoration_llm,
+            "noun_extraction_llm": noun_extraction_llm,
+            "embedding_model": embedding_model,
+        }
+
+        async with httpx.AsyncClient(timeout=3600.0) as client:
+            response = await client.post(
+                f"{self.base_url}/api/preview",
+                json=payload
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def confirm_preview(
+        self,
+        preview_id: str,
+        alignment_decisions: Optional[Dict[str, Any]] = None,
+        callback_url: Optional[str] = None,
+        enable_inference: bool = False,
+        kb_id: Optional[str] = None,
+        doc_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """프리뷰를 확정하여 실제 인제스트 작업을 시작.
+
+        alignment_decisions가 None이면 정확 일치 항목만 서버 측에서 자동 적용된다.
+        """
+        payload = {
+            "enable_inference": enable_inference,
+            "callback_url": callback_url,
+            "kb_id": kb_id,
+            "doc_id": doc_id,
+            "alignment_decisions": alignment_decisions,
+        }
+
+        async with httpx.AsyncClient(timeout=3600.0) as client:
+            response = await client.post(
+                f"{self.base_url}/api/confirm/{preview_id}",
+                json=payload
+            )
+            response.raise_for_status()
+            return response.json()
+
     async def get_job_status(self, job_id: str) -> Dict[str, Any]:
         """작업 상태 조회"""
         async with httpx.AsyncClient(timeout=10.0) as client:

@@ -119,6 +119,10 @@ export const docApi = {
     // [New] Fetch Pipeline Data (Large JSONs) on demand
     getPipelineData: (kbId: string, docId: string) =>
         api.get(`knowledge-bases/${kbId}/documents/${docId}/pipeline/data`),
+
+    // [C안 Phase 2b] Submit ontology alignment review decisions
+    resolveAlignment: (kbId: string, docId: string, decisions: any) =>
+        api.post(`knowledge-bases/${kbId}/documents/${docId}/resolve-alignment`, { decisions }),
 };
 
 export const retrievalApi = {

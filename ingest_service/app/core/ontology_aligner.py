@@ -150,6 +150,9 @@ class OntologyAligner:
             "properties": prop,
             "disjoint": disjoint,
             "has_mismatch": has_mismatch,
+            # 검토 UI의 'map-to' 드롭다운용 기존 TBox 이름 목록
+            "existing_classes": sorted(existing_classes.keys()),
+            "existing_properties": sorted(existing_properties.keys()),
         }
 
     def _align_group(

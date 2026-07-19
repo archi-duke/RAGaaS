@@ -17,6 +17,16 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+_STRUCTURED_EXTENSIONS = (".json", ".yaml", ".yml")
+
+
+def _is_structured_filename(filename: str) -> bool:
+    """구조화 문서(.json/.yaml/.yml) 여부 판정 (대소문자 무관)."""
+    if not filename:
+        return False
+    return filename.lower().endswith(_STRUCTURED_EXTENSIONS)
+
+
 _UPLOAD_LLM_KEYMAP = {
     "ingest": {
         "provider": "llm_provider",
@@ -551,31 +561,84 @@ async def upload_document(
     async def call_ingest_service():
         try:
             from app.services.ingestion.ingest_client import ingest_client
-            await ingest_client.create_ingest_job(
-                kb_id=kb_id,
-                doc_id=str(doc.id),
-                file_path=file_path,
-                chunking_config=chunking_cfg,
-                graph_config=graph_config,
-                graph_store="fuseki" if kb.graph_backend == "ontology" else "neo4j",
-                enable_text_cleaning=enable_text_cleaning,
-                enable_subject_restoration=enable_subject_restoration,
-                extraction_examples_yaml=extraction_examples_yaml or final_config.get("extraction_examples_yaml"),
-                custom_prompt=graph_extraction_prompt,
-                enable_entity_normalization=final_enable_entity_normalization,
-                normalization_algorithm=normalization_algorithm,
-                normalization_threshold=normalization_threshold,
-                enable_normalization_confirmation=final_enable_normalization_confirmation,
-                enable_entity_typing=final_enable_entity_typing,
-                callback_url=callback_url,
-                entity_dictionary=dict_data,
-                sampling_size=doc.max_sample_size,
-                ingest_llm=model_configs["ingest_llm"],
-                chunk_grouping_llm=model_configs["chunk_grouping_llm"],
-                subject_restoration_llm=model_configs["subject_restoration_llm"],
-                noun_extraction_llm=model_configs["noun_extraction_llm"],
-                embedding_model=model_configs["embedding_model"],
-            )
+
+            graph_store = "fuseki" if kb.graph_backend == "ontology" else "neo4j"
+
+            # 구조화 문서(.json/.yaml/.yml) + 온톨로지 승격 KB → preview/confirm 정렬 검토 흐름 (C안 §6/§10/§11)
+            if _is_structured_filename(doc.filename) and kb.is_promoted and kb.graph_backend == "ontology":
+                preview = await ingest_client.create_preview(
+                    kb_id=kb_id,
+                    doc_id=str(doc.id),
+                    file_path=file_path,
+                    chunking_config=chunking_cfg,
+                    graph_config=graph_config,
+                    graph_store=graph_store,
+                    enable_text_cleaning=enable_text_cleaning,
+                    enable_subject_restoration=enable_subject_restoration,
+                    extraction_examples_yaml=extraction_examples_yaml or final_config.get("extraction_examples_yaml"),
+                    custom_prompt=graph_extraction_prompt,
+                    enable_entity_normalization=final_enable_entity_normalization,
+                    normalization_algorithm=normalization_algorithm,
+                    normalization_threshold=normalization_threshold,
+                    enable_normalization_confirmation=final_enable_normalization_confirmation,
+                    enable_entity_typing=final_enable_entity_typing,
+                    callback_url=callback_url,
+                    entity_dictionary=dict_data,
+                    sampling_size=doc.max_sample_size,
+                    ingest_llm=model_configs["ingest_llm"],
+                    chunk_grouping_llm=model_configs["chunk_grouping_llm"],
+                    subject_restoration_llm=model_configs["subject_restoration_llm"],
+                    noun_extraction_llm=model_configs["noun_extraction_llm"],
+                    embedding_model=model_configs["embedding_model"],
+                )
+
+                alignment = preview.get("alignment")
+                preview_id = preview.get("preview_id")
+
+                if alignment and alignment.get("has_mismatch"):
+                    # 불일치 감지 → 사용자 검토 대기 (HOLD)
+                    doc.pipeline_status = "NEEDS_ALIGNMENT_REVIEW"
+                    doc.pipeline_metadata = {
+                        **(doc.pipeline_metadata or {}),
+                        "preview_id": preview_id,
+                        "alignment": alignment,
+                    }
+                    await doc.save()
+                else:
+                    # 일치 / 빈 온톨로지 → 검토 없이 바로 확정
+                    await ingest_client.confirm_preview(
+                        preview_id,
+                        alignment_decisions=None,
+                        callback_url=callback_url,
+                        kb_id=kb_id,
+                        doc_id=str(doc.id),
+                    )
+            else:
+                await ingest_client.create_ingest_job(
+                    kb_id=kb_id,
+                    doc_id=str(doc.id),
+                    file_path=file_path,
+                    chunking_config=chunking_cfg,
+                    graph_config=graph_config,
+                    graph_store=graph_store,
+                    enable_text_cleaning=enable_text_cleaning,
+                    enable_subject_restoration=enable_subject_restoration,
+                    extraction_examples_yaml=extraction_examples_yaml or final_config.get("extraction_examples_yaml"),
+                    custom_prompt=graph_extraction_prompt,
+                    enable_entity_normalization=final_enable_entity_normalization,
+                    normalization_algorithm=normalization_algorithm,
+                    normalization_threshold=normalization_threshold,
+                    enable_normalization_confirmation=final_enable_normalization_confirmation,
+                    enable_entity_typing=final_enable_entity_typing,
+                    callback_url=callback_url,
+                    entity_dictionary=dict_data,
+                    sampling_size=doc.max_sample_size,
+                    ingest_llm=model_configs["ingest_llm"],
+                    chunk_grouping_llm=model_configs["chunk_grouping_llm"],
+                    subject_restoration_llm=model_configs["subject_restoration_llm"],
+                    noun_extraction_llm=model_configs["noun_extraction_llm"],
+                    embedding_model=model_configs["embedding_model"],
+                )
         except Exception as e:
             logger.error(f"[Ingest] Service call failed: {e}")
             # Log response body for 422 errors
@@ -589,7 +652,7 @@ async def upload_document(
             await doc.save()
 
     background_tasks.add_task(call_ingest_service)
-    
+
     # 7. Finalize and Return
     await doc.save()
 
@@ -683,6 +746,40 @@ async def delete_document(kb_id: str, doc_id: str):
                 # Don't fail the delete operation even if cleanup fails
 
     return {"ok": True}
+
+
+class AlignmentResolveRequest(BaseModel):
+    decisions: Optional[Dict[str, Any]] = None
+
+
+@router.post("/{kb_id}/documents/{doc_id}/resolve-alignment")
+async def resolve_alignment(kb_id: str, doc_id: str, body: AlignmentResolveRequest):
+    """온톨로지 정렬 검토(§6.3) 사용자 결정을 제출해 프리뷰를 확정한다."""
+    doc = await DocModel.get(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    preview_id = (doc.pipeline_metadata or {}).get("preview_id")
+    if not preview_id:
+        raise HTTPException(status_code=400, detail="No pending alignment review")
+
+    callback_base = os.getenv("CALLBACK_BASE_URL", "http://127.0.0.1:8000")
+    callback_url = f"{callback_base.rstrip('/')}/api/knowledge-bases/ingest/callback"
+
+    from app.services.ingestion.ingest_client import ingest_client
+    confirm_resp = await ingest_client.confirm_preview(
+        preview_id,
+        alignment_decisions=body.decisions,
+        callback_url=callback_url,
+        kb_id=kb_id,
+        doc_id=doc_id,
+    )
+
+    doc.pipeline_status = "STORING"
+    await doc.save()
+
+    return {"ok": True, "job_id": confirm_resp.get("job_id")}
+
 
 class IngestCallback(BaseModel):
     job_id: str

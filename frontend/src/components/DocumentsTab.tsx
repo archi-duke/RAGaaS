@@ -4,6 +4,7 @@ import { Upload, FileText, Trash2, Database, Book, Check, X as XIcon } from 'luc
 import UploadDocumentModal from './UploadDocumentModal';
 import EntityDictionaryModal from './EntityDictionaryModal';
 import ExtractionPreviewModal from './ExtractionPreviewModal';
+import AlignmentReviewModal from './AlignmentReviewModal';
 import { docApi } from '../services/api';
 import ConfirmDialog from './ConfirmDialog';
 
@@ -62,6 +63,10 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
     const [showDictionaryModal, setShowDictionaryModal] = useState(false);
     const [dictionaryData, setDictionaryData] = useState<any>(null);
     const [isLoadingResults, setIsLoadingResults] = useState(false);
+
+    // Alignment Review Modal State (C안 Phase 2b)
+    const [showAlignmentReview, setShowAlignmentReview] = useState(false);
+    const [reviewDoc, setReviewDoc] = useState<Document | null>(null);
 
     // Delete Confirmation State
     const [deleteConfirmState, setDeleteConfirmState] = useState<{ isOpen: boolean; docId: string | null }>({
@@ -125,6 +130,15 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
             deleting: { class: 'badge-warning', label: 'Deleting...' },
             error: { class: 'badge-danger', label: 'Error' }
         };
+
+        // Alignment Review Required (C안 Phase 2b)
+        if (pipeline_status === 'NEEDS_ALIGNMENT_REVIEW') {
+            return (
+                <span className="badge" style={{ backgroundColor: '#f59e0b', color: 'white', borderColor: '#f59e0b' }}>
+                    정렬 검토 필요
+                </span>
+            );
+        }
 
         // Graph Pipeline Status Overrides
         if (status === 'processing' && pipeline_status) {
@@ -250,6 +264,20 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
                                         </td>
                                         <td style={{ padding: '1rem', textAlign: 'center' }}>
                                             <div style={{ display: 'flex', justifyContent: 'center', gap: '0.5rem' }}>
+                                                {doc.pipeline_status === 'NEEDS_ALIGNMENT_REVIEW' && (
+                                                    <button
+                                                        className="btn btn-primary"
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            setReviewDoc(doc);
+                                                            setShowAlignmentReview(true);
+                                                        }}
+                                                        title="정렬 검토"
+                                                        style={{ fontSize: '0.85rem', padding: '0.35rem 0.75rem' }}
+                                                    >
+                                                        검토
+                                                    </button>
+                                                )}
                                                 <button
                                                     className="btn btn-icon"
                                                     onClick={(e) => {
@@ -390,6 +418,22 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
                     />
                 )
             }
+
+            <AlignmentReviewModal
+                isOpen={showAlignmentReview}
+                onClose={() => {
+                    setShowAlignmentReview(false);
+                    setReviewDoc(null);
+                }}
+                kbId={kbId}
+                docId={reviewDoc?.id}
+                alignment={reviewDoc?.pipeline_metadata?.alignment}
+                onResolved={() => {
+                    setShowAlignmentReview(false);
+                    setReviewDoc(null);
+                    onRefresh();
+                }}
+            />
         </>
     );
 }
