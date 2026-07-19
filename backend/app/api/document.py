@@ -6,6 +6,7 @@ import logging
 import os
 import json
 import re
+import yaml
 
 from app.models.document import Document as DocModel, DocumentStatus
 from app.models.knowledge_base import KnowledgeBase as KBModel
@@ -25,6 +26,86 @@ def _is_structured_filename(filename: str) -> bool:
     if not filename:
         return False
     return filename.lower().endswith(_STRUCTURED_EXTENSIONS)
+
+
+async def register_schema_tbox(kb: KBModel, schema: dict) -> dict:
+    """JSON Schema를 KB의 온톨로지 TBox로 변환/등록한다 (C안 Phase 3, §7/§9 TBox 진화).
+
+    - `urn:ontology:{kb.id}` 그래프에 결정론적으로 생성한 owl 트리플을 MERGE(append)
+      한다(기존 그래프를 drop하지 않음 = TBox 진화).
+    - `kb.promotion_metadata.schema_info`에 신규 클래스/속성을 병합하고 `kb.is_promoted`를
+      True로 세팅한다.
+    반환: {"classes": [...], "properties": [...]} (이번 변환에서 발견된 로컬네임 목록)
+    """
+    from app.graph2ontology.json_schema_converter import (
+        convert_json_schema_to_tbox,
+        CLASS_NS,
+        PROP_NS,
+    )
+
+    graph, summary = convert_json_schema_to_tbox(schema)
+
+    # TTL로 직렬화 (data/uploads/{kb.id}/schema_tbox.ttl)
+    kb_upload_dir = os.path.join("data", "uploads", kb.id)
+    os.makedirs(kb_upload_dir, exist_ok=True)
+    ttl_path = os.path.join(kb_upload_dir, "schema_tbox.ttl")
+    graph.serialize(destination=ttl_path, format="turtle")
+
+    # Fuseki에 MERGE 업로드 (drop 없이 append) — knowledge_base.py의 instance_types
+    # append 패턴(POST .../data?graph=...)과 동일.
+    import requests
+    from app.core.fuseki import fuseki_client
+
+    ontology_graph_uri = f"urn:ontology:{kb.id}"
+    dataset_url = fuseki_client._get_dataset_url(kb.id)
+    upload_url = f"{dataset_url}/data?graph={ontology_graph_uri}"
+
+    with open(ttl_path, "rb") as f:
+        ttl_bytes = f.read()
+
+    try:
+        resp = requests.post(
+            upload_url,
+            data=ttl_bytes,
+            headers={"Content-Type": "text/turtle"},
+            auth=fuseki_client.auth,
+            timeout=60,
+        )
+        if resp.status_code not in (200, 201, 204):
+            logger.error(
+                f"[SchemaTBox] Failed to merge schema TBox into {ontology_graph_uri}: "
+                f"{resp.status_code} {resp.text}"
+            )
+    except Exception as e:
+        logger.error(f"[SchemaTBox] Error uploading schema TBox to Fuseki: {e}")
+
+    # Mongo: promotion_metadata.schema_info 병합 (기존 항목 보존)
+    promotion_metadata = dict(kb.promotion_metadata or {})
+    schema_info = dict(promotion_metadata.get("schema_info") or {})
+    existing_classes = dict(schema_info.get("classes") or {})
+    existing_properties = list(schema_info.get("properties") or [])
+
+    from urllib.parse import quote as _quote
+
+    for class_local in summary["classes"]:
+        class_uri = f"{CLASS_NS}{_quote(class_local)}"
+        if class_uri not in existing_classes:
+            existing_classes[class_uri] = {"count": 0, "instances": []}
+
+    existing_prop_uris = set(existing_properties)
+    for prop_local in summary["properties"]:
+        prop_uri = f"{PROP_NS}{_quote(prop_local)}"
+        existing_prop_uris.add(prop_uri)
+
+    schema_info["classes"] = existing_classes
+    schema_info["properties"] = sorted(existing_prop_uris)
+    promotion_metadata["schema_info"] = schema_info
+
+    kb.promotion_metadata = promotion_metadata
+    kb.is_promoted = True
+    await kb.save()
+
+    return {"classes": summary["classes"], "properties": summary["properties"]}
 
 
 _UPLOAD_LLM_KEYMAP = {
@@ -445,7 +526,53 @@ async def upload_document(
     
     with open(file_path, "wb") as f:
         f.write(content)
-    
+
+    # 3.5. JSON Schema 인지 (C안 Phase 3, §7/§9): 구조화 파일이 데이터 인스턴스가 아니라
+    # JSON Schema 자체라면, 결정론적으로 TBox로 변환해 KB 온톨로지에 등록하고 인제스트는
+    # 건너뛴다(스키마는 TBox만 정의할 뿐 인스턴스가 없음).
+    if _is_structured_filename(doc.filename):
+        parsed_structured = None
+        try:
+            if doc.filename.lower().endswith(".json"):
+                parsed_structured = json.loads(content)
+            else:
+                parsed_structured = yaml.safe_load(content)
+        except Exception as e:
+            logger.warning(f"[SchemaTBox] Failed to parse {doc.filename} for schema detection: {e}")
+            parsed_structured = None
+
+        from app.graph2ontology.json_schema_converter import is_json_schema
+
+        if is_json_schema(parsed_structured):
+            logger.info(f"[SchemaTBox] Detected JSON Schema in {doc.filename}, registering TBox for KB {kb_id}")
+            try:
+                schema_summary = await register_schema_tbox(kb, parsed_structured)
+                doc.status = DocumentStatus.COMPLETED.value
+                doc.pipeline_status = "SCHEMA_REGISTERED"
+                doc.pipeline_metadata = {
+                    **(doc.pipeline_metadata or {}),
+                    "schema_tbox": schema_summary,
+                }
+                doc.file_path = file_path
+                await doc.save()
+
+                await manager.broadcast(kb_id, {
+                    "type": "document_status_update",
+                    "doc_id": str(doc.id),
+                    "status": doc.status,
+                    "pipeline_status": doc.pipeline_status
+                })
+
+                doc_dict = doc.dict()
+                doc_dict['id'] = str(doc.id)
+                doc_dict['file_path'] = file_path
+                return Document(**doc_dict)
+            except Exception as e:
+                logger.error(f"[SchemaTBox] Failed to register schema TBox: {e}")
+                doc.status = DocumentStatus.ERROR.value
+                await doc.save()
+                raise HTTPException(status_code=500, detail=f"Failed to register JSON Schema TBox: {e}")
+
     # 4. Merge Configuration
     final_config = kb.chunking_config.copy() if kb.chunking_config else {}
     if chunking_config:
