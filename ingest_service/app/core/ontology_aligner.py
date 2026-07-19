@@ -187,6 +187,60 @@ class OntologyAligner:
 
         return {"matched": matched, "similar": similar, "new": new}
 
+    # ------------------------------------------------------------------
+    # 사용자 결정(decisions) → 이름 재매핑 → triples 적용
+    # ------------------------------------------------------------------
+    @staticmethod
+    def build_rename_maps(
+        alignment: Dict[str, Any], decisions: Optional[Dict[str, Any]]
+    ) -> Dict[str, Dict[str, str]]:
+        """alignment 제안 + 사용자 decisions로 후보→최종이름 재매핑을 만든다.
+
+        - 기본(자동): matched(정확 일치) 후보는 기존 표준 이름으로 치환(대소문자 표준화).
+        - decisions로 항목별 오버라이드:
+            merge/map + target -> target(기존 이름)으로 치환
+            create             -> 후보 그대로 유지(치환 제거)
+            (similar/new는 결정 없으면 후보 그대로)
+        decisions shape:
+          {"classes": {"<cand>": {"action": "merge|map|create", "target": "<existing>"}},
+           "properties": {...}}
+        반환: {"classes": {cand: final}, "properties": {cand: final}}
+        """
+        decisions = decisions or {}
+        out: Dict[str, Dict[str, str]] = {}
+        for group in ("classes", "properties"):
+            rename: Dict[str, str] = {}
+            grp = alignment.get(group, {}) if alignment else {}
+            for m in grp.get("matched", []):
+                rename[m["candidate"]] = m["existing"]
+            for cand, d in decisions.get(group, {}).items():
+                action = (d or {}).get("action")
+                target = (d or {}).get("target")
+                if action in ("merge", "map") and target:
+                    rename[cand] = target
+                elif action == "create":
+                    rename.pop(cand, None)
+            out[group] = rename
+        return out
+
+    @staticmethod
+    def apply_rename(triples: List[Dict[str, Any]], rename_maps: Dict[str, Dict[str, str]]) -> int:
+        """재매핑을 triples에 in-place 적용. 반환: 치환 횟수."""
+        class_map = rename_maps.get("classes", {})
+        prop_map = rename_maps.get("properties", {})
+        count = 0
+        for t in triples:
+            for k in ("subject_type", "object_type"):
+                v = t.get(k)
+                if v in class_map:
+                    t[k] = class_map[v]
+                    count += 1
+            p = t.get("predicate")
+            if p in prop_map:
+                t["predicate"] = prop_map[p]
+                count += 1
+        return count
+
 
 # 편의 싱글턴(다른 커넥터 스타일과 일치)
 ontology_aligner = OntologyAligner()

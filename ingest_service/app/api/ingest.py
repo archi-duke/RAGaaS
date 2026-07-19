@@ -561,6 +561,9 @@ class PreviewResponse(BaseModel):
     triples: List[Dict[str, Any]]
     stats: Optional[List[Dict[str, Any]]] = None
     message: str
+    # [C안 Phase 2] 구조화 문서 + 승격된 KB일 때 정렬 제안(불일치 검토 UI 데이터 소스).
+    # null이면 정렬 불필요(미승격/비구조화). has_mismatch=False면 검토 없이 확정 가능.
+    alignment: Optional[Dict[str, Any]] = None
 
 
 class ConfirmRequest(BaseModel):
@@ -570,6 +573,8 @@ class ConfirmRequest(BaseModel):
     # For crash recovery:
     kb_id: Optional[str] = None
     doc_id: Optional[str] = None
+    # [C안 Phase 2] 정렬 검토 결정(항목별 merge/map/create). 미지정이면 matched만 자동 치환.
+    alignment_decisions: Optional[Dict[str, Any]] = None
 
 
 @router.post("/preview", response_model=PreviewResponse)
@@ -578,10 +583,11 @@ async def create_preview(request: PreviewRequest):
     Returns preview_id and extracted triples for user review.
     """
     preview_id = str(uuid.uuid4())
-    
+    alignment = None  # [C안 Phase 2] 구조화+승격 KB일 때만 채워짐
+
     try:
         print(f"[Preview] Starting preview {preview_id} for doc {request.doc_id}")
-        
+
         if _is_structured_file(request.file_path):
             # ---- Structured path (Phase 1 MVP) ----
             # Same StructuredExtractor used by process_ingest_job; produces the same
@@ -604,6 +610,18 @@ async def create_preview(request: PreviewRequest):
                 embed_model=embed_model,
             )
             print(f"[Preview] Structured extraction: {result['node_count']} chunks, {result['triple_count']} triples")
+
+            # [C안 Phase 2] 승격된 KB면 기존 TBox와 정렬 제안 생성(불일치 검토용).
+            from app.core.ontology_aligner import ontology_aligner
+            tbox = ontology_aligner.load_existing_tbox(request.kb_id)
+            if tbox["classes"] or tbox["properties"]:  # 비어있지 않으면 승격됨
+                cand = ontology_aligner.candidates_from_triples(result["triples"])
+                alignment = ontology_aligner.align(
+                    cand["classes"], cand["properties"], tbox["classes"], tbox["properties"]
+                )
+                print(f"[Preview] Alignment: mismatch={alignment['has_mismatch']} "
+                      f"disjoint={alignment['disjoint']} "
+                      f"(classes new={len(alignment['classes']['new'])} similar={len(alignment['classes']['similar'])})")
         else:
             # ---- Text path (unchanged) ----
             # 1. Read file
@@ -670,13 +688,19 @@ async def create_preview(request: PreviewRequest):
 
         print(f"[Preview] Extracted {len(result['triples'])} triples, {result['node_count']} nodes")
         
+        # 구조화 문서는 필드 방향이 의미를 가지므로 auto-inverse 억제(confirm 경로 포함).
+        effective_generate_inverse = (
+            request.graph.generate_inverse_relations
+            and not _is_structured_file(request.file_path)
+        )
+
         # 4. Cache result (NO persistence yet)
         preview_cache[preview_id] = {
             "preview_id": preview_id,
             "kb_id": request.kb_id,
             "doc_id": request.doc_id,
             "graph_store": request.graph_store,
-            "generate_inverse_relations": request.graph.generate_inverse_relations,
+            "generate_inverse_relations": effective_generate_inverse,
             "nodes": result["nodes"],
             "embeddings": result["embeddings"],
             "triples": result["triples"],
@@ -686,6 +710,7 @@ async def create_preview(request: PreviewRequest):
             "normalization_suggestions": result.get("normalization_suggestions"),
             "enable_entity_normalization": request.enable_entity_normalization,
             "enable_normalization_confirmation": request.enable_normalization_confirmation,
+            "alignment": alignment,  # [C안 Phase 2] confirm 시 decisions 적용에 사용
             "stats": result.get("stats"),
         }
         
@@ -722,6 +747,7 @@ async def create_preview(request: PreviewRequest):
             triples=result["triples"],
             stats=result.get("stats"),
             message=f"Preview generated. {result['node_count']} nodes, {len(result['triples'])} triples extracted.",
+            alignment=alignment,
         )
         
     except Exception as e:
@@ -833,7 +859,8 @@ async def confirm_preview(
         job_id,
         preview_id,
         request.enable_inference,
-        request.callback_url
+        request.callback_url,
+        request.alignment_decisions,
     )
     
     return {
@@ -848,19 +875,31 @@ async def _save_preview_data(
     job_id: str,
     preview_id: str,
     enable_inference: bool,
-    callback_url: Optional[str]
+    callback_url: Optional[str],
+    alignment_decisions: Optional[Dict[str, Any]] = None,
 ):
     """Background task to save preview data"""
     try:
         jobs[job_id]["status"] = JobStatus.PROCESSING
         jobs[job_id]["updated_at"] = datetime.utcnow().isoformat()
-        
+
         cached = preview_cache.get(preview_id)
         if not cached:
             raise ValueError("Preview data not found")
-        
+
         kb_id = cached["kb_id"]
         doc_id = cached["doc_id"]
+
+        # [C안 Phase 2] 정렬 결정 적용: 후보 클래스/속성을 기존 TBox 이름으로 치환.
+        # matched(정확 일치)는 자동 치환, decisions로 merge/map/create 오버라이드.
+        # (파편화 방지 — 승격된 온톨로지에 새 문서를 정렬해 등록)
+        alignment = cached.get("alignment")
+        if alignment:
+            from app.core.ontology_aligner import ontology_aligner
+            rename_maps = ontology_aligner.build_rename_maps(alignment, alignment_decisions)
+            n = ontology_aligner.apply_rename(cached["triples"], rename_maps)
+            print(f"[Confirm] Applied alignment: {n} class/property renames "
+                  f"(classes={rename_maps['classes']}, properties={rename_maps['properties']})")
         
         # [New] Send STORING status
         await send_pipeline_status(callback_url, job_id, doc_id, kb_id, "STORING",
