@@ -61,6 +61,10 @@ export const docApi = {
             if (config.enable_entity_normalization !== undefined) {
                 formData.append('enable_entity_normalization', String(config.enable_entity_normalization));
             }
+            // Send Entity Typing parameter
+            if (config.enable_entity_typing !== undefined) {
+                formData.append('enable_entity_typing', String(config.enable_entity_typing));
+            }
             if (config.normalization_algorithm) {
                 formData.append('normalization_algorithm', config.normalization_algorithm);
             }
@@ -90,6 +94,7 @@ export const docApi = {
             if (config.enable_subject_restoration !== undefined) payload.enable_subject_restoration = config.enable_subject_restoration;
             if (config.extraction_examples_yaml) payload.extraction_examples_yaml = config.extraction_examples_yaml;
             if (config.enable_entity_normalization !== undefined) payload.enable_entity_normalization = config.enable_entity_normalization;
+            if (config.enable_entity_typing !== undefined) payload.enable_entity_typing = config.enable_entity_typing;
             if (config.normalization_algorithm) payload.normalization_algorithm = config.normalization_algorithm;
             if (config.normalization_threshold !== undefined) payload.normalization_threshold = config.normalization_threshold;
             if (config.enable_normalization_confirmation !== undefined) payload.enable_normalization_confirmation = config.enable_normalization_confirmation;

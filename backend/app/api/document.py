@@ -194,6 +194,7 @@ class TextUploadRequest(BaseModel):
     normalization_algorithm: str = "embedding"
     normalization_threshold: float = 0.85
     enable_normalization_confirmation: bool = False
+    enable_entity_typing: bool = False
 
 
 @router.post("/{kb_id}/documents/upload-text", response_model=Document)
@@ -288,6 +289,7 @@ async def upload_text_document(
         }
         final_enable_entity_normalization = False
         final_enable_normalization_confirmation = False
+        final_enable_entity_typing = False
     else:
         graph_config = {
             "extractor_type": final_config.get("extractor_type", "simple"),
@@ -298,6 +300,7 @@ async def upload_text_document(
         }
         final_enable_entity_normalization = body.enable_entity_normalization
         final_enable_normalization_confirmation = body.enable_normalization_confirmation
+        final_enable_entity_typing = body.enable_entity_typing
 
     model_configs = await _build_and_validate_upload_model_configs(
         kb=kb,
@@ -345,6 +348,7 @@ async def upload_text_document(
                 normalization_algorithm=body.normalization_algorithm,
                 normalization_threshold=body.normalization_threshold,
                 enable_normalization_confirmation=final_enable_normalization_confirmation,
+                enable_entity_typing=final_enable_entity_typing,
                 callback_url=callback_url,
                 entity_dictionary=None,
                 sampling_size=50000,
@@ -388,6 +392,7 @@ async def upload_document(
     normalization_algorithm: str = Form("embedding"),
     normalization_threshold: float = Form(0.85),
     enable_normalization_confirmation: bool = Form(False),
+    enable_entity_typing: bool = Form(False),
     entity_dictionary: str = Form(None), # Optional dictionary JSON string
 ):
     # 1. Fetch Knowledge Base
@@ -484,6 +489,7 @@ async def upload_document(
         # Non-Graph 모드에서는 entity normalization도 강제 비활성화
         final_enable_entity_normalization = False
         final_enable_normalization_confirmation = False
+        final_enable_entity_typing = False
     else:
         # Graph KB: 기존 설정 사용
         graph_config = {
@@ -496,6 +502,7 @@ async def upload_document(
         # Graph 모드에서는 파라미터로 받은 값 사용
         final_enable_entity_normalization = enable_entity_normalization
         final_enable_normalization_confirmation = enable_normalization_confirmation
+        final_enable_entity_typing = enable_entity_typing
 
     model_configs = await _build_and_validate_upload_model_configs(
         kb=kb,
@@ -559,6 +566,7 @@ async def upload_document(
                 normalization_algorithm=normalization_algorithm,
                 normalization_threshold=normalization_threshold,
                 enable_normalization_confirmation=final_enable_normalization_confirmation,
+                enable_entity_typing=final_enable_entity_typing,
                 callback_url=callback_url,
                 entity_dictionary=dict_data,
                 sampling_size=doc.max_sample_size,
