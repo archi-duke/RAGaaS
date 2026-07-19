@@ -50,6 +50,16 @@ def _is_model_configured(config: Optional[Dict[str, Any]]) -> bool:
     return any(config.get(k) for k in ("provider", "provider_id", "model", "api_key", "base_url"))
 
 
+def _is_structured_file(file_path: str) -> bool:
+    """True for .json/.yaml/.yml files -> routes to the deterministic
+    StructuredExtractor path instead of the text pipeline (see
+    docs/design-structured-json-yaml-ontology.md, Phase 1)."""
+    if not file_path:
+        return False
+    lower = file_path.lower()
+    return lower.endswith(".json") or lower.endswith(".yaml") or lower.endswith(".yml")
+
+
 class ChunkingConfig(BaseModel):
     """Chunking Configuration"""
     strategy: ChunkingStrategy = ChunkingStrategy.FIXED_SIZE
@@ -161,85 +171,110 @@ async def process_ingest_job(job_id: str, request: IngestRequest):
         jobs[job_id]["status"] = JobStatus.PROCESSING
         jobs[job_id]["updated_at"] = datetime.utcnow().isoformat()
         
-        # 1. Read file (PDF or Text)
-        from app.utils.file_utils import read_text_file
-        text = await read_text_file(request.file_path)
-        
-        if not text:
-            raise ValueError(f"Could not read content from {request.file_path}")
-        
-        print(f"[IngestJob] Read file: {len(text)} chars")
+        if _is_structured_file(request.file_path):
+            # ---- Structured path (Phase 1 MVP): deterministic field->triple mapping ----
+            # See docs/design-structured-json-yaml-ontology.md SS3/4/5/8/11/12.
+            # Skips read_text_file/restore_subjects/ingest_pipeline.process entirely.
+            # StructuredExtractor.extract() returns the SAME result shape
+            # ({nodes, embeddings, triples, node_count, triple_count, stats}) so the
+            # persistence code below (Milvus insert_chunks + Fuseki/Neo4j insert_triples)
+            # is reused unchanged for both text and structured documents.
+            if not _is_model_configured(request.embedding_model):
+                raise ValueError("Embedding model is not configured.")
 
-        # Validate required model settings before running pipeline steps.
-        if not _is_model_configured(request.embedding_model):
-            raise ValueError("Embedding model is not configured.")
-        if request.chunking.strategy == ChunkingStrategy.CONTEXT_AWARE and not _is_model_configured(request.chunk_grouping_llm):
-            raise ValueError("Chunk Grouping model is not configured for context-aware chunking.")
-        if request.graph.extractor_type != GraphExtractorType.NONE and not _is_model_configured(request.ingest_llm):
-            raise ValueError("Graph Triple Extraction model is not configured.")
-        if request.enable_subject_restoration and not _is_model_configured(request.subject_restoration_llm):
-            raise ValueError("Subject Restoration model is not configured.")
-        if request.enable_entity_normalization and request.graph.extractor_type != GraphExtractorType.NONE and not _is_model_configured(request.noun_extraction_llm):
-            raise ValueError("Noun Extraction model is not configured.")
-        
-        # 1.5 Subject Restoration (Optional)
-        if request.enable_subject_restoration:
-            from app.core.subject_restoration import restore_subjects
-            text = await restore_subjects(text, llm_config=request.subject_restoration_llm)
-            print(f"[IngestJob] Subject restoration applied: {len(text)} chars")
-        
-        jobs[job_id]["progress"] = 10
+            print(f"[IngestJob] Structured file detected: {request.file_path}")
+            from app.core.structured_extractor import StructuredExtractor
 
-        
-        # 2. Prepare configs
-        chunking_config = {
-            "chunk_size": request.chunking.chunk_size,
-            "chunk_overlap": request.chunking.chunk_overlap,
-            "window_size": request.chunking.window_size,
-            "chunk_sizes": request.chunking.chunk_sizes,
-            "buffer_size": request.chunking.buffer_size,
-            "breakpoint_threshold": request.chunking.breakpoint_threshold,
-        }
-        
-        graph_config = {
-            "max_paths_per_chunk": request.graph.max_paths_per_chunk,
-            "max_triplets_per_chunk": request.graph.max_triplets_per_chunk,
-            "num_workers": request.graph.num_workers,
-            "allowed_entity_types": request.graph.allowed_entity_types,
-            "allowed_relation_types": request.graph.allowed_relation_types,
-        }
-        
-        # 3. Process with IngestPipeline (Now handles dictionary + chunks + triples in order)
-        async def pipeline_callback(status):
-            await send_pipeline_status(request.callback_url, job_id, request.doc_id, request.kb_id, status,
-                                       progress=jobs[job_id].get("progress"))
+            embed_model = ingest_pipeline._get_embedding_model(request.embedding_model)
+            result = await StructuredExtractor().extract(
+                file_path=request.file_path,
+                kb_id=request.kb_id,
+                doc_id=request.doc_id,
+                embed_model=embed_model,
+            )
+            print(f"[IngestJob] Structured extraction: {result['node_count']} chunks, {result['triple_count']} triples")
+            jobs[job_id]["progress"] = 10
+        else:
+            # ---- Text path (unchanged) ----
+            # 1. Read file (PDF or Text)
+            from app.utils.file_utils import read_text_file
+            text = await read_text_file(request.file_path)
 
-        result = await ingest_pipeline.process(
-            text=text,
-            chunking_strategy=request.chunking.strategy,
-            chunking_config=chunking_config,
-            graph_extractor_type=request.graph.extractor_type,
-            graph_config=graph_config,
-            enable_text_cleaning=request.enable_text_cleaning,
-            extraction_examples_yaml=request.extraction_examples_yaml,
-            custom_prompt=request.custom_prompt,
-            enable_entity_normalization=request.enable_entity_normalization,
-            normalization_algorithm=request.normalization_algorithm,
-            normalization_threshold=request.normalization_threshold,
-            enable_entity_typing=request.enable_entity_typing,
-            entity_dictionary=request.entity_dictionary,
-            sampling_size=request.sampling_size,
-            kb_id=request.kb_id,  # ✅ 추가
-            doc_id=request.doc_id,  # ✅ 추가
-            job_id=job_id,
-            status_callback=pipeline_callback,
-            # Model configurations
-            ingest_llm=request.ingest_llm,
-            chunk_grouping_llm=request.chunk_grouping_llm,
-            noun_extraction_llm=request.noun_extraction_llm,
-            embedding_model=request.embedding_model
-        )
-        
+            if not text:
+                raise ValueError(f"Could not read content from {request.file_path}")
+
+            print(f"[IngestJob] Read file: {len(text)} chars")
+
+            # Validate required model settings before running pipeline steps.
+            if not _is_model_configured(request.embedding_model):
+                raise ValueError("Embedding model is not configured.")
+            if request.chunking.strategy == ChunkingStrategy.CONTEXT_AWARE and not _is_model_configured(request.chunk_grouping_llm):
+                raise ValueError("Chunk Grouping model is not configured for context-aware chunking.")
+            if request.graph.extractor_type != GraphExtractorType.NONE and not _is_model_configured(request.ingest_llm):
+                raise ValueError("Graph Triple Extraction model is not configured.")
+            if request.enable_subject_restoration and not _is_model_configured(request.subject_restoration_llm):
+                raise ValueError("Subject Restoration model is not configured.")
+            if request.enable_entity_normalization and request.graph.extractor_type != GraphExtractorType.NONE and not _is_model_configured(request.noun_extraction_llm):
+                raise ValueError("Noun Extraction model is not configured.")
+
+            # 1.5 Subject Restoration (Optional)
+            if request.enable_subject_restoration:
+                from app.core.subject_restoration import restore_subjects
+                text = await restore_subjects(text, llm_config=request.subject_restoration_llm)
+                print(f"[IngestJob] Subject restoration applied: {len(text)} chars")
+
+            jobs[job_id]["progress"] = 10
+
+
+            # 2. Prepare configs
+            chunking_config = {
+                "chunk_size": request.chunking.chunk_size,
+                "chunk_overlap": request.chunking.chunk_overlap,
+                "window_size": request.chunking.window_size,
+                "chunk_sizes": request.chunking.chunk_sizes,
+                "buffer_size": request.chunking.buffer_size,
+                "breakpoint_threshold": request.chunking.breakpoint_threshold,
+            }
+
+            graph_config = {
+                "max_paths_per_chunk": request.graph.max_paths_per_chunk,
+                "max_triplets_per_chunk": request.graph.max_triplets_per_chunk,
+                "num_workers": request.graph.num_workers,
+                "allowed_entity_types": request.graph.allowed_entity_types,
+                "allowed_relation_types": request.graph.allowed_relation_types,
+            }
+
+            # 3. Process with IngestPipeline (Now handles dictionary + chunks + triples in order)
+            async def pipeline_callback(status):
+                await send_pipeline_status(request.callback_url, job_id, request.doc_id, request.kb_id, status,
+                                           progress=jobs[job_id].get("progress"))
+
+            result = await ingest_pipeline.process(
+                text=text,
+                chunking_strategy=request.chunking.strategy,
+                chunking_config=chunking_config,
+                graph_extractor_type=request.graph.extractor_type,
+                graph_config=graph_config,
+                enable_text_cleaning=request.enable_text_cleaning,
+                extraction_examples_yaml=request.extraction_examples_yaml,
+                custom_prompt=request.custom_prompt,
+                enable_entity_normalization=request.enable_entity_normalization,
+                normalization_algorithm=request.normalization_algorithm,
+                normalization_threshold=request.normalization_threshold,
+                enable_entity_typing=request.enable_entity_typing,
+                entity_dictionary=request.entity_dictionary,
+                sampling_size=request.sampling_size,
+                kb_id=request.kb_id,  # ✅ 추가
+                doc_id=request.doc_id,  # ✅ 추가
+                job_id=job_id,
+                status_callback=pipeline_callback,
+                # Model configurations
+                ingest_llm=request.ingest_llm,
+                chunk_grouping_llm=request.chunk_grouping_llm,
+                noun_extraction_llm=request.noun_extraction_llm,
+                embedding_model=request.embedding_model
+            )
+
         if not result or jobs.get(job_id, {}).get("status") == JobStatus.CANCELLED:
             return
         
@@ -295,13 +330,21 @@ async def process_ingest_job(job_id: str, request: IngestRequest):
             await temp_storage.save_triples(request.kb_id, request.doc_id, result["triples"])
             print(f"[IngestJob] Saved {len(result['triples'])} triples to file system.")
 
+            # 구조화(JSON/YAML) 문서는 필드 방향이 의미를 가지므로 auto-inverse를 끈다.
+            # (데이터 속성 리터럴에까지 역관계가 생겨 '456 --inverse_number--> p456'
+            #  같은 잡음 트리플이 만들어지는 것을 방지)
+            effective_generate_inverse = (
+                request.graph.generate_inverse_relations
+                and not _is_structured_file(request.file_path)
+            )
+
             if request.graph_store == "fuseki":
                 print(f"[IngestJob] Saving to Fuseki for doc {request.doc_id}...")
                 await fuseki_connector.insert_triples(
                     request.kb_id,
                     request.doc_id,
                     result["triples"],
-                    generate_inverse=request.graph.generate_inverse_relations
+                    generate_inverse=effective_generate_inverse
                 )
             else:
                 # Default to Neo4j
@@ -310,7 +353,7 @@ async def process_ingest_job(job_id: str, request: IngestRequest):
                     request.kb_id,
                     request.doc_id,
                     result["triples"],
-                    generate_inverse=request.graph.generate_inverse_relations
+                    generate_inverse=effective_generate_inverse
                 )
         
         jobs[job_id]["progress"] = 100
@@ -539,68 +582,92 @@ async def create_preview(request: PreviewRequest):
     try:
         print(f"[Preview] Starting preview {preview_id} for doc {request.doc_id}")
         
-        # 1. Read file
-        from app.utils.file_utils import read_text_file
-        text = await read_text_file(request.file_path)
-        
-        if not text:
-            raise ValueError(f"Original file not found at {request.file_path}")
-        
-        print(f"[Preview] Read file: {len(text)} chars")
-        
-        # 1.5 Subject Restoration (Optional)
-        if request.enable_subject_restoration:
-            from app.core.subject_restoration import restore_subjects
-            text = await restore_subjects(text, llm_config=request.subject_restoration_llm)
-            print(f"[Preview] Subject restoration applied: {len(text)} chars")
-        
-        # 2. Prepare configs
-        chunking_config = {
-            "chunk_size": request.chunking.chunk_size,
-            "chunk_overlap": request.chunking.chunk_overlap,
-            "window_size": request.chunking.window_size,
-            "chunk_sizes": request.chunking.chunk_sizes,
-            "buffer_size": request.chunking.buffer_size,
-            "breakpoint_threshold": request.chunking.breakpoint_threshold,
-        }
-        
-        graph_config = {
-            "max_paths_per_chunk": request.graph.max_paths_per_chunk,
-            "max_triplets_per_chunk": request.graph.max_triplets_per_chunk,
-            "num_workers": request.graph.num_workers,
-            "allowed_entity_types": request.graph.allowed_entity_types,
-            "allowed_relation_types": request.graph.allowed_relation_types,
-        }
+        if _is_structured_file(request.file_path):
+            # ---- Structured path (Phase 1 MVP) ----
+            # Same StructuredExtractor used by process_ingest_job; produces the same
+            # result shape so the preview-cache/temp-storage code below (which reads
+            # result["nodes"]/["embeddings"]/["triples"]/etc.) works unchanged.
+            # NOTE (Phase 1 TODO): no alignment proposal is computed here (design SS10
+            # `alignment` preview field is Phase 2 only) -- the preview is just the
+            # deterministic extraction result, confirmed via the existing confirm flow.
+            if not _is_model_configured(request.embedding_model):
+                raise ValueError("Embedding model is not configured.")
 
-        # 3. Process with IngestPipeline (Multi-phase: Dictionary -> Chunks -> Triples)
-        async def pipeline_callback(status):
-            await send_pipeline_status(request.callback_url, preview_id, request.doc_id, request.kb_id, status)
+            print(f"[Preview] Structured file detected: {request.file_path}")
+            from app.core.structured_extractor import StructuredExtractor
 
-        result = await ingest_pipeline.process(
-            text=text,
-            chunking_strategy=request.chunking.strategy,
-            chunking_config=chunking_config,
-            graph_extractor_type=request.graph.extractor_type,
-            graph_config=graph_config,
-            enable_text_cleaning=request.enable_text_cleaning,
-            extraction_examples_yaml=request.extraction_examples_yaml,
-            custom_prompt=request.custom_prompt,
-            enable_entity_normalization=request.enable_entity_normalization,
-            normalization_algorithm=request.normalization_algorithm,
-            normalization_threshold=request.normalization_threshold,
-            enable_entity_typing=request.enable_entity_typing,
-            entity_dictionary=request.entity_dictionary,
-            sampling_size=request.sampling_size,
-            kb_id=request.kb_id,  # ✅ 추가
-            doc_id=request.doc_id,  # ✅ 추가
-            status_callback=pipeline_callback,
-            # Model configurations
-            ingest_llm=request.ingest_llm,
-            chunk_grouping_llm=request.chunk_grouping_llm,
-            noun_extraction_llm=request.noun_extraction_llm,
-            embedding_model=request.embedding_model
-        )
-        
+            embed_model = ingest_pipeline._get_embedding_model(request.embedding_model)
+            result = await StructuredExtractor().extract(
+                file_path=request.file_path,
+                kb_id=request.kb_id,
+                doc_id=request.doc_id,
+                embed_model=embed_model,
+            )
+            print(f"[Preview] Structured extraction: {result['node_count']} chunks, {result['triple_count']} triples")
+        else:
+            # ---- Text path (unchanged) ----
+            # 1. Read file
+            from app.utils.file_utils import read_text_file
+            text = await read_text_file(request.file_path)
+
+            if not text:
+                raise ValueError(f"Original file not found at {request.file_path}")
+
+            print(f"[Preview] Read file: {len(text)} chars")
+
+            # 1.5 Subject Restoration (Optional)
+            if request.enable_subject_restoration:
+                from app.core.subject_restoration import restore_subjects
+                text = await restore_subjects(text, llm_config=request.subject_restoration_llm)
+                print(f"[Preview] Subject restoration applied: {len(text)} chars")
+
+            # 2. Prepare configs
+            chunking_config = {
+                "chunk_size": request.chunking.chunk_size,
+                "chunk_overlap": request.chunking.chunk_overlap,
+                "window_size": request.chunking.window_size,
+                "chunk_sizes": request.chunking.chunk_sizes,
+                "buffer_size": request.chunking.buffer_size,
+                "breakpoint_threshold": request.chunking.breakpoint_threshold,
+            }
+
+            graph_config = {
+                "max_paths_per_chunk": request.graph.max_paths_per_chunk,
+                "max_triplets_per_chunk": request.graph.max_triplets_per_chunk,
+                "num_workers": request.graph.num_workers,
+                "allowed_entity_types": request.graph.allowed_entity_types,
+                "allowed_relation_types": request.graph.allowed_relation_types,
+            }
+
+            # 3. Process with IngestPipeline (Multi-phase: Dictionary -> Chunks -> Triples)
+            async def pipeline_callback(status):
+                await send_pipeline_status(request.callback_url, preview_id, request.doc_id, request.kb_id, status)
+
+            result = await ingest_pipeline.process(
+                text=text,
+                chunking_strategy=request.chunking.strategy,
+                chunking_config=chunking_config,
+                graph_extractor_type=request.graph.extractor_type,
+                graph_config=graph_config,
+                enable_text_cleaning=request.enable_text_cleaning,
+                extraction_examples_yaml=request.extraction_examples_yaml,
+                custom_prompt=request.custom_prompt,
+                enable_entity_normalization=request.enable_entity_normalization,
+                normalization_algorithm=request.normalization_algorithm,
+                normalization_threshold=request.normalization_threshold,
+                enable_entity_typing=request.enable_entity_typing,
+                entity_dictionary=request.entity_dictionary,
+                sampling_size=request.sampling_size,
+                kb_id=request.kb_id,  # ✅ 추가
+                doc_id=request.doc_id,  # ✅ 추가
+                status_callback=pipeline_callback,
+                # Model configurations
+                ingest_llm=request.ingest_llm,
+                chunk_grouping_llm=request.chunk_grouping_llm,
+                noun_extraction_llm=request.noun_extraction_llm,
+                embedding_model=request.embedding_model
+            )
+
         print(f"[Preview] Extracted {len(result['triples'])} triples, {result['node_count']} nodes")
         
         # 4. Cache result (NO persistence yet)
