@@ -60,6 +60,21 @@ def _is_structured_file(file_path: str) -> bool:
     return lower.endswith(".json") or lower.endswith(".yaml") or lower.endswith(".yml")
 
 
+async def _apply_entity_resolution(result: Dict[str, Any], kb_id: str, graph_store: str, log_prefix: str) -> int:
+    """구조화 문서의 새 엔티티를 기존 KB 인스턴스와 label로 병합(C안 엔티티 동일성).
+    실패해도 인제스트를 막지 않는다."""
+    try:
+        from app.core.entity_resolver import entity_resolver
+        idx = await entity_resolver.existing_label_index(kb_id, graph_store)
+        merged = entity_resolver.apply_resolution(result["triples"], idx)
+        if merged:
+            print(f"[{log_prefix}] Entity resolution: merged {merged} entities into existing KB instances")
+        return merged
+    except Exception as e:
+        print(f"[{log_prefix}] Entity resolution skipped: {e}")
+        return 0
+
+
 class ChunkingConfig(BaseModel):
     """Chunking Configuration"""
     strategy: ChunkingStrategy = ChunkingStrategy.FIXED_SIZE
@@ -193,6 +208,7 @@ async def process_ingest_job(job_id: str, request: IngestRequest):
                 embed_model=embed_model,
             )
             print(f"[IngestJob] Structured extraction: {result['node_count']} chunks, {result['triple_count']} triples")
+            await _apply_entity_resolution(result, request.kb_id, request.graph_store, "IngestJob")
             jobs[job_id]["progress"] = 10
         else:
             # ---- Text path (unchanged) ----
@@ -610,6 +626,7 @@ async def create_preview(request: PreviewRequest):
                 embed_model=embed_model,
             )
             print(f"[Preview] Structured extraction: {result['node_count']} chunks, {result['triple_count']} triples")
+            await _apply_entity_resolution(result, request.kb_id, request.graph_store, "Preview")
 
             # [C안 Phase 2] 승격된 KB면 기존 TBox와 정렬 제안 생성(불일치 검토용).
             from app.core.ontology_aligner import ontology_aligner
