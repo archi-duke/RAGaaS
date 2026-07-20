@@ -135,6 +135,32 @@ async def save_pipeline_config(kb_id: str, config: dict = Body(...)):
     await kb.save()
     return {"ok": True, "pipeline_config": kb.pipeline_config}
 
+@router.post("/{kb_id}/register-schema")
+async def register_schema(kb_id: str, payload: dict = Body(...)):
+    """JSON Schema를 KB 온톨로지 TBox로 등록한다 (C안 Phase 3, §7/§9 TBox 진화).
+
+    programmatic/테스트용 명시적 엔드포인트. 업로드 경로(document.py의
+    upload_document)가 .json/.yaml 업로드 시 JSON Schema를 감지하면 자동으로
+    동일한 register_schema_tbox 헬퍼를 호출하지만, 이 엔드포인트는 파일 업로드
+    없이 스키마 dict를 직접 등록하고 싶을 때 사용한다.
+    """
+    kb = await KBModel.get(kb_id)
+    if kb is None:
+        raise HTTPException(status_code=404, detail="Knowledge Base not found")
+
+    schema = payload.get("schema")
+    if not isinstance(schema, dict):
+        raise HTTPException(status_code=400, detail="'schema' must be a JSON Schema object")
+
+    from app.api.document import register_schema_tbox
+
+    try:
+        summary = await register_schema_tbox(kb, schema)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to register schema TBox: {e}")
+
+    return summary
+
 @router.post("/{kb_id}/promote")
 async def promote_knowledge_base(
     kb_id: str, 
