@@ -480,20 +480,19 @@ class Neo4jBackend(GraphBackend):
                 }
 
             # [FIX] 쿼리 결과에서 깨끗한 체인 트리플을 직접 추출(Fuseki와 동일 전략).
-            # 멀티홉 관계 체인에서, 발견 엔티티 전체를 broad 재조회하면 노이즈가 답변을
-            # 오염시킨다. LLM 쿼리 결과 record가 곧 정답 경로이므로 이를 우선 사용한다.
+            # LLM 쿼리 결과 record가 곧 정답 경로다.
             result_triples = self._extract_triples_from_records(records)
-            if result_triples:
-                log_trace(f"[Neo4j] Extracted {len(result_triples)} triples directly from query result")
 
-            # Fetch triples from graph (broad — chunk 매핑 및 보조 컨텍스트용)
+            # broad 조회는 청크 매핑(evidence)용으로만 사용하고, 트리플은 버린다.
+            # (발견 엔티티 전체를 훑으면 무관 트리플 30여 개가 답변을 오염시킴)
             fetched_triples, chunk_ids = self._fetch_triples_from_graph(kb_id, entities, list(discovered_entities), trace_logs)
 
-            # 정답 경로(result_triples)를 앞에 두고 보조 트리플을 뒤에 dedup 병합.
             if result_triples:
-                seen_rt = {(t["subject"], t["predicate"], t["object"]) for t in result_triples}
-                triples = result_triples + [t for t in fetched_triples if (t["subject"], t["predicate"], t["object"]) not in seen_rt]
+                log_trace(f"[Neo4j] Using {len(result_triples)} clean triples from query result "
+                          f"(broad {len(fetched_triples)} triples used only for chunk mapping, not answer)")
+                triples = result_triples  # 정답 경로만 — broad 노이즈 제외
             else:
+                # 쿼리 결과에서 트리플을 못 뽑은 경우에만 broad 트리플로 폴백
                 triples = fetched_triples
 
             # [Query Generation Loop] Store successful, relevant examples for future few-shot use.
