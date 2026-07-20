@@ -470,8 +470,22 @@ class Neo4jBackend(GraphBackend):
                     "trace_logs": trace_logs
                 }
 
-            # Fetch triples from graph
-            triples, chunk_ids = self._fetch_triples_from_graph(kb_id, entities, list(discovered_entities), trace_logs)
+            # [FIX] 쿼리 결과에서 깨끗한 체인 트리플을 직접 추출(Fuseki와 동일 전략).
+            # 멀티홉 관계 체인에서, 발견 엔티티 전체를 broad 재조회하면 노이즈가 답변을
+            # 오염시킨다. LLM 쿼리 결과 record가 곧 정답 경로이므로 이를 우선 사용한다.
+            result_triples = self._extract_triples_from_records(records)
+            if result_triples:
+                log_trace(f"[Neo4j] Extracted {len(result_triples)} triples directly from query result")
+
+            # Fetch triples from graph (broad — chunk 매핑 및 보조 컨텍스트용)
+            fetched_triples, chunk_ids = self._fetch_triples_from_graph(kb_id, entities, list(discovered_entities), trace_logs)
+
+            # 정답 경로(result_triples)를 앞에 두고 보조 트리플을 뒤에 dedup 병합.
+            if result_triples:
+                seen_rt = {(t["subject"], t["predicate"], t["object"]) for t in result_triples}
+                triples = result_triples + [t for t in fetched_triples if (t["subject"], t["predicate"], t["object"]) not in seen_rt]
+            else:
+                triples = fetched_triples
 
             # [Query Generation Loop] Store successful, relevant examples for future few-shot use.
             # This gate only controls what gets persisted to ExampleMemory -- it must never filter
@@ -596,6 +610,51 @@ class Neo4jBackend(GraphBackend):
             return records[0]["count"] > 0 if records else False
         except Exception:
             return False
+
+    def _extract_triples_from_records(self, records: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+        """LLM Cypher 쿼리 결과 record에서 정답 경로 트리플을 직접 재구성한다.
+
+        관계-체인 템플릿의 RETURN 컬럼 관례(start/rel1/mid/rel2/end 및 generic
+        subject/predicate/object)를 인식해 s-p-o 트리플로 변환한다. Fuseki의
+        '쿼리 결과에서 트리플 직접 추출'과 동일한 목적.
+        """
+        triples: List[Dict[str, str]] = []
+        seen = set()
+
+        def add(s, p, o):
+            if not (isinstance(s, str) and isinstance(p, str) and isinstance(o, str)):
+                return
+            s, p, o = s.strip(), p.strip(), o.strip()
+            if not (s and p and o):
+                return
+            key = (s, p, o)
+            if key in seen:
+                return
+            seen.add(key)
+            triples.append({"subject": s, "predicate": p, "object": o,
+                            "is_inverse": False, "source_node_id": None})
+
+        for r in records or []:
+            # neo4j.Record → dict 정규화 (execute_query는 neo4j.Record를 반환)
+            try:
+                r = dict(r)
+            except Exception:
+                continue
+            # 의미 라벨 2-hop 컬럼(s1/p1/o1, s2/p2/o2) — predicate가 질문 관계로 relabel됨
+            if r.get("s1") and r.get("p1") and r.get("o1"):
+                add(r.get("s1"), r.get("p1"), r.get("o1"))
+            if r.get("s2") and r.get("p2") and r.get("o2"):
+                add(r.get("s2"), r.get("p2"), r.get("o2"))
+            # 2-hop 체인 컬럼: start -[rel1]-> mid -[rel2]-> end
+            if r.get("start") and r.get("rel1") and r.get("mid"):
+                add(r.get("start"), r.get("rel1"), r.get("mid"))
+            if r.get("mid") and r.get("rel2") and r.get("end"):
+                add(r.get("mid"), r.get("rel2"), r.get("end"))
+            # 1-hop / generic s-p-o 컬럼
+            if r.get("subject") and r.get("predicate") and r.get("object"):
+                add(r.get("subject"), r.get("predicate"), r.get("object"))
+
+        return triples
 
     def _fetch_triples_from_graph(self, kb_id: str, input_entities: List[str], discovered_entities: List[str], trace_logs: List[str] = None) -> Tuple[List[Dict[str, str]], List[str]]:
         """Fetch related triples from the graph (with source_node_id)."""

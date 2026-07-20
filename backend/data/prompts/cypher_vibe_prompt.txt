@@ -18,7 +18,8 @@ Your task is to convert natural language questions into Cypher queries by follow
   - `entity_type`: Type/Class of the entity.
 - **Relationships**: 
   - Often stored in **Korean**. Always use backticks for non-English types (e.g., -[:`스승`]->).
-  - Use direction-agnostic matching like `(a)-[:REL]-(b)` unless direction is certain.
+  - Direction-agnostic matching `(a)-[:REL]-(b)` is OK for a **single fact lookup**.
+  - For **RELATION_CHAIN (multi-hop)** you MUST use directional arrows — see "Direction & Inverse Handling".
 
 ---
 
@@ -48,9 +49,10 @@ Your task is to convert natural language questions into Cypher queries by follow
 
 ## Cypher Generation Rules
 
-1. **Relation Matching**: 
-   - Use underscores or backticks for relationship types. 
-   - **Prefer Undirected**: `(a)-[:REL]-(b)` is safer than `(a)-[:REL]->(b)`.
+1. **Relation Matching**:
+   - Use underscores or backticks for relationship types.
+   - **Single fact lookup**: undirected `(a)-[:REL]-(b)` is acceptable.
+   - **RELATION_CHAIN (multi-hop)**: MUST be directional (`->`/`<-`), one relation type per hop. See "Direction & Inverse Handling".
 2. **Entity Matching**:
    - Use `WHERE n.name CONTAINS '...'` for flexibility if exact match might fail.
    - For exact match: `MATCH (n:Entity {name: 'Name'})`.
@@ -82,20 +84,47 @@ RETURN s.name AS subject, "is_a" AS predicate, "{{TYPE}}" AS object
 LIMIT 50
 ```
 
-### T3. RELATION_CHAIN_1HOP (단일 관계 탐색)
+### T3. RELATION_CHAIN_1HOP (단일 관계 탐색 — DIRECTIONAL)
 ```cypher
-MATCH (s:Entity {name: "{{START_LABEL}}"})-[r:{{REL}}|{{INVERSE_REL}}]-(o:Entity)
+MATCH (s:Entity {name: "{{START_LABEL}}"})-[r:{{FORWARD_REL}}]->(o:Entity)
 RETURN s.name AS subject, type(r) AS predicate, o.name AS object
 ```
+- Use a **directional arrow** and a **single** relation type (`{{FORWARD_REL}}`), NOT undirected `|`-alternation.
+- Choose the arrow/relation from the "Direction & Inverse Handling" rules below (e.g. "A의 스승" → `(s)-[r:`제자`]->(o)`).
 
-### T4. RELATION_CHAIN_2HOP (2단계 관계 탐색)
+### T4. RELATION_CHAIN_2HOP (2단계 관계 탐색 — DIRECTIONAL + 의미 라벨)
 ```cypher
-MATCH (s:Entity {name: "{{START_LABEL}}"})-[r1:{{REL1}}|{{INVERSE_REL1}}]-(m:Entity)-[r2:{{REL2}}|{{INVERSE_REL2}}]-(o:Entity)
+MATCH (s:Entity {name: "{{START_LABEL}}"})-[r1:{{FORWARD_REL}}]->(m:Entity)-[r2:{{FORWARD_REL}}]->(o:Entity)
 WHERE s <> o
-RETURN s.name AS start, type(r1) AS rel1, m.name AS mid, type(r2) AS rel2, o.name AS end,
-       m.name AS subject, type(r2) AS predicate, o.name AS object
+RETURN s.name AS s1, "{{ASK_REL}}" AS p1, m.name AS o1,
+       m.name AS s2, "{{ASK_REL}}" AS p2, o.name AS o2
 ```
-**CRITICAL**: Always define relationship variables (r1, r2) in MATCH if you use type(r1), type(r2) in RETURN.
+**CRITICAL**:
+- Use **directional arrows** (`->` or `<-`) and repeat the SAME directional hop. Do NOT use undirected `-[..]-` or `{{REL}}|{{INVERSE_REL}}` alternation — that walks mirror edges in both directions and returns the start node / noise.
+- **Relabel the predicate to the relation the QUESTION asks (`{{ASK_REL}}`)** using a string literal (`"스승" AS p1`), NOT the raw stored type. This mirrors the semantic direction so the answer reads "subject의 {{ASK_REL}}은 object" correctly. (e.g. for "A의 스승의 스승" the DB edge is `제자` but you traverse `-[:제자]->` and label the output predicate as `"스승"`.)
+- Return BOTH hops: `(s1,p1,o1)` = first hop, `(s2,p2,o2)` = second hop.
+
+---
+
+## Direction & Inverse Handling (CRITICAL for RELATION_CHAIN)
+
+Relationships are **directional**, and inverse edges are **auto-materialized** (every `제자` edge has a mirror `스승` edge, and vice versa):
+- `제자` (disciple) points **student → master**:  `(student)-[:`제자`]->(master)`
+- `스승` (teacher) points **master → student**:  `(master)-[:`스승`]->(student)`
+- They are mirrors of the same fact:  `(A)-[:`제자`]->(B)`  ⟺  `(B)-[:`스승`]->(A)`.
+
+To find **"A의 스승" (A's teacher/master)** — traverse TOWARD the master — use ONE directional form:
+- `(A)-[:`제자`]->(teacher)`   ← follow `제자` forward   (preferred; original edges)
+- `(A)<-[:`스승`]-(teacher)`   ← follow `스승` backward  (equivalent, via mirror)
+
+To find **"A의 제자" (A's student)** — traverse the other way:
+- `(A)-[:`스승`]->(student)`   or   `(A)<-[:`제자`]-(student)`
+
+**Multi-hop** just repeats the same directional hop:
+- "A의 스승의 스승" = `(A)-[:`제자`]->(m)-[:`제자`]->(o)`   (or `(A)<-[:`스승`]-(m)<-[:`스승`]-(o)`)
+
+❌ NEVER for relation chains: `-[:`스승`|`제자`]-` (undirected + mixed types → bounces across mirrors, returns A itself / noise).
+✅ ALWAYS: pick one relation + one arrow direction and repeat it.
 
 ---
 
@@ -130,13 +159,13 @@ You MUST respond with exactly ONE JSON object.
   "intent": "RELATION_CHAIN",
   "entities": ["성기훈"],
   "relations": ["스승"],
-  "cypher": "MATCH (s:Entity {name: '성기훈'})-[r]-(o:Entity) WHERE type(r) = '스승' OR type(r) = '제자' RETURN s.name AS subject, type(r) AS predicate, o.name AS object"
+  "cypher": "MATCH (s:Entity {name: '성기훈'})-[r:`제자`]->(o:Entity) RETURN s.name AS subject, type(r) AS predicate, o.name AS object"
 }
 ```
 
 ---
 
-## Example
+## Example A — 1-hop (A의 스승, DIRECTIONAL)
 
 ### Question
 > 성기훈의 스승은 누구야?
@@ -144,10 +173,26 @@ You MUST respond with exactly ONE JSON object.
 ### Expected Output
 ```json
 {
-  "thought": "Finding the teacher of Seong Gi-hun. Relation is likely '스승' or inverse '제자'.",
+  "thought": "A's teacher = traverse toward master. Follow `제자` forward: (성기훈)-[:제자]->(teacher). Directional, single type, no undirected alternation.",
   "intent": "RELATION_CHAIN",
   "entities": ["성기훈"],
-  "relations": ["스승", "제자"],
-  "cypher": "MATCH (s:Entity {name: '성기훈'})-[r]-(o:Entity) WHERE type(r) IN ['스승', '제자', 'hasTeacher', 'student_of'] RETURN s.name AS subject, type(r) AS predicate, o.name AS object"
+  "relations": ["스승"],
+  "cypher": "MATCH (s:Entity {name: '성기훈'})-[r:`제자`]->(o:Entity) RETURN s.name AS subject, type(r) AS predicate, o.name AS object"
+}
+```
+
+## Example B — 2-hop (A의 스승의 스승, DIRECTIONAL)
+
+### Question
+> 성기훈의 스승의 스승은?
+
+### Expected Output
+```json
+{
+  "thought": "2-hop teacher chain. '스승' toward master = follow `제자` forward, repeated: (성기훈)-[:제자]->(m)-[:제자]->(o). Relabel output predicate to the asked relation '스승' so it reads '성기훈의 스승은 오일남, 오일남의 스승은 Duke'. NEVER undirected `스승|제자`.",
+  "intent": "RELATION_CHAIN",
+  "entities": ["성기훈"],
+  "relations": ["스승", "스승"],
+  "cypher": "MATCH (s:Entity {name: '성기훈'})-[r1:`제자`]->(m:Entity)-[r2:`제자`]->(o:Entity) WHERE s <> o RETURN s.name AS s1, '스승' AS p1, m.name AS o1, m.name AS s2, '스승' AS p2, o.name AS o2"
 }
 ```
