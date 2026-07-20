@@ -647,13 +647,18 @@ class FusekiBackend(GraphBackend):
                 resolved_uris = []  # Entity-Centric 블록을 건너뛰어도 이후 참조가 안전하도록 기본값 보장
                 entity_centric_enabled = kwargs.get("enable_entity_centric_schema", True)  # 기본 활성화
                 
-                # [OPTION 3] Multi-hop Pattern Detection - Skip Fast Path if multi-hop detected
+                # [FIX] 관계 질의('A의 B') 감지 - Fast Path는 asked 관계로 필터하지 않고
+                # 엔티티 주변의 임의 트리플(별칭/영어제목/inverse 등)을 긁어 노이즈를 만든다.
+                # 반면 LLM SPARQL 경로(T4/T5 관계-체인 템플릿)는 asked 관계로 정밀 탐색한다.
+                # 따라서 1-hop이든 2-hop이든 '의'가 든 관계 질의는 Fast Path를 건너뛰고
+                # LLM 경로로 위임한다. (fact lookup 'A는 누구야?'는 '의'가 없어 Fast Path 유지)
                 is_multihop_pattern = False
                 if query_text and "의" in query_text:
                     count_ui = query_text.count("의")
-                    if count_ui >= 2:
+                    if count_ui >= 1:
                         is_multihop_pattern = True
-                        log_trace(f"[Fuseki] 🔄 Multi-hop pattern detected (의 x{count_ui}). Skipping Fast Path, delegating to LLM.")
+                        hop = "Multi-hop" if count_ui >= 2 else "1-hop relation"
+                        log_trace(f"[Fuseki] 🔄 {hop} pattern detected (의 x{count_ui}). Skipping Fast Path, delegating to LLM for precise relation query.")
                 
                 if entity_centric_enabled and query_text and not is_multihop_pattern:
                     log_trace("[Fuseki] Entity-Centric Schema: ENABLED")
