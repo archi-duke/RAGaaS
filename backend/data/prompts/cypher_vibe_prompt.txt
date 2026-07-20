@@ -84,13 +84,14 @@ RETURN s.name AS subject, "is_a" AS predicate, "{{TYPE}}" AS object
 LIMIT 50
 ```
 
-### T3. RELATION_CHAIN_1HOP (단일 관계 탐색 — DIRECTIONAL)
+### T3. RELATION_CHAIN_1HOP (단일 관계 탐색 — DIRECTIONAL + 의미 라벨)
 ```cypher
 MATCH (s:Entity {name: "{{START_LABEL}}"})-[r:{{FORWARD_REL}}]->(o:Entity)
-RETURN s.name AS subject, type(r) AS predicate, o.name AS object
+RETURN s.name AS subject, "{{ASK_REL}}" AS predicate, o.name AS object
 ```
 - Use a **directional arrow** and a **single** relation type (`{{FORWARD_REL}}`), NOT undirected `|`-alternation.
 - Choose the arrow/relation from the "Direction & Inverse Handling" rules below (e.g. "A의 스승" → `(s)-[r:`제자`]->(o)`).
+- **Relabel the output predicate to the asked relation (`{{ASK_REL}}`)** with a string literal so it reads "subject의 {{ASK_REL}}은 object" (e.g. `"스승" AS predicate` → "성기훈의 스승은 오일남").
 
 ### T4. RELATION_CHAIN_2HOP (2단계 관계 탐색 — DIRECTIONAL + 의미 라벨)
 ```cypher
@@ -173,11 +174,11 @@ You MUST respond with exactly ONE JSON object.
 ### Expected Output
 ```json
 {
-  "thought": "A's teacher = traverse toward master. Follow `제자` forward: (성기훈)-[:제자]->(teacher). Directional, single type, no undirected alternation.",
+  "thought": "A's teacher = traverse toward master. Follow `제자` forward: (성기훈)-[:제자]->(teacher). Relabel output predicate to asked relation '스승' so it reads '성기훈의 스승은 오일남'. Directional, single type, no undirected alternation.",
   "intent": "RELATION_CHAIN",
   "entities": ["성기훈"],
   "relations": ["스승"],
-  "cypher": "MATCH (s:Entity {name: '성기훈'})-[r:`제자`]->(o:Entity) RETURN s.name AS subject, type(r) AS predicate, o.name AS object"
+  "cypher": "MATCH (s:Entity {name: '성기훈'})-[r:`제자`]->(o:Entity) RETURN s.name AS subject, '스승' AS predicate, o.name AS object"
 }
 ```
 

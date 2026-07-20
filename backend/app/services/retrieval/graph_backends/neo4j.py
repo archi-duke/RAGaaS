@@ -47,6 +47,15 @@ class Neo4jBackend(GraphBackend):
                 if count_ui >= 2:
                     is_multihop_pattern = True
                     log_trace(f"[Neo4j] 🔄 Multi-hop pattern detected (의 x{count_ui}). Skipping Fast Path, delegating to LLM.")
+
+            # [FIX] 역관계-취약 관계(스승↔제자 등)는 방향/역관계가 모호해 Fast Path가
+            # 미러 엣지를 반대로 읽는다. 이런 1-hop도 Fast Path를 건너뛰고, 방향성+의미
+            # relabel이 적용되는 LLM 경로로 위임한다(2-hop과 동일 처리).
+            INVERSE_PRONE_RELS = ("스승", "제자", "사부", "사조", "부모", "자녀",
+                                  "선생", "학생", "상사", "부하", "선배", "후배")
+            if not is_multihop_pattern and query_text and any(r in query_text for r in INVERSE_PRONE_RELS):
+                is_multihop_pattern = True
+                log_trace("[Neo4j] Inverse-prone relation in query. Skipping Fast Path, delegating to LLM (directional + relabel).")
             
             # 1. Extract entities from question (with Josa stripping) - Skip if multi-hop
             if not is_multihop_pattern:
