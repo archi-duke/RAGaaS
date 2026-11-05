@@ -47,8 +47,8 @@ go run . -dev -port 5599 -dev-origin http://localhost:3000   # 허용 origin 변
 ```
 `-dev` 는 `/launcher/health`(token `dev`)·`/launcher/capabilities` 스텁을 제공해 런처 없이 업로드 화면 전체 흐름을
 검증할 수 있다(포트 생략 시 5601). 같은 PC 에서 GoJIRA 런처가 5599 를 쓰고 있으면 런처를 끄고 실행한다.
-vite dev 서버는 `REACT_APP_*` 를 `import.meta.env` 로 노출하지 않으므로(envPrefix 미설정) 프론트 쪽 주소 변경보다
-변환기를 5599 로 띄우는 편이 간단하다. 컨테이너 배포는 `REACT_APP_LAUNCHER_BASE` → `env.js` 로 주입된다.
+다른 주소를 쓰려면 `frontend/.env.local` 에 `REACT_APP_LAUNCHER_BASE=http://127.0.0.1:5601` 처럼 지정한다
+(vite `envPrefix` 에 `REACT_APP_` 포함). 컨테이너 배포는 `REACT_APP_LAUNCHER_BASE` → `env.js` 로 주입된다.
 
 ## DRM 사전 검증 (회사 PC 에서 1회)
 
