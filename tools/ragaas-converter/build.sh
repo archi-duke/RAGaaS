@@ -8,7 +8,14 @@
 set -euo pipefail
 
 cd "$(dirname "$0")"
-VERSION=$(python -c "import json;print(json.load(open('service.json'))['version'])")
+
+# python3 우선 — macOS·최신 리눅스에는 `python` 이 없다(Windows 는 둘 다 있을 수 있음).
+PY=$(command -v python3 || command -v python) || {
+  echo "python3(또는 python)이 필요합니다" >&2
+  exit 1
+}
+
+VERSION=$("$PY" -c "import json;print(json.load(open('service.json'))['version'])")
 NAME=ragaas-converter
 OUT=dist
 PKG="$NAME-$VERSION-windows-amd64"
@@ -20,7 +27,7 @@ rm -rf "$OUT/$PKG" && mkdir -p "$OUT/$PKG"
 CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o "$OUT/$PKG/$NAME.exe" .
 cp service.json "$OUT/$PKG/"
 
-python - "$OUT" "$PKG" <<'EOF'
+"$PY" - "$OUT" "$PKG" <<'EOF'
 import hashlib, os, sys, zipfile
 out, pkg = sys.argv[1], sys.argv[2]
 zpath = os.path.join(out, pkg + ".zip")
