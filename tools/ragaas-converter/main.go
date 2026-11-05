@@ -64,7 +64,7 @@ func serviceVersion() string {
 func loadConfig(args []string) (*Config, bool, error) {
 	fs := flag.NewFlagSet(serviceName, flag.ContinueOnError)
 	dev := fs.Bool("dev", false, "개발 모드: 브라우저 직접 호출 허용(CORS) + /launcher/* 스텁")
-	devOrigin := fs.String("dev-origin", "http://localhost:5173", "개발 모드에서 허용할 웹 origin (쉼표 구분)")
+	devOrigin := fs.String("dev-origin", "http://localhost:3002,http://localhost:5173", "개발 모드에서 허용할 웹 origin (쉼표 구분)")
 	port := fs.Int("port", 0, "listen 포트 (기본: SVC_PORT, 개발 모드는 5601)")
 	showVersion := fs.Bool("version", false, "버전 출력")
 	if err := fs.Parse(args); err != nil {
