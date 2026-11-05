@@ -6,6 +6,9 @@ import PromptDialog from './PromptDialog';
 import GraphExtractionSettings from './GraphExtractionSettings';
 import ModelSelector, { DEFAULT_LLM_CONFIG } from './ModelSelector';
 import { useModelSettings } from '../hooks/useModelSettings';
+import {
+    LocalConvertError, type LocalFormat, convertLocally, describeLocalConvertError, isDrmFile, localFormatOf,
+} from '../services/localConverter';
 
 interface UploadDocumentModalProps {
     isOpen: boolean;
@@ -53,6 +56,9 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
     const [textTitle, setTextTitle] = useState('');
     const [textContent, setTextContent] = useState('');
     const [isUploading, setIsUploading] = useState(false);
+    const [progressLabel, setProgressLabel] = useState('');
+    // docx/pptx 는 로컬 런처(ragaas-converter)로 텍스트 변환 후 upload-text 로 등록한다.
+    const [localInfo, setLocalInfo] = useState<{ format: LocalFormat; drm: boolean } | null>(null);
     const [kbConfig, setKbConfig] = useState<any>(null);
 
     const [showExampleModal, setShowExampleModal] = useState(false);
@@ -106,6 +112,8 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
     useEffect(() => {
         if (isOpen) {
             setFile(null);
+            setLocalInfo(null);
+            setProgressLabel('');
             setTextTitle('');
             setTextContent('');
             setInputTab('file');
@@ -134,8 +142,12 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
 
     if (!isOpen) return null;
 
-    const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        if (e.target.files && e.target.files[0]) setFile(e.target.files[0]);
+    const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const f = e.target.files && e.target.files[0];
+        if (!f) return;
+        setFile(f);
+        const format = localFormatOf(f.name);
+        setLocalInfo(format ? { format, drm: await isDrmFile(f).catch(() => false) } : null);
     };
 
     const isFileReady = inputTab === 'file' ? !!file : (textTitle.trim().length > 0 && textContent.trim().length > 0);
@@ -174,18 +186,37 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                 noun_extraction_llm_provider_id: settings.noun_extraction_llm.provider_id,
             };
 
-            if (inputTab === 'file') {
+            if (inputTab === 'file' && localInfo) {
+                // DRM 여부와 무관하게 docx/pptx 는 서버 파서가 없으므로 로컬 Office 로 변환한다.
+                setProgressLabel(localInfo.drm ? 'Converting DRM document locally...' : 'Converting locally...');
+                const converted = await convertLocally(file!, localInfo.format);
+                if (!converted.text.trim()) {
+                    throw new LocalConvertError('convert_failed', '문서에서 추출된 텍스트가 없습니다.');
+                }
+                setProgressLabel('Uploading...');
+                await docApi.uploadText(kbId, file!.name, converted.text, config, {
+                    filename: file!.name, format: localInfo.format, drm: converted.drm, convertedBy: 'ragaas-converter',
+                });
+            } else if (inputTab === 'file') {
                 await docApi.upload(kbId, file!, config);
             } else {
                 await docApi.uploadText(kbId, textTitle.trim(), textContent, config);
             }
             onUploadComplete();
             onClose();
-        } catch (err) {
+        } catch (err: unknown) {
             console.error(err);
-            setMessageDialog({ isOpen: true, title: 'Upload Failed', message: 'An error occurred while uploading. Please try again.', type: 'error' });
+            let message = 'An error occurred while uploading. Please try again.';
+            const serverMsg = (err as { response?: { data?: { detail?: { message?: string } } } })?.response?.data?.detail?.message;
+            if (err instanceof LocalConvertError) {
+                message = describeLocalConvertError(err);
+            } else if (serverMsg) {
+                message = serverMsg;
+            }
+            setMessageDialog({ isOpen: true, title: 'Upload Failed', message, type: 'error' });
         } finally {
             setIsUploading(false);
+            setProgressLabel('');
         }
     };
 
@@ -224,7 +255,7 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                                 onClick={handleUpload}
                                 disabled={!isFileReady || isUploading}
                             >
-                                {isUploading ? 'Uploading...' : 'Process Document'}
+                                {isUploading ? (progressLabel || 'Uploading...') : 'Process Document'}
                             </button>
                             <button className="btn" onClick={onClose} disabled={isUploading}>Cancel</button>
                         </div>
@@ -255,17 +286,24 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                                 >
                                     <input
                                         type="file" ref={fileInputRef} style={{ display: 'none' }}
-                                        onChange={handleFileChange} accept=".txt,.pdf,.md"
+                                        onChange={handleFileChange} accept=".txt,.pdf,.md,.docx,.pptx"
                                     />
                                     {file ? (
                                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', color: 'var(--primary)' }}>
                                             <FileText size={24} />
                                             <span style={{ fontWeight: 500 }}>{file.name}</span>
                                         </div>
-                                    ) : (
+                                    ) : null}
+                                    {file && localInfo ? (
+                                        <p id="local-convert-note" style={{ margin: '0.5rem 0 0', fontSize: '0.78rem', color: '#64748b' }}>
+                                            {localInfo.drm ? 'DRM-protected document — ' : ''}
+                                            will be converted to text on this PC (local launcher + Microsoft Office) and saved as <code>{file.name}.txt</code>
+                                        </p>
+                                    ) : null}
+                                    {file ? null : (
                                         <div style={{ color: 'var(--text-secondary)' }}>
                                             <Upload size={32} style={{ marginBottom: '0.5rem' }} />
-                                            <p style={{ margin: 0 }}>Click to upload PDF, TXT, or MD</p>
+                                            <p style={{ margin: 0 }}>Click to upload PDF, TXT, MD, DOCX, or PPTX</p>
                                         </div>
                                     )}
                                 </div>

@@ -91,6 +91,8 @@ services:
       - REACT_APP_USE_SSO=${USE_SSO:-false}
       - REACT_APP_SSO_URL=${REACT_APP_SSO_URL:-}
       - REACT_APP_DEV_USER=${DEV_USER:-dev}
+      # 로컬 런처 게이트웨이 (docx/pptx·DRM 문서 로컬 변환, 계약 05 §6) — 비우면 http://127.0.0.1:5599
+      - REACT_APP_LAUNCHER_BASE=${REACT_APP_LAUNCHER_BASE:-}
     ports:
       - "80:80"
     depends_on:

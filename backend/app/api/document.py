@@ -108,6 +108,26 @@ async def register_schema_tbox(kb: KBModel, schema: dict) -> dict:
     return {"classes": summary["classes"], "properties": summary["properties"]}
 
 
+# 사내 DRM(NASCA) 문서는 파일 선두가 "<## NASCA DRM FILE - VER1.00 ##>" 로 시작한다.
+# 서버에는 복호화 도구를 둘 수 없으므로, 사용자 PC 의 로컬 변환기(ragaas-converter,
+# 런처 경유 POST /v1/docs/{fmt}/text)로 텍스트를 뽑아 upload-text 로 등록해야 한다.
+DRM_HEADER_PREFIX = b"<## NASCA DRM FILE"
+# 서버 파서가 없는 Office 형식 — 로컬 변환 후 upload-text 경로만 허용.
+LOCAL_CONVERT_EXTENSIONS = {"docx", "pptx"}
+
+
+def _converted_filename(source_filename: str) -> str:
+    """로컬 변환 문서의 저장 파일명: 원본 이름 + '.txt' (예: 보고서.pptx → 보고서.pptx.txt).
+
+    경로 구분자·제어문자 등 파일시스템 금지 문자만 치환하고, 원본 확장자를 보존해
+    목록에서 출처를 알 수 있게 한다.
+    """
+    base = os.path.basename(source_filename.replace("\\", "/")).strip()
+    base = re.sub(r'[\x00-\x1f<>:"/\\|?*]', "_", base).strip(" .")
+    base = base[:200] or "converted_document"
+    return f"{base}.txt"
+
+
 _UPLOAD_LLM_KEYMAP = {
     "ingest": {
         "provider": "llm_provider",
@@ -290,6 +310,11 @@ class TextUploadRequest(BaseModel):
     normalization_threshold: float = 0.85
     enable_normalization_confirmation: bool = False
     enable_entity_typing: bool = False
+    # 로컬 변환기(ragaas-converter)로 docx/pptx 를 텍스트로 바꿔 올린 경우의 원본 정보.
+    source_filename: Optional[str] = None
+    source_format: Optional[str] = None
+    source_drm: bool = False
+    converted_by: Optional[str] = None
 
 
 @router.post("/{kb_id}/documents/upload-text", response_model=Document)
@@ -303,10 +328,22 @@ async def upload_text_document(
     if not kb:
         raise HTTPException(status_code=404, detail="Knowledge Base not found")
 
-    # 파일명 생성: 제목 기반, 특수문자 제거
-    safe_title = re.sub(r'[^\w\s-]', '', body.title.strip()).strip()
-    safe_title = re.sub(r'[\s]+', '_', safe_title) or "text_document"
-    filename = f"{safe_title}.txt"
+    source_info = None
+    if body.source_filename:
+        # 로컬 변환 문서: 원본 파일명 기반 (확장자 보존)
+        filename = _converted_filename(body.source_filename)
+        source_info = {
+            "filename": os.path.basename(body.source_filename.replace("\\", "/")),
+            "format": (body.source_format or "").lower() or None,
+            "drm": body.source_drm,
+            "converted_by": body.converted_by,
+            "converted_at": datetime.utcnow().isoformat() + "Z",
+        }
+    else:
+        # 파일명 생성: 제목 기반, 특수문자 제거
+        safe_title = re.sub(r'[^\w\s-]', '', body.title.strip()).strip()
+        safe_title = re.sub(r'[\s]+', '_', safe_title) or "text_document"
+        filename = f"{safe_title}.txt"
 
     # 기존 문서 덮어쓰기 체크
     existing_doc = await DocModel.find_one(DocModel.kb_id == kb_id, DocModel.filename == filename)
@@ -317,6 +354,7 @@ async def upload_text_document(
         doc.status = DocumentStatus.PROCESSING.value
         doc.updated_at = datetime.utcnow()
         doc.pipeline_metadata = pipeline_metadata
+        doc.source_info = source_info
     else:
         doc = DocModel(
             kb_id=kb_id,
@@ -324,7 +362,8 @@ async def upload_text_document(
             file_type="txt",
             status=DocumentStatus.PROCESSING.value,
             pipeline_status="UPLOADED",
-            pipeline_metadata=pipeline_metadata
+            pipeline_metadata=pipeline_metadata,
+            source_info=source_info,
         )
         await doc.insert()
 
@@ -494,6 +533,21 @@ async def upload_document(
     kb = await KBModel.get(kb_id)
     if not kb:
         raise HTTPException(status_code=404, detail="Knowledge Base not found")
+
+    # 1-1. DRM / Office 문서 차단 — 서버에서는 복호화·파싱 불가. 로컬 변환 후 upload-text 로 등록해야 한다.
+    head = await file.read(len(DRM_HEADER_PREFIX))
+    await file.seek(0)
+    ext = (file.filename or "").rsplit(".", 1)[-1].lower() if "." in (file.filename or "") else ""
+    if head.startswith(DRM_HEADER_PREFIX):
+        raise HTTPException(status_code=415, detail={
+            "code": "drm_protected",
+            "message": "DRM 보호 문서는 서버에서 처리할 수 없습니다. 로컬 변환기(ragaas-converter)로 변환 후 등록하세요.",
+        })
+    if ext in LOCAL_CONVERT_EXTENSIONS:
+        raise HTTPException(status_code=415, detail={
+            "code": "local_conversion_required",
+            "message": f".{ext} 문서는 로컬 변환기(ragaas-converter)로 텍스트 변환 후 등록하세요.",
+        })
 
     # 2. Handle Document Record (Check for overwrite)
     existing_doc = await DocModel.find_one(DocModel.kb_id == kb_id, DocModel.filename == file.filename)
