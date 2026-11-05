@@ -109,19 +109,7 @@ class RerankingService:
         llm_model = resolved["model"]
         base_url = resolved.get("base_url")
         extra_headers = resolved.get("extra_headers") or {}
-        if not api_key:
-            raise ValueError("LLM reranker API key is not configured.")
-        client_kwargs: dict = {"api_key": api_key}
-        if base_url:
-            client_kwargs["base_url"] = base_url
-        if extra_headers:
-            client_kwargs["default_headers"] = extra_headers
-        
-        # Using custom http_client to log requests
-        client_kwargs["http_client"] = httpx.AsyncClient(
-            event_hooks={'request': [_log_request], 'response': [_log_response]}
-        )
-        client = AsyncOpenAI(**client_kwargs)
+        from app.core.llm import achat, LLMError
         
         # Load prompt template from file
         prompt_path = "/app/data/prompts/rerank_llm_prompt.txt"
@@ -142,12 +130,11 @@ class RerankingService:
             prompt = prompt_template.format(query=query, chunk_content=chunk_content)
 
             try:
-                resp = await client.chat.completions.create(
-                    model=llm_model,
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=0, max_tokens=10
-                )
-                content = resp.choices[0].message.content.strip()
+                content = (await achat(
+                    resolved,
+                    [{"role": "user", "content": prompt}],
+                    model=llm_model, temperature=0, max_tokens=10,
+                )).strip()
                 print(f"[Rerank DEBUG] Chunk snippet: {chunk_content[:30]}... | LLM Response: {content}")
                 
                 import re
@@ -159,6 +146,8 @@ class RerankingService:
                     print(f"[Rerank DEBUG] Failed to parse score from content: {content}")
                     score = 0.0
                 return (result, max(0.0, min(1.0, score)))
+            except LLMError:
+                raise
             except Exception as e:
                 print(f"[Rerank DEBUG] Error evaluating chunk: {e}")
                 import traceback

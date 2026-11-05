@@ -5,8 +5,8 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "RAG Management System"
     API_V1_STR: str = "/api"
     
-    # Database
-    MONGO_URI: str = "mongodb://root:example@mongo:27017"
+    # Database (공유 인프라 스택의 shared-mongo — 로컬 개발 시 localhost로 접근)
+    MONGO_URI: str = "mongodb://ragaas_app:ragaas-dev-pass@localhost:27017/ragaas?authSource=ragaas"
     MONGO_DB: str = "ragaas"
     
     # Milvus

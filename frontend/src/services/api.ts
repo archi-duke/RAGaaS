@@ -1,13 +1,35 @@
-import axios from 'axios';
+import axios, { type AxiosInstance } from 'axios';
+import config from '../platform/config';
+import { getToken, getUser, requireLogin } from '../platform/auth';
 
-// baseURL 은 배포 모드에 따라 파생: standalone/dev(base '/') → '/api/',
-// 셸 임베드(build base '/ragaas/') → '/ragaas/api/' (게이트웨이가 ragaas-backend 로 라우팅).
-const api = axios.create({
-    baseURL: `${import.meta.env.BASE_URL}api/`,
+// 플랫폼 인증 소비 — axios 인터셉터 패턴 (계약 02 §3).
+// SSO 모드: Bearer 자동 부착 / dev 모드: X-User-Id 폴백 / 401 → 셸 재로그인 위임.
+function withPlatformAuth(instance: AxiosInstance): AxiosInstance {
+    instance.interceptors.request.use((cfg) => {
+        const token = getToken();
+        if (token) {
+            cfg.headers.Authorization = `Bearer ${token}`;
+        } else {
+            const user = getUser();
+            if (user) cfg.headers['X-User-Id'] = user.loginid;
+        }
+        return cfg;
+    });
+    instance.interceptors.response.use(undefined, (err) => {
+        if (err.response?.status === 401) requireLogin();
+        return Promise.reject(err);
+    });
+    return instance;
+}
+
+// baseURL 은 런타임 config 에서 (계약 05 §4·§6): 기본 `${BASE_URL}api/v2/`
+//   dev(base '/') → '/api/v2/' (vite 프록시), 셸/게이트웨이(base '/ragaas/') → '/ragaas/api/v2/'
+const api = withPlatformAuth(axios.create({
+    baseURL: config.RAGAAS_API,
     headers: {
         'Content-Type': 'application/json',
     },
-});
+}));
 
 export const kbApi = {
     list: () => api.get('knowledge-bases/'),
@@ -195,13 +217,13 @@ export const retrievalApi = {
 };
 
 // Ingest Service API - proxied via nginx (/ingest-api/) or vite dev proxy
-const ingestApi = axios.create({
-    baseURL: `${import.meta.env.BASE_URL}ingest-api/`,
+const ingestApi = withPlatformAuth(axios.create({
+    baseURL: config.RAGAAS_INGEST_API,
     timeout: 0,
     headers: {
         'Content-Type': 'application/json',
     },
-});
+}));
 
 export const extractionApi = {
     preview: (data: {
