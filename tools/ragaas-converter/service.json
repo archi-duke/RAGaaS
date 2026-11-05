@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "entry": "ragaas-converter.exe",
   "os": ["windows"],
-  "minLauncher": "0.1.39",
+  "minLauncher": "0.2.0",
   "run": { "mode": "on-demand", "idleTimeoutMin": 10 },
   "health": "/health",
   "requires": ["powershell", "office-com"],
