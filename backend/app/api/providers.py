@@ -146,6 +146,31 @@ async def list_providers(model_type: Optional[str] = None):
         for p in custom_docs
     ]
 
+    # 사내 게이트웨이 모델(config/internal_models.json)을 custom 형태로 노출 →
+    # 기존 모델 셀렉터가 그대로 목록에 보여준다. 선택 시 {provider_id:"internal", model} 로 저장됨.
+    from app.core.models_resolver import load_internal_models
+    internal_meta = load_internal_models()
+    internal_models = internal_meta.get("models", [])
+    if internal_models:
+        def _match(m):
+            t = m.get("type", "llm")
+            return model_type is None or t == model_type or t == "both"
+        names = [m["name"] for m in internal_models if _match(m)]
+        if names:
+            custom.append(
+                CustomProviderResponse(
+                    provider_id="internal",
+                    name=internal_meta.get("provider_name", "사내 게이트웨이"),
+                    base_url="",
+                    model_list=names,
+                    provider_type="both",
+                    has_key=True,
+                    extra_headers=None,
+                    embedding_request_format="openai",
+                    created_at=datetime.utcnow(),
+                )
+            )
+
     return {
         "builtin": builtin_result,
         "custom": [c.model_dump() for c in custom],

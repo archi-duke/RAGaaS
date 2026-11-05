@@ -17,8 +17,11 @@ logger = logging.getLogger(__name__)
 
 class GraphRetrievalStrategy(RetrievalStrategy):
     def __init__(self):
-        self.namespace_entity = "http://rag.local/entity/"
-        self.namespace_relation = "http://rag.local/relation/"
+        # 실제 저장 네임스페이스와 일치시킴 (sparql_generator / fuseki_connector 와 동일).
+        # 과거 relation/·entity/ 로 잘못 지정돼 _expand_entities 의 rel:hasSource 제외
+        # 필터가 실데이터와 매치되지 않던 문제 수정.
+        self.namespace_entity = "http://rag.local/inst/"
+        self.namespace_relation = "http://rag.local/rel/"
 
     async def search(self, kb_id: str, query: str, top_k: int, **kwargs) -> List[Dict[str, Any]]:
         use_raw_log = kwargs.get("use_raw_log", False)
@@ -32,14 +35,11 @@ class GraphRetrievalStrategy(RetrievalStrategy):
             raise ValueError("Graph search model is not configured.")
         from app.core.models_resolver import resolve_model_config
         resolved_llm = await resolve_model_config(llm_model_config)
-        if not resolved_llm.get("api_key"):
-            raise ValueError("Graph search API key is not configured.")
-        llm_client = AsyncOpenAI(
-            api_key=resolved_llm.get("api_key"),
-            **({"base_url": resolved_llm["base_url"]} if resolved_llm.get("base_url") else {}),
-            **({"default_headers": resolved_llm["extra_headers"]} if resolved_llm.get("extra_headers") else {}),
-        )
-        llm_model_name = resolved_llm.get("model", "gpt-4o-mini")
+        from app.core.llm import achat, has_credentials
+        if not has_credentials(resolved_llm):
+            raise ValueError("Graph search API key/헤더가 설정되지 않았습니다.")
+        llm_cfg = resolved_llm
+        llm_model_name = resolved_llm.get("model")
         
         import time
         from datetime import datetime
@@ -70,7 +70,7 @@ class GraphRetrievalStrategy(RetrievalStrategy):
         log(f"🚀 Graph Search Start for query: {query}")
         
         # 1+2. Analyze query + extract entities in a SINGLE LLM call (병합: 2 호출 → 1)
-        entities, query_analysis = await self._analyze_and_extract(kb_id, query, llm_client=llm_client, llm_model=llm_model_name)
+        entities, query_analysis = await self._analyze_and_extract(kb_id, query, llm_cfg=llm_cfg, llm_model=llm_model_name)
         log(f"DEBUG: Query Analysis -> Type: {query_analysis.get('query_type')}, Hops: {query_analysis.get('hop_count', 1)}, Rel: {query_analysis.get('relationship_type')}, Roles: {query_analysis.get('entity_roles')}")
         log(f"DEBUG: 🔍 Extracted entities: {entities}")
         
@@ -239,7 +239,7 @@ class GraphRetrievalStrategy(RetrievalStrategy):
                 clickable.append(e)
         return clickable
 
-    async def _analyze_and_extract(self, kb_id: str, query: str, llm_client=None, llm_model: str = "gpt-4o-mini") -> Tuple[List[str], Dict[str, Any]]:
+    async def _analyze_and_extract(self, kb_id: str, query: str, llm_cfg=None, llm_model: str = "gpt-4o-mini") -> Tuple[List[str], Dict[str, Any]]:
         """질의 분석 + 엔티티 추출을 단일 LLM 호출로 병합 (기존 2회 → 1회).
 
         See docs/design-query-analysis-merge.md.
@@ -305,18 +305,18 @@ class GraphRetrievalStrategy(RetrievalStrategy):
         }}
         """
         try:
-            if llm_client is None:
-                raise ValueError("Graph search model client is not configured.")
-            response = await llm_client.chat.completions.create(
-                model=llm_model,
-                messages=[
+            if not llm_cfg:
+                raise ValueError("Graph search model is not configured.")
+            from app.core.llm import achat
+            content = await achat(
+                llm_cfg,
+                [
                     {"role": "system", "content": "You are a precise query analyzer and entity extractor for Knowledge Graphs. Output JSON only. Never translate entity names in the main 'entities' list."},
                     {"role": "user", "content": prompt},
                 ],
-                temperature=0,
-                response_format={"type": "json_object"},
+                model=llm_model, temperature=0, response_format={"type": "json_object"},
             )
-            data = json.loads(response.choices[0].message.content)
+            data = json.loads(content)
 
             # 엔티티 + 역할
             for ent in data.get("entities", []):

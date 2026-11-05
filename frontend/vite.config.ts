@@ -28,17 +28,24 @@ export default defineConfig(({ command }) => ({
   build: {
     target: 'chrome89', // MF 2.0 (top-level await) 요구
   },
+  // CRA 관례(REACT_APP_*) env 키를 dev 에서 import.meta.env 로 노출 (계약 01 §1)
+  envPrefix: ['REACT_APP_', 'VITE_'],
   server: {
     host: '0.0.0.0',
+    port: 3002,
+    strictPort: true,
+    // dev 에서 셸(:3000)이 remoteEntry/chunk 를 크로스오리진 로드
+    cors: true,
     proxy: {
       '/ingest-api': {
         target: 'http://127.0.0.1:8001',
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/ingest-api/, '/api'),
+        rewrite: (path) => path.replace(/^\/ingest-api/, '/api/v2'),
       },
       '/api': {
         target: 'http://127.0.0.1:8000',
         changeOrigin: true,
+        ws: true,
       },
     },
   },

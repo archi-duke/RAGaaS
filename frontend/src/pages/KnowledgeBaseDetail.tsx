@@ -14,6 +14,7 @@ import SearchResults from '../components/SearchResults';
 import ConfirmDialog from '../components/ConfirmDialog';
 import PromptDialog from '../components/PromptDialog';
 import GraphDataTable from '../components/GraphDataTable';
+import { wsBase } from '../platform/config';
 
 
 export default function KnowledgeBaseDetail() {
@@ -139,18 +140,9 @@ export default function KnowledgeBaseDetail() {
         // Note: For local dev (port 3000), we proxy /api calls via Vite config, 
         // but for WS we might need direct connection to 8000 if proxy isn't set up for WS.
         // Assuming production/docker uses Nginx/proxy on same port.
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-
-        let wsUrl;
-        if (window.location.port === '3000' || window.location.port === '5173') {
-            // Local Dev: Connect directly to backend port 8000
-            wsUrl = `${protocol}//${window.location.hostname}:8000/api/ws/${id}`;
-        } else {
-            // Production/Docker: Use same host:port as page
-            wsUrl = `${protocol}//${window.location.host}${import.meta.env.BASE_URL}api/ws/${id}`;
-        }
-
-        console.log(`[WebSocket] Connecting to: ${wsUrl}`);
+        // 런타임 config(REACT_APP_RAGAAS_API)에서 유도 — dev 는 vite 프록시(ws:true),
+        // 배포는 nginx/게이트웨이가 WS 업그레이드를 프록시한다 (/api/v2/ws/{kb})
+        const wsUrl = `${wsBase()}/ws/${id}`;
 
         console.log(`[WebSocket] Connecting to: ${wsUrl}`);
         const ws = new WebSocket(wsUrl);

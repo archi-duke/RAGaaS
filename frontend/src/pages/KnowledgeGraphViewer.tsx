@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import ForceGraph2D from 'react-force-graph-2d';
+import config from '../platform/config';
 
 interface GraphNode {
     id: string;
@@ -170,7 +171,7 @@ const GraphViewer: React.FC = () => {
 
                 if (!backend) {
                     try {
-                        const kbResp = await fetch(`${import.meta.env.BASE_URL}api/knowledge-bases/${kbId}`);
+                        const kbResp = await fetch(`${config.RAGAAS_API}knowledge-bases/${kbId}`);
                         if (kbResp.ok) {
                             const kbData = await kbResp.json();
                             if (kbData.graph_backend) {
@@ -189,10 +190,10 @@ const GraphViewer: React.FC = () => {
                 // Use mode directly as isSchemaMode state might not be updated yet
                 if (mode === 'schema') {
                     // Fetch schema data
-                    response = await fetch(`${import.meta.env.BASE_URL}api/graph/schema?kb_id=${kbId}&backend=${resolvedBackend}`);
+                    response = await fetch(`${config.RAGAAS_API}graph/schema?kb_id=${kbId}&backend=${resolvedBackend}`);
                 } else {
                     // Fetch entity expansion data
-                    response = await fetch(`${import.meta.env.BASE_URL}api/graph/expand?kb_id=${kbId}&entity=${encodeURIComponent(entity || '')}&backend=${resolvedBackend}`);
+                    response = await fetch(`${config.RAGAAS_API}graph/expand?kb_id=${kbId}&entity=${encodeURIComponent(entity || '')}&backend=${resolvedBackend}`);
                 }
 
                 if (!response.ok) {
@@ -392,15 +393,15 @@ const GraphViewer: React.FC = () => {
         try {
             let apiUrl: string;
 
-            // 초기 로드와 동일하게 BASE_URL(/ragaas/) 프리픽스를 붙여야 게이트웨이가
+            // 초기 로드와 동일하게 런타임 API 베이스(셸: /ragaas/api/v2/)를 써야 게이트웨이가
             // RAGaaS 백엔드로 라우팅한다. (루트 상대경로 '/api/...' 는 셸로 빠져 확장 실패)
-            const apiBase = import.meta.env.BASE_URL;
+            const apiBase = config.RAGAAS_API;
             // In schema mode, clicking a class node fetches its instances
             if (isSchemaMode && node.isClass) {
-                apiUrl = `${apiBase}api/graph/schema/instances?kb_id=${kbId}&class_uri=${encodeURIComponent(node.id)}&limit=20`;
+                apiUrl = `${apiBase}graph/schema/instances?kb_id=${kbId}&class_uri=${encodeURIComponent(node.id)}&limit=20`;
             } else {
                 // Normal entity expansion
-                apiUrl = `${apiBase}api/graph/expand?kb_id=${kbId}&entity=${encodeURIComponent(node.label)}&backend=${backendType}`;
+                apiUrl = `${apiBase}graph/expand?kb_id=${kbId}&entity=${encodeURIComponent(node.label)}&backend=${backendType}`;
             }
 
             const response = await fetch(apiUrl);

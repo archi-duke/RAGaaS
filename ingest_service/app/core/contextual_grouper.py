@@ -16,15 +16,8 @@ class ContextualGrouper:
     """
     def __init__(self, llm=None, llm_config: Optional[Dict[str, Any]] = None):
         cfg = llm_config or {}
-        if not cfg.get("api_key"):
-            raise ValueError("Contextual grouper model API key is not configured.")
-        client_kwargs: Dict[str, Any] = {"api_key": cfg.get("api_key")}
-        if cfg.get("base_url"):
-            client_kwargs["base_url"] = cfg["base_url"]
-        if cfg.get("extra_headers"):
-            client_kwargs["default_headers"] = cfg["extra_headers"]
-        self.client = AsyncOpenAI(**client_kwargs)
-        self.model = cfg.get("model", "gpt-4o")
+        self.cfg = cfg
+        self.model = cfg.get("model")
         self.system_prompt = (
             "You are a linguistics expert who merges noun fragments into compound nouns and groups entities.\n"
             "Goal: Group words that refer to the EXACT SAME specific entity or individual."
@@ -99,15 +92,15 @@ class ContextualGrouper:
         )
 
         try:
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=[
+            from app.core.llm import achat
+            content = await achat(
+                self.cfg,
+                [
                     {"role": "system", "content": self.system_prompt},
-                    {"role": "user", "content": user_prompt}
+                    {"role": "user", "content": user_prompt},
                 ],
-                temperature=0
+                model=self.model, temperature=0,
             )
-            content = response.choices[0].message.content
             
             # Parse Doc2Graph style output
             # Line format: "Representative, Variant1, Variant2"
