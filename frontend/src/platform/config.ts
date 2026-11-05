@@ -34,6 +34,11 @@ const config = {
   SSO_URL: env('REACT_APP_SSO_URL', ''),
   /** dev 폴백 사용자 (백엔드 DEV_USER 와 짝) */
   DEV_USER: env('REACT_APP_DEV_USER', 'dev'),
+  /**
+   * 로컬 런처 게이트웨이 (계약 05 §6 REACT_APP_LAUNCHER_BASE). DRM/Office 문서 로컬 변환에 사용.
+   * 런처 게이트웨이 도입 전 개발 시에는 ragaas-converter -dev (http://127.0.0.1:5601) 로 지정.
+   */
+  LAUNCHER_BASE: env('REACT_APP_LAUNCHER_BASE', 'http://127.0.0.1:5599'),
 };
 
 /** WebSocket 베이스 URL — RAGAAS_API 에서 유도 (http→ws, 상대경로면 현재 origin 기준) */

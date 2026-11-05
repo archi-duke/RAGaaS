@@ -1,0 +1,79 @@
+name: ragaas-converter
+
+# 로컬 변환 서비스(tools/ragaas-converter) CI + 패키지 게시.
+#  - PR/main push: vet·test·windows 패키지 빌드(아티팩트로 보관)
+#  - 태그 ragaas-converter-v<ver>: service.json 버전 일치 확인 → GitHub Release 에 zip + .sha256 게시
+# 서명 키에는 접근하지 않는다. 카탈로그 등록·서명은 GoJIRA 플랫폼 레포 catalog 워크플로 담당
+# (GoJIRA docs/design-launcher-gateway.md §10.1, §10.6 패키지 저장소).
+on:
+  pull_request:
+    paths: ["tools/ragaas-converter/**", ".github/workflows/ragaas-converter.yml"]
+  push:
+    branches: [main]
+    paths: ["tools/ragaas-converter/**", ".github/workflows/ragaas-converter.yml"]
+    tags: ["ragaas-converter-v*"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: tools/ragaas-converter
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: tools/ragaas-converter/go.mod
+          cache-dependency-path: tools/ragaas-converter/go.mod
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+
+      - name: Read version
+        id: ver
+        run: echo "version=$(python -c "import json;print(json.load(open('service.json'))['version'])")" >> "$GITHUB_OUTPUT"
+
+      - name: Tag must match service.json version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          want="ragaas-converter-v${{ steps.ver.outputs.version }}"
+          if [ "${GITHUB_REF_NAME}" != "$want" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} != $want (service.json version)"; exit 1
+          fi
+
+      - name: Vet, test, package
+        run: ./build.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ragaas-converter-${{ steps.ver.outputs.version }}
+          path: tools/ragaas-converter/dist/*
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/ragaas-converter-v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ragaas-converter-${{ needs.build.outputs.version }}
+          path: dist
+      - name: Publish GitHub Release
+        working-directory: dist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          sha256sum -c *.sha256
+          gh release create "${GITHUB_REF_NAME}" *.zip *.sha256 \
+            --title "ragaas-converter ${{ needs.build.outputs.version }}" \
+            --notes "Local Office(docx/pptx) → text service for GoJIRA launcher gateway. Package: windows-amd64 zip (exe + service.json)."

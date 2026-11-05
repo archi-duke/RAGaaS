@@ -1,0 +1,15 @@
+{
+  "name": "ragaas-converter",
+  "version": "0.1.0",
+  "entry": "ragaas-converter.exe",
+  "os": ["windows"],
+  "minLauncher": "0.2.0",
+  "run": { "mode": "on-demand", "idleTimeoutMin": 10 },
+  "health": "/health",
+  "requires": ["powershell", "office-com"],
+  "permissions": { "spawn": ["powershell"], "fs": ["temp"], "net": [], "call": [] },
+  "routes": [
+    { "prefix": "/v1/docs/pptx", "methods": ["POST"], "timeoutSec": 240, "maxBodyMB": 200 },
+    { "prefix": "/v1/docs/docx", "methods": ["POST"], "timeoutSec": 240, "maxBodyMB": 200 }
+  ]
+}

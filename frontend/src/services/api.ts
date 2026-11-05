@@ -108,8 +108,17 @@ export const docApi = {
     },
 
     delete: (kbId: string, docId: string) => api.delete(`knowledge-bases/${kbId}/documents/${docId}`),
-    uploadText: (kbId: string, title: string, content: string, config?: any) => {
+    uploadText: (
+        kbId: string, title: string, content: string, config?: any,
+        source?: { filename: string; format: string; drm: boolean; convertedBy?: string },
+    ) => {
         const payload: any = { title, content };
+        if (source) {
+            payload.source_filename = source.filename;
+            payload.source_format = source.format;
+            payload.source_drm = source.drm;
+            payload.converted_by = source.convertedBy;
+        }
         if (config) {
             payload.chunking_config = JSON.stringify(config);
             if (config.enable_text_cleaning !== undefined) payload.enable_text_cleaning = config.enable_text_cleaning;
