@@ -847,7 +847,13 @@ export default function KnowledgeBaseDetail() {
                                 </div>
                             </div>
 
-                            <div style={{ marginTop: '1.5rem', borderTop: '1px solid var(--border)', paddingTop: '1rem', display: 'flex', gap: '1rem' }}>
+                            {(kb as any).schema_source === 'structured' && (
+                                <div style={{ marginTop: '1rem', fontSize: '0.85rem', background: '#eef2ff', color: '#1e3a8a', borderRadius: '6px', padding: '0.75rem', lineHeight: 1.55 }}>
+                                    <b>구조화 문서로 스키마가 정의된 온톨로지입니다.</b> YAML/JSON 의 필드 구조가 곧 스키마라 승격(스키마 유도)이 필요하지 않습니다.
+                                    키·값 표기 차이는 문서 탭 "스키마 정렬"에서 정리하세요.
+                                </div>
+                            )}
+                            <div style={{ marginTop: '1.5rem', borderTop: '1px solid var(--border)', paddingTop: '1rem', display: (kb as any).schema_source === 'structured' ? 'none' : 'flex', gap: '1rem' }}>
                                 <button
                                     className="btn btn-primary"
                                     onClick={handlePromote}

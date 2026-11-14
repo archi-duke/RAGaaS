@@ -97,6 +97,8 @@ async def list_knowledge_bases(skip: int = 0, limit: int = 100):
             "graph_backend": kb.graph_backend,
             "is_promoted": kb.is_promoted,
             "promotion_metadata": kb.promotion_metadata,
+            "schema_source": getattr(kb, "schema_source", "none"),
+            "schema_status": getattr(kb, "schema_status", None),
             "pipeline_config": kb.pipeline_config or {"stages": []},
             "document_count": doc_count,
             "total_size": 0
@@ -186,6 +188,8 @@ async def promote_knowledge_base(
                 print(f"[Revert] ⚠️ Failed to drop ontology graph: {e}")
         kb.is_promoted = False
         kb.promotion_metadata = {}
+        kb.schema_source = "none"
+        kb.schema_status = None
         await kb.save()
         return {"id": kb.id, "is_promoted": kb.is_promoted, "promotion_metadata": kb.promotion_metadata}
     

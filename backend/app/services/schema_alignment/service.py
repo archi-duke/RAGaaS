@@ -334,6 +334,20 @@ async def on_document_ingested(kb_id: str, doc_id: str, schema_report: Optional[
             kb.schema_rules_version += 1
             await kb.save()
         FusekiBackend.invalidate_class_catalog(kb_id)
+        # 구조화 문서 → KB 온톨로지 전환 표시 (UI 'Ontology' 배지, TBox, schema_info)
+        if doc and _is_structured_name(doc.filename):
+            try:
+                promo = await mark_structured_ontology(kb_id)
+                logger.info(f"[Schema] structured ontology for {kb_id}: {promo}")
+                if promo.get("newly_promoted"):
+                    try:
+                        from app.core.websocket_manager import manager
+                        await manager.broadcast(kb_id, {"type": "kb_ontology_promoted", "kb_id": kb_id,
+                                                        "source": "structured"})
+                    except Exception:
+                        pass
+            except Exception as e:
+                logger.warning(f"[Schema] structured ontology marking skipped: {e}")
         result = await detect_proposals(kb_id)
         logger.info(f"[Schema] doc {doc_id}: auto rules {n_auto}, new proposals {result}")
         try:
@@ -485,3 +499,97 @@ async def renormalize_documents(kb_id: str, doc_ids: Optional[List[str]] = None)
     if runnable:
         asyncio.create_task(run_all())
     return {"queued": queued, "needs_source": needs_source}
+
+
+# ---------------------------------------------------------------------------
+# 구조화 문서 → 온톨로지 전환 (schema_source = "structured")
+# ---------------------------------------------------------------------------
+
+async def mark_structured_ontology(kb_id: str) -> Dict[str, Any]:
+    """구조화(YAML/JSON) 문서가 인제스트된 ontology KB 를 온톨로지로 표시하고 TBox 를 갱신.
+
+    구조화 문서는 필드 구조가 곧 스키마이므로 별도 승격(유도) 없이 온톨로지가 된다.
+    - is_promoted=True (UI 'Ontology' 배지), schema_source='structured', schema_status='active'
+      (단, 이미 declared/induced 인 KB 는 출처를 바꾸지 않는다)
+    - TBox(urn:ontology:{kb}): 레코드·구조 클래스 + 속성(경로 세그먼트), 데이터와 같은 rag.local URI
+    - promotion_metadata.schema_info: C 경로(SPARQL 생성)가 읽는 클래스·속성 목록
+    """
+    import re as _re
+    import requests
+    from app.core.fuseki import fuseki_client
+    from app.models.knowledge_base import KnowledgeBase
+    from app.services.retrieval.graph_backends.fuseki import FusekiBackend
+    from app.services.retrieval.relation_targeting import local_name
+
+    kb = await KnowledgeBase.get(kb_id)
+    if not kb or kb.graph_backend != "ontology":
+        return {"skipped": "not an ontology KB"}
+    if kb.schema_source in ("declared", "induced"):
+        return {"skipped": f"schema_source={kb.schema_source}"}
+
+    FusekiBackend.invalidate_class_catalog(kb_id)
+    kinds, catalogs = await FusekiBackend()._class_catalog(kb_id, lambda _m: None, {})
+    # 구조 노드에 붙은 rdf:type 클래스 (Tradeoffs, Avoid_signals …)
+    q = """SELECT DISTINCT ?t (COUNT(DISTINCT ?s) AS ?n) WHERE { GRAPH ?g { ?s a ?t }
+           FILTER(STRSTARTS(STR(?g), "urn:doc:")) FILTER(STRSTARTS(STR(?t), "http://rag.local/class/")) } GROUP BY ?t"""
+    struct_classes = {}
+    try:
+        for b in fuseki_client.query_sparql(kb_id, q).get("results", {}).get("bindings", []):
+            struct_classes[local_name(b["t"]["value"])] = int(b["n"]["value"])
+    except Exception:
+        pass
+
+    def uri_part(x: str) -> str:
+        return _re.sub(r"[^0-9A-Za-z가-힣_]", "_", str(x).strip())
+
+    def lit(x: str) -> str:
+        return '"' + str(x).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+    classes: Dict[str, Dict[str, Any]] = {}
+    for k in kinds:
+        name = local_name(k["class_uri"]) if k.get("class_uri") else "Record"
+        classes[name] = {"label": name, "count": len(k["members"]),
+                         "description": "구조화 문서의 최상위 레코드" if not k.get("class_uri") else ""}
+    for name, n in struct_classes.items():
+        classes.setdefault(name, {"label": name, "count": n, "description": "구조화 문서의 중첩 항목"})
+    props: Dict[str, str] = {}
+    for k in kinds:
+        dom = local_name(k["class_uri"]) if k.get("class_uri") else "Record"
+        for p in catalogs.get(k["name"], []):
+            for i, seg in enumerate(p["segments"]):
+                props.setdefault(seg, dom if i == 0 else "")
+
+    lines = ["@prefix owl: <http://www.w3.org/2002/07/owl#> .",
+             "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .", ""]
+    for name, c in classes.items():
+        lines.append(f"<http://rag.local/class/{uri_part(name)}> a owl:Class ; rdfs:label {lit(name)}"
+                     + (f" ; rdfs:comment {lit(c['description'])}" if c.get("description") else "") + " .")
+    for seg, dom in props.items():
+        lines.append(f"<http://rag.local/rel/{uri_part(seg)}> a owl:ObjectProperty ; rdfs:label {lit(seg)}"
+                     + (f" ; rdfs:domain <http://rag.local/class/{uri_part(dom)}>" if dom else "") + " .")
+    ttl = "\n".join(lines) + "\n"
+    graph_uri = f"urn:ontology:{kb_id}"
+    tbox_ok = False
+    try:
+        fuseki_client.drop_graph(kb_id, graph_uri)
+        resp = requests.post(f"{fuseki_client._get_dataset_url(kb_id)}/data?graph={graph_uri}",
+                             data=ttl.encode("utf-8"), headers={"Content-Type": "text/turtle"},
+                             auth=fuseki_client.auth, timeout=60)
+        tbox_ok = resp.status_code in (200, 201, 204)
+    except Exception as e:
+        logger.warning(f"[Schema] structured TBox upload skipped: {e}")
+
+    meta = dict(kb.promotion_metadata or {})
+    meta["schema_info"] = {
+        "classes": {f"http://rag.local/class/{uri_part(n)}": c for n, c in classes.items()},
+        "properties": [f"http://rag.local/rel/{uri_part(s)}" for s in props],
+    }
+    meta["source"] = "structured"
+    meta["promoted_at"] = datetime.utcnow().isoformat()
+    kb.promotion_metadata = meta
+    newly = not kb.is_promoted
+    kb.is_promoted = True
+    kb.schema_source = "structured"
+    kb.schema_status = "active"
+    await kb.save()
+    return {"classes": len(classes), "properties": len(props), "tbox": tbox_ok, "newly_promoted": newly}

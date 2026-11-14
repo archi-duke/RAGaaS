@@ -286,12 +286,24 @@ export default function UploadDocumentModal({ isOpen, onClose, kbId, onUploadCom
                                 >
                                     <input
                                         type="file" ref={fileInputRef} style={{ display: 'none' }}
-                                        onChange={handleFileChange} accept=".txt,.pdf,.md,.docx,.pptx"
+                                        onChange={handleFileChange} accept=".txt,.pdf,.md,.docx,.pptx,.json,.yaml,.yml"
                                     />
                                     {file ? (
                                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', color: 'var(--primary)' }}>
                                             <FileText size={24} />
                                             <span style={{ fontWeight: 500 }}>{file.name}</span>
+                                        </div>
+                                    ) : null}
+                                    {file && /\.(json|ya?ml)$/i.test(file.name) && kbConfig?.graph_backend === 'ontology' ? (
+                                        <div id="structured-ontology-note" onClick={(e) => e.stopPropagation()} style={{
+                                            margin: '0.75rem auto 0', maxWidth: '560px', textAlign: 'left', fontSize: '0.8rem',
+                                            background: '#eef2ff', color: '#1e3a8a', borderRadius: '6px', padding: '0.6rem 0.75rem', lineHeight: 1.55,
+                                        }}>
+                                            <b>구조화 문서 — 이 KB 가 온톨로지로 전환됩니다.</b><br />
+                                            YAML/JSON 의 필드 구조가 그대로 스키마(클래스·속성)가 되므로, 등록이 완료되면 별도 승격 없이 KB 가
+                                            <b> Ontology</b> 로 표시되고 스키마 기반 검색(유형 질문 등)을 쓸 수 있습니다.
+                                            {kbConfig?.is_promoted ? ' 이미 온톨로지인 KB 이므로 스키마가 이 문서의 필드로 확장됩니다.' : ''}
+                                            {' '}기존 문서와 키·값 표기가 다르면 문서 탭 "스키마 정렬"에 매핑 제안이 올라옵니다.
                                         </div>
                                     ) : null}
                                     {file && localInfo ? (
