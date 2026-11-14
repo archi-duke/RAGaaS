@@ -156,6 +156,25 @@ export const docApi = {
         api.post(`knowledge-bases/${kbId}/documents/${docId}/resolve-alignment`, { decisions }),
 };
 
+// KB 스키마 매핑 제안·규칙 (docs/design-schema-mismatch.md)
+export const schemaApi = {
+    proposals: (kbId: string, status = 'pending') => api.get(`knowledge-bases/${kbId}/schema/proposals`, { params: { status } }),
+    accept: (kbId: string, id: string, body: { swap?: boolean; target?: string; renormalize?: boolean } = {}) =>
+        api.post(`knowledge-bases/${kbId}/schema/proposals/${id}/accept`, body),
+    reject: (kbId: string, id: string) => api.post(`knowledge-bases/${kbId}/schema/proposals/${id}/reject`),
+    rules: (kbId: string) => api.get(`knowledge-bases/${kbId}/schema/rules`),
+    deleteRule: (kbId: string, id: string) => api.delete(`knowledge-bases/${kbId}/schema/rules/${id}`),
+    detect: (kbId: string) => api.post(`knowledge-bases/${kbId}/schema/detect`),
+    renormalize: (kbId: string, docIds?: string[]) => api.post(`knowledge-bases/${kbId}/schema/renormalize`, { doc_ids: docIds }),
+    reingest: (kbId: string, docId: string, file: File) => {
+        const formData = new FormData();
+        formData.append('file', file);
+        return api.post(`knowledge-bases/${kbId}/documents/${docId}/reingest`, formData, {
+            headers: { 'Content-Type': 'multipart/form-data' },
+        });
+    },
+};
+
 export const retrievalApi = {
     retrieve: (kbId: string, data: {
         query: string;

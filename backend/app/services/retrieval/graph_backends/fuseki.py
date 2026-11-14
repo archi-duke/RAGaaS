@@ -12,6 +12,11 @@ from app.services.embedding import embedding_service as default_embedding_servic
 
 logger = logging.getLogger(__name__)
 
+def _compact_alias(text: str) -> str:
+    from app.services.retrieval.entity_linking import _compact
+    return _compact(text)
+
+
 class FusekiBackend(GraphBackend):
     """Fuseki (Ontology) implementation of GraphBackend."""
 
@@ -760,6 +765,32 @@ class FusekiBackend(GraphBackend):
             "trace_logs": trace_logs,
         }
 
+    def _expand_anchor_equivalents(self, kb_id, catalog, selected):
+        """A 선택 경로에 동치 경로를 덧붙인다 (유형 카탈로그 캐시만 사용 — 앵커 질문은 LLM 패스 유발 안 함)."""
+        from app.services.retrieval import relation_targeting as rt
+        cached = self._CLASS_CATALOG_CACHE.get(kb_id)
+        if not cached:
+            return selected, []
+        equiv: Dict[str, List[str]] = {}
+        for paths in cached[3].values():
+            for p in paths:
+                if p.get("equiv"):
+                    equiv.setdefault(p["key"], []).extend(p["equiv"])
+        sel_keys = {p["key"] for p in selected}
+        added = []
+        for p in list(selected):
+            if p["dir"] != "out":
+                continue
+            for k in equiv.get(".".join(p["segments"]), []):
+                for q in catalog:
+                    if q["dir"] == "out" and ".".join(q["segments"]) == k and q["key"] not in sel_keys:
+                        if len(selected) >= rt.MAX_SELECTED_PATHS:
+                            break
+                        selected.append(q)
+                        sel_keys.add(q["key"])
+                        added.append(f"{'.'.join(p['segments'])} ≡ {k}")
+        return selected, added
+
     async def _relation_targeted_query(
         self, kb_id: str, query_text: str, resolved: List[Tuple[str, str]], kwargs: Dict[str, Any], log_trace
     ) -> Tuple[Optional[Dict[str, Any]], List[str]]:
@@ -811,12 +842,21 @@ class FusekiBackend(GraphBackend):
             pool = rt.build_alias_pool(
                 kwargs.get("relation_aliases"), kwargs.get("relationship_type"), unresolved, query_text
             )
+            # KB 매핑 규칙 별칭: 원래 키(advantages)로 물어도 정규화된 표준 키(pros)에 매칭
+            rules = await self._load_schema_rules(kb_id)
+            for a in list(pool):
+                std = (rules.get("aliases") or {}).get(_compact_alias(a))
+                if std and std not in pool:
+                    pool.append(std)
             targeting["alias_pool"] = pool
             if pool:
                 selected, matches = rt.match_paths(catalog, pool, role)
                 if selected:
                     mode = "A"
                     targeting["matches"] = matches
+                    selected, added = self._expand_anchor_equivalents(kb_id, catalog, selected)
+                    if added:
+                        targeting["equivalences"] = added
             if not selected and catalog:
                 try:
                     b_mode, picked, reason = await self._select_paths_with_llm(query_text, catalog, kwargs)
@@ -882,26 +922,101 @@ class FusekiBackend(GraphBackend):
             pass
         return True  # 판별 불가 시 기존 동작(앵커 경로) 유지
 
-    def _class_catalog(self, kb_id: str, log_trace):
-        """유형 + 유형별 경로 카탈로그 (지문 + TTL 캐시)."""
+    _EQUIV_LLM_CACHE: Dict[str, Tuple[List[Tuple[str, str]], List[List[str]]]] = {}
+
+    @classmethod
+    def invalidate_class_catalog(cls, kb_id: str) -> None:
+        """인제스트 완료·규칙 변경 시 호출 — 유형 카탈로그 캐시 무효화."""
+        cls._CLASS_CATALOG_CACHE.pop(kb_id, None)
+
+    async def _equivalence_llm_pass(self, kb_id, kind_name, paths, total_members, kwargs, log_trace):
+        """LLM 동치 패스 — 스키마 시그니처당 1회 (캐시). 실패 시 빈 결과."""
+        from app.services.schema_alignment import equivalence as eq
+        sig = f"{kb_id}:{kind_name}:{eq.catalog_signature(paths)}"
+        if sig in self._EQUIV_LLM_CACHE:
+            return self._EQUIV_LLM_CACHE[sig]
+        if not any(len(p.get("member_ids") or ()) < total_members for p in paths):
+            self._EQUIV_LLM_CACHE[sig] = ([], [])
+            return [], []
+        try:
+            from app.core.models_resolver import resolve_model_config
+            from app.core.llm import achat, no_thinking_extra_body
+            from app.services.retrieval.relation_targeting import parse_json_loose
+            cfg = await resolve_model_config(kwargs.get("llm_model_config") or {})
+            messages, items = eq.build_equivalence_messages(paths, total_members)
+            content = await achat(cfg, messages, model=cfg.get("model"), temperature=0,
+                                  response_format={"type": "json_object"},
+                                  extra_body=no_thinking_extra_body(cfg.get("model")))
+            result = eq.parse_llm_groups(parse_json_loose(content), items)
+            log_trace(f"[Fuseki] Equivalence LLM pass ({kind_name}): {len(result[0])} path pairs, {len(result[1])} value groups")
+        except Exception as e:
+            log_trace(f"[Fuseki] Equivalence LLM pass skipped: {e}")
+            return [], []
+        self._EQUIV_LLM_CACHE[sig] = result
+        return result
+
+    async def _class_catalog(self, kb_id: str, log_trace, kwargs: Optional[Dict[str, Any]] = None):
+        """유형 + 유형별 경로 카탈로그 + 동치 묶음 (지문 + TTL 캐시)."""
+        import os
         import time as _time
         from app.services.retrieval import class_query as cq
+        from app.services.schema_alignment import equivalence as eq
 
-        fp_rows = self._bindings(kb_id, "SELECT (COUNT(*) AS ?n) FROM <urn:x-arq:UnionGraph> WHERE { ?s ?p ?o }")
-        fingerprint = (fp_rows[0].get("n", {}).get("value") if fp_rows else "0") or "0"
+        kwargs = kwargs or {}
+        fp_rows = self._bindings(
+            kb_id, "SELECT (COUNT(*) AS ?n) (COUNT(DISTINCT ?p) AS ?np) FROM <urn:x-arq:UnionGraph> WHERE { ?s ?p ?o }")
+        fingerprint = "0"
+        if fp_rows:
+            fingerprint = f"{fp_rows[0].get('n', {}).get('value')}/{fp_rows[0].get('np', {}).get('value')}"
         cached = self._CLASS_CATALOG_CACHE.get(kb_id)
         if cached and cached[0] == fingerprint and _time.time() - cached[1] < self._CLASS_CATALOG_TTL:
-            log_trace(f"[Fuseki] Class catalog cache hit (triples={fingerprint})")
+            log_trace(f"[Fuseki] Class catalog cache hit ({fingerprint})")
             return cached[2], cached[3]
 
+        rules = await self._load_schema_rules(kb_id)
+        use_llm = os.getenv("SCHEMA_EQUIV_LLM_AUTO_USE", "true").lower() != "false"
         kinds = cq.infer_kinds(self._bindings(kb_id, cq.build_member_query()))[: self._MAX_KINDS]
-        catalogs = {
-            k["name"]: cq.parse_kind_catalog(self._bindings(kb_id, cq.build_kind_catalog_query(k["members"])))
-            for k in kinds
-        }
+        catalogs = {}
+        for k in kinds:
+            paths = cq.parse_kind_catalog(self._bindings(kb_id, cq.build_kind_catalog_query(k["members"])))
+            cq.attach_coverage(paths, self._bindings(kb_id, cq.build_kind_path_members_query(k["members"])))
+            llm_pairs, llm_vgroups = ([], [])
+            if kwargs.get("llm_model_config"):
+                llm_pairs, llm_vgroups = await self._equivalence_llm_pass(
+                    kb_id, k["name"], paths, len(k["members"]), kwargs, log_trace)
+            groups = eq.detect_path_groups(
+                paths, llm_pairs=llm_pairs, rule_pairs=rules["key_pairs"],
+                ignore_pairs=rules["ignore_pairs"], use_llm=use_llm)
+            eq.annotate_catalog(paths, groups)
+            # 값 동치: 동치 묶음(또는 단독 경로)의 합친 어휘 안에서
+            by_key = {p["key"]: p for p in paths}
+            seen = set()
+            for p in paths:
+                if p["key"] in seen:
+                    continue
+                grp = [p] + [by_key[x] for x in p.get("equiv") or [] if x in by_key]
+                seen.update(x["key"] for x in grp)
+                buckets = eq.group_value_equivalents(grp, llm_vgroups if use_llm else [], rules["value_map"])
+                vmap = {}
+                for bucket in buckets:
+                    for v in bucket:
+                        vmap[v["uri"]] = [x for x in bucket if x["uri"] != v["uri"]]
+                for x in grp:
+                    x["value_equiv"] = vmap
+            k["equiv_groups"] = groups
+            catalogs[k["name"]] = paths
         self._CLASS_CATALOG_CACHE[kb_id] = (fingerprint, _time.time(), kinds, catalogs)
-        log_trace(f"[Fuseki] Class catalog built: {[(k['name'], len(k['members'])) for k in kinds]}")
+        log_trace(f"[Fuseki] Class catalog built: {[(k['name'], len(k['members']), len(k['equiv_groups'])) for k in kinds]}")
         return kinds, catalogs
+
+    async def _load_schema_rules(self, kb_id: str) -> Dict[str, Any]:
+        """KB 매핑 규칙 (Part 2). 규칙 저장소가 없거나 실패하면 빈 규칙."""
+        empty = {"key_pairs": [], "ignore_pairs": [], "value_map": {}, "aliases": {}}
+        try:
+            from app.services.schema_alignment.service import load_rules_for_retrieval
+            return await load_rules_for_retrieval(kb_id)
+        except Exception:
+            return empty
 
     async def _plan_with_llm(self, query_text, kinds, catalogs, value_hints, kwargs, retry_note=""):
         from app.core.models_resolver import resolve_model_config
@@ -930,7 +1045,7 @@ class FusekiBackend(GraphBackend):
 
         trace_logs = kwargs.get("_trace_logs_ref")
         reasoning: Dict[str, Any] = dict(kwargs.get("_reasoning") or {})
-        kinds, catalogs = self._class_catalog(kb_id, log_trace)
+        kinds, catalogs = await self._class_catalog(kb_id, log_trace, kwargs)
         all_preds = list(dict.fromkeys(u for c in catalogs.values() for p in c for u in p["uris"]))
         kind_info = [{"name": k["name"], "members": len(k["members"]), "examples": k["examples"],
                       "typed": bool(k.get("class_uri"))} for k in kinds]
@@ -1024,6 +1139,7 @@ class FusekiBackend(GraphBackend):
 
         ranked = cq.rank_chunk_ids_grouped(triples, entities)
         summary = cq.plan_summary(plan)
+        warnings = self._plan_warnings(plan)
         targeting.update({
             "plan": summary,
             "selected_paths": [f"필터: {f}" for f in summary["filters"]]
@@ -1031,6 +1147,8 @@ class FusekiBackend(GraphBackend):
                               + [f"반환: {r}" for r in summary["returns"]],
             "reason": plan.get("reason") or "",
             "adjustments": checked.get("adjustments") or [],
+            "equivalences": summary.get("equivalences") or [],
+            "warnings": warnings,
             "result_entities": [cq.local_name(e) for e in entities],
             "truncated": truncated,
         })
@@ -1046,9 +1164,26 @@ class FusekiBackend(GraphBackend):
             "found_entities": [],
             "used_fallback": False,
             "reasoning": reasoning,
-            "result_summary": cq.result_summary(entities, plan, agg_values, truncated),
+            "result_summary": cq.result_summary(entities, plan, agg_values, truncated)
+                              + (f"\n주의: 스키마가 다른 문서의 엔티티는 결과에서 빠졌을 수 있음 ({len(warnings)}건 경고)"
+                                 if warnings else ""),
             "trace_logs": trace_logs,
         }, []
+
+    @staticmethod
+    def _plan_warnings(plan: Dict[str, Any]) -> List[str]:
+        """동치로 확정되지 않은 표기 혼재 값 경고 (조용한 누락을 드러냄)."""
+        from app.services.schema_alignment import equivalence as eq
+        views = [f["path"] for f in plan["filters"] if "values" in f]
+        if plan.get("aggregate") and plan["aggregate"].get("values"):
+            views.append(plan["aggregate"]["path"])
+        out = []
+        for v in views:
+            grouped = {u for u, eqs in (v.get("value_equiv") or {}).items() if eqs}
+            mixed = eq.mixed_language_values(v.get("values") or [], grouped)
+            if mixed:
+                out.append(f"표기 혼재 값: {v['key']} 에 {', '.join(mixed)} — 동치 미확정, 결과에서 빠질 수 있음")
+        return out
 
     async def query(
         self,

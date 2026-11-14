@@ -42,6 +42,9 @@ class Document(Document):
 
     # Pipeline State (for Resuming)
     pipeline_status: Optional[str] = None # e.g. "ENTITY_EXTRACTED", "TRIPLE_EXTRACTED"
+    schema_rules_version: int = 0          # 인제스트 시 적용된 KB 매핑 규칙 버전
+    schema_warnings: Optional[dict] = None  # {pending_proposals, auto_applied, applied}
+    source_retained: bool = False           # 구조화 원본 보존 여부 (재정규화용)
     pipeline_metadata: Optional[dict] = None # Stores intermediate data (preview_id, dictionary, summary)
     
     # Statistics

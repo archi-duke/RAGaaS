@@ -45,6 +45,10 @@ app.include_router(knowledge_base.router, prefix="/api/v2/knowledge-bases", tags
 app.include_router(document.router, prefix="/api/v2/knowledge-bases", tags=["Documents"])
 app.include_router(retrieval.router, prefix="/api/v2/knowledge-bases", tags=["Retrieval"])
 
+# KB 스키마 매핑 제안·규칙 (docs/design-schema-mismatch.md)
+from app.api import schema_alignment
+app.include_router(schema_alignment.router, prefix="/api/v2/knowledge-bases", tags=["Schema Alignment"])
+
 from app.api import graph_viewer
 app.include_router(graph_viewer.router, prefix="/api/v2/graph", tags=["Graph Viewer"])
 

@@ -177,6 +177,51 @@ GROUP BY ?p0 ?p1 ?p2 ?v
 LIMIT 20000"""
 
 
+def build_kind_path_members_query(members: Sequence[str]) -> str:
+    """경로별 보유 멤버 (동치 판정의 멤버 상보성·접두 공존 게이트용)."""
+    values = _values_clause("?e", members)
+    return f"""{_PREFIXES}
+SELECT DISTINCT ?e ?p0 ?p1 ?p2
+FROM <urn:x-arq:UnionGraph>
+WHERE {{
+  {values}
+  {{
+    ?e ?p0 ?v .
+    FILTER(!REGEX(STR(?v), "{STRUCT_NODE_REGEX}"))
+  }}
+  UNION
+  {{
+    ?e ?p0 ?m .
+    FILTER(REGEX(STR(?m), "{STRUCT_NODE_REGEX}"))
+    ?m ?p1 ?v .
+    FILTER(!REGEX(STR(?v), "{STRUCT_NODE_REGEX}"))
+    FILTER(?p1 NOT IN ({_EXCL}))
+  }}
+  UNION
+  {{
+    ?e ?p0 ?m .
+    FILTER(REGEX(STR(?m), "{STRUCT_NODE_REGEX}"))
+    ?m ?p1 ?m2 .
+    FILTER(REGEX(STR(?m2), "{STRUCT_NODE_REGEX}"))
+    ?m2 ?p2 ?v .
+    FILTER(?p2 NOT IN ({_EXCL}))
+  }}
+  FILTER(?p0 NOT IN ({_EXCL}))
+}}
+LIMIT 50000"""
+
+
+def attach_coverage(paths: List[Dict[str, Any]], bindings: List[Dict[str, Any]]) -> None:
+    by_key = {p["key"]: p for p in paths}
+    for p in paths:
+        p["member_ids"] = set()
+    for b in bindings:
+        uris = [u for u in (_val(b, "p0"), _val(b, "p1"), _val(b, "p2")) if u]
+        key = ".".join(local_name(u) for u in uris)
+        if key in by_key and _val(b, "e"):
+            by_key[key]["member_ids"].add(_val(b, "e"))
+
+
 def parse_kind_catalog(bindings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """경로별 값 어휘·값 종류.
 
@@ -224,15 +269,23 @@ def parse_kind_catalog(bindings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 # 3. 질의 계획: 프롬프트 / 검증 / 값 해석
 # ---------------------------------------------------------------------------
 
-def _path_line(i: int, p: Dict[str, Any]) -> str:
+def _path_line(i: int, p: Dict[str, Any], index: Optional[Dict[str, int]] = None) -> str:
+    if p.get("equiv") and p.get("equiv_rep") and p["equiv_rep"] != p["key"]:
+        rep_no = (index or {}).get(p["equiv_rep"])
+        ref = f"{rep_no}번" if rep_no is not None else p["equiv_rep"]
+        return f"{i}. {p['key']} → {ref}과 동치 ({ref} 사용)"
+    eq = f" (동치: {', '.join(p['equiv'])})" if p.get("equiv") else ""
     if p["type"] == "enum":
-        vals = ", ".join(f"{v['label']}({v['members']})" for v in p["values"])
-        return f"{i}. {p['key']} [enum: {vals}]"
+        def lab(v):
+            eqv = (p.get("value_equiv") or {}).get(v["uri"]) or []
+            return f"{v['label']}({v['members']})" + "".join(f" ≡ {e['label']}" for e in eqv if e['label'] != v['label'])
+        vals = ", ".join(lab(v) for v in p["values"])
+        return f"{i}. {p['key']}{eq} [enum: {vals}]"
     if p["type"] == "number":
         lo, hi = p.get("range", [0, 0])
-        return f"{i}. {p['key']} [number: {lo:g}~{hi:g}]"
+        return f"{i}. {p['key']}{eq} [number: {lo:g}~{hi:g}]"
     ex = " / ".join(p["examples"])
-    return f"{i}. {p['key']} [text, 값 {p['dv']}종, 예: {ex}]"
+    return f"{i}. {p['key']}{eq} [text, 값 {p['dv']}종, 예: {ex}]"
 
 
 def build_plan_messages(
@@ -248,7 +301,9 @@ def build_plan_messages(
         kind_lines.append(f"- {k['name']}{cls}: 멤버 {len(k['members'])}개, 예: {', '.join(k['examples'])}")
     path_blocks = []
     for k in kinds:
-        lines = [_path_line(i, p) for i, p in enumerate(catalogs.get(k["name"], [])[:MAX_PATHS_FOR_LLM])]
+        cat = catalogs.get(k["name"], [])[:MAX_PATHS_FOR_LLM]
+        index = {p["key"]: i for i, p in enumerate(cat)}
+        lines = [_path_line(i, p, index) for i, p in enumerate(cat)]
         path_blocks.append(f"[{k['name']}] 경로 목록\n" + "\n".join(lines))
     hints = ""
     if value_hints:
@@ -263,6 +318,8 @@ def build_plan_messages(
 위 목록만 사용해 질문을 질의 계획(JSON)으로 표현하라.
 - kind: 결과로 나와야 하는 엔티티 유형 이름.
 - filters: [{{"path": 경로번호, "op": 연산자, "value": 값}}] (AND, 최대 {MAX_FILTERS}개)
+  "(동치: …)" 로 표시된 경로는 같은 필드의 다른 표기라 대표 번호 하나만 쓰면 자동으로 함께 조회된다.
+  목록에서 같은 필드인데 동치로 묶이지 않은 경로를 발견하면 path 에 번호 배열(최대 4)을 써도 된다.
   op: enum → eq|ne|in|exists|not_exists, number → eq|ne|in|gt|gte|lt|lte|exists|not_exists,
       text → contains|eq|exists|not_exists. in 은 value 에 배열.
   enum 값은 목록에 적힌 표기 그대로 써라 (예: "작을 때" → "small", "높은" → "high").
@@ -354,14 +411,78 @@ def validate_plan(
         kind = kinds[0]
     if kind is None:
         return {"status": "reject", "message": f"kind '{data.get('kind')}' 가 목록에 없음"}
-    catalog = catalogs.get(kind["name"], [])[:MAX_PATHS_FOR_LLM]
+    full_catalog = catalogs.get(kind["name"], [])
+    catalog = full_catalog[:MAX_PATHS_FOR_LLM]
+    by_key = {c["key"]: c for c in full_catalog}
 
-    def path_at(idx) -> Optional[Dict[str, Any]]:
+    def _one(idx) -> Optional[Dict[str, Any]]:
         try:
             i = int(idx)
         except (TypeError, ValueError):
             return None
         return catalog[i] if 0 <= i < len(catalog) else None
+
+    def path_at(idx) -> Optional[Dict[str, Any]]:
+        """경로 번호(또는 번호 배열) → 동치 경로까지 확장한 경로 뷰.
+
+        뷰: 대표 경로의 복사본 + alts(실제 경로들) + expansion(추가된 경로와 근거) +
+        합친 값 어휘(values)·종류(type). 동치가 없으면 alts=[자기 자신] (기존과 동일한 SPARQL).
+        """
+        picked = [_one(x) for x in idx] if isinstance(idx, list) else [_one(idx)]
+        picked = [x for x in picked[:4] if x is not None]
+        if not picked:
+            return None
+        alts: List[Dict[str, Any]] = []
+        expansion: List[Dict[str, str]] = []
+        for x in picked:
+            if x not in alts:
+                alts.append(x)
+                if len(alts) > 1:
+                    expansion.append({"key": x["key"], "basis": "plan"})
+            for k in x.get("equiv") or []:
+                y = by_key.get(k)
+                if y is not None and y not in alts:
+                    alts.append(y)
+                    expansion.append({"key": k, "basis": "/".join(x.get("equiv_basis") or []) or "normalized"})
+        view = dict(picked[0])
+        view["alts"] = alts
+        view["expansion"] = expansion
+        if len(alts) > 1:
+            fams = {("number" if a["type"] == "number" else "nominal") for a in alts}
+            if len(fams) > 1:
+                view["type_conflict"] = True
+            merged: Dict[str, Dict[str, Any]] = {}
+            for a in alts:
+                for v in a.get("values") or []:
+                    if v["uri"] in merged:
+                        merged[v["uri"]] = dict(merged[v["uri"]], members=merged[v["uri"]]["members"] + v["members"])
+                    else:
+                        merged[v["uri"]] = dict(v)
+            view["values"] = sorted(merged.values(), key=lambda v: (-v["members"], v["label"]))
+            if fams == {"number"}:
+                view["type"] = "number"
+            else:
+                view["type"] = "enum" if len(view["values"]) <= ENUM_MAX_VALUES else "text"
+            vq: Dict[str, List[Dict[str, Any]]] = {}
+            for a in alts:
+                for u, eqs in (a.get("value_equiv") or {}).items():
+                    vq.setdefault(u, [])
+                    for e in eqs:
+                        if e not in vq[u]:
+                            vq[u].append(e)
+            view["value_equiv"] = vq
+        return view
+
+    def expand_values(view: Dict[str, Any], resolved: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], List[str]]:
+        """해석된 값에 동치 값(같은 뜻의 다른 표기)을 더한다."""
+        out = list(resolved)
+        added = []
+        for v in resolved:
+            for e in (view.get("value_equiv") or {}).get(v["uri"], []):
+                if all(e["uri"] != x["uri"] for x in out):
+                    out.append(e)
+                    added.append(e["label"])
+        return out, added
 
     adjustments: List[str] = []
     filters = []
@@ -372,6 +493,8 @@ def validate_plan(
         op = str(f.get("op") or "").lower()
         if p is None:
             return {"status": "reject", "message": f"필터 경로 번호 {f.get('path')} 가 목록에 없음"}
+        if p.get("type_conflict"):
+            return {"status": "reject", "message": f"{p['key']} 와 함께 지정한 경로들의 값 종류가 다름"}
         if op not in OPS_BY_TYPE[p["type"]]:
             return {"status": "reject", "message": f"{p['key']}({p['type']}) 에 연산자 {op} 사용 불가"}
         nf = {"path": p, "op": op}
@@ -391,6 +514,9 @@ def validate_plan(
             resolved, note = resolve_value(f.get("value"), p, value_hints_uris)
             if resolved is None:
                 return {"status": "zero", "message": note, "kind": kind}
+            resolved, added = expand_values(p, resolved)
+            if added:
+                note += f" +{', '.join(added)}(동치 값)"
             nf["values"] = resolved
             nf["note"] = note
         filters.append(nf)
@@ -400,7 +526,11 @@ def validate_plan(
         p = path_at(idx)
         if p is None:
             adjustments.append(f"반환 경로 번호 {idx} 무효 → 제외")
-        elif p not in returns:
+        elif p.get("type_conflict"):
+            adjustments.append(f"반환 경로 {p['key']} 동치 묶음 종류 불일치 → 첫 경로만")
+            p = dict(p, alts=p["alts"][:1], expansion=[])
+            returns.append(p)
+        elif all(p["key"] != r["key"] for r in returns):
             returns.append(p)
 
     aggregate = None
@@ -425,6 +555,9 @@ def validate_plan(
                 resolved, note = resolve_value(agg.get("value"), p, value_hints_uris)
                 if resolved is None:
                     return {"status": "zero", "message": note, "kind": kind}
+                resolved, added = expand_values(p, resolved)
+                if added:
+                    note += f" +{', '.join(added)}(동치 값)"
                 aggregate["values"] = resolved
                 aggregate["note"] = note
             hv = agg.get("having")
@@ -444,6 +577,23 @@ def validate_plan(
         "plan": {"kind": kind, "filters": filters, "returns": returns, "aggregate": aggregate, "reason": reason},
         "adjustments": adjustments,
     }
+
+
+def _plan_equivalences(plan: Dict[str, Any]) -> List[str]:
+    """계획에서 동치 확장된 경로 설명 (리포트용)."""
+    from app.services.schema_alignment.equivalence import BASIS_LABELS
+    views = [f["path"] for f in plan["filters"]] + list(plan["returns"])
+    if plan.get("aggregate") and plan["aggregate"].get("path"):
+        views.append(plan["aggregate"]["path"])
+    out, seen = [], set()
+    for v in views:
+        for e in v.get("expansion") or []:
+            basis = "/".join(BASIS_LABELS.get(b, b) for b in e["basis"].split("/"))
+            txt = f"{v['key']} ≡ {e['key']} ({basis})"
+            if txt not in seen:
+                seen.add(txt)
+                out.append(txt)
+    return out
 
 
 def plan_summary(plan: Dict[str, Any]) -> Dict[str, Any]:
@@ -480,6 +630,7 @@ def plan_summary(plan: Dict[str, Any]) -> Dict[str, Any]:
         "filters": [fdesc(f) for f in plan["filters"]],
         "value_matches": [f["note"] for f in plan["filters"] if f.get("note")]
                          + ([agg["note"]] if agg and agg.get("note") else []),
+        "equivalences": _plan_equivalences(plan),
         "returns": [p["key"] for p in plan["returns"]],
         "aggregate": agg_txt,
     }
@@ -522,23 +673,29 @@ def _filter_condition(f: Dict[str, Any], v: str, tag: str) -> str:
     return ""
 
 
+def _alts(view: Dict[str, Any]) -> List[Dict[str, Any]]:
+    return view.get("alts") or [view]
+
+
 def compile_member_query(plan: Dict[str, Any]) -> str:
-    """필터를 만족하는 결과 엔티티 조회."""
+    """필터를 만족하는 결과 엔티티 조회. 동치 경로는 UNION (경로 1개면 기존과 동일한 SPARQL)."""
     members = plan["kind"]["members"]
     parts = [_values_clause("?e", members)]
     for i, f in enumerate(plan["filters"]):
-        tag = f"f{i}"
-        v = f"?v{tag}"
-        pat, _ = _path_pattern("?e", f["path"]["uris"], v, tag)
         negated = f["op"] in ("ne", "not_exists")
-        if f["op"] in ("exists", "not_exists"):
-            cond = ""
-        elif f["op"] == "ne":
-            pos = dict(f, op="eq")
-            cond = _filter_condition(pos, v, tag)
-        else:
-            cond = _filter_condition(f, v, tag)
-        block = f"{pat} {cond}".strip()
+        blocks = []
+        for j, alt in enumerate(_alts(f["path"])):
+            tag = f"f{i}" if j == 0 else f"f{i}a{j}"
+            v = f"?v{tag}"
+            pat, _ = _path_pattern("?e", alt["uris"], v, tag)
+            if f["op"] in ("exists", "not_exists"):
+                cond = ""
+            elif f["op"] == "ne":
+                cond = _filter_condition(dict(f, op="eq"), v, tag)
+            else:
+                cond = _filter_condition(f, v, tag)
+            blocks.append(f"{pat} {cond}".strip())
+        block = blocks[0] if len(blocks) == 1 else " UNION ".join(f"{{ {b} }}" for b in blocks)
         parts.append(f"FILTER NOT EXISTS {{ {block} }}" if negated else block)
     body = "\n  ".join(parts)
     return f"""{_PREFIXES}
@@ -554,24 +711,45 @@ LIMIT {MAX_RESULT_ENTITIES + 1}"""
 
 def compile_aggregate_query(entities: Sequence[str], agg: Dict[str, Any]) -> str:
     p = agg["path"]
-    pat, last_struct = _path_pattern("?e", p["uris"], "?va", "a")
+    alts = _alts(p)
     having = ""
     if agg.get("having"):
         sym = {"gte": ">=", "gt": ">", "lte": "<=", "lt": "<", "eq": "="}[agg["having"]["op"]]
         having = f"HAVING (?agg {sym} {agg['having']['value']:g})"
-    if agg["fn"] == "count":
-        # 리프 트리플 단위로 센다: (구조 항목, 값) 쌍 — pros 는 값 수만큼,
-        # quality_attributes.effect=positive 는 항목 수만큼 (같은 값이 여러 항목에 있어도 각각 1)
-        unit = f'CONCAT(STR({last_struct}), "|", STR(?va))' if last_struct else "?va"
-        sel = f"(COUNT(DISTINCT {unit}) AS ?agg)"
-        cond = ""
-        if agg.get("values"):
-            cond = f" FILTER(?va IN ({', '.join(_iri(v['uri']) for v in agg['values'])}))"
-        where = f"OPTIONAL {{ {pat}{cond} }}"
+    cond = ""
+    if agg.get("values"):
+        cond = f" FILTER(?va IN ({', '.join(_iri(v['uri']) for v in agg['values'])}))"
+    if len(alts) == 1:
+        pat, last_struct = _path_pattern("?e", alts[0]["uris"], "?va", "a")
+        if agg["fn"] == "count":
+            # 리프 트리플 단위로 센다: (구조 항목, 값) 쌍 — pros 는 값 수만큼,
+            # quality_attributes.effect=positive 는 항목 수만큼 (같은 값이 여러 항목에 있어도 각각 1)
+            unit = f'CONCAT(STR({last_struct}), "|", STR(?va))' if last_struct else "?va"
+            sel = f"(COUNT(DISTINCT {unit}) AS ?agg)"
+            where = f"OPTIONAL {{ {pat}{cond} }}"
+        else:
+            fn = "MAX" if agg["fn"] == "max" else "MIN"
+            sel = f"({fn}(xsd:decimal(COALESCE(?val, STR(?va)))) AS ?agg)"
+            where = f"{pat} OPTIONAL {{ ?va rdfs:label ?val }}"
     else:
-        fn = "MAX" if agg["fn"] == "max" else "MIN"
-        sel = f"({fn}(xsd:decimal(COALESCE(?val, STR(?va)))) AS ?agg)"
-        where = f"{pat} OPTIONAL {{ ?va rdfs:label ?val }}"
+        # 동치 경로 합산: 대안마다 단위를 ?unit 으로 바인딩해 UNION
+        branches = []
+        for j, alt in enumerate(alts):
+            pat, last_struct = _path_pattern("?e", alt["uris"], "?va", f"a{j}")
+            if agg["fn"] == "count":
+                unit = f'CONCAT(STR({last_struct}), "|", STR(?va))' if last_struct else "STR(?va)"
+                branches.append(f"{{ {pat}{cond} BIND({unit} AS ?unit) }}")
+            else:
+                branches.append(f"{{ {pat} OPTIONAL {{ ?va rdfs:label ?val }} "
+                                f"BIND(xsd:decimal(COALESCE(?val, STR(?va))) AS ?num) }}")
+        union = " UNION ".join(branches)
+        if agg["fn"] == "count":
+            sel = "(COUNT(DISTINCT ?unit) AS ?agg)"
+            where = f"OPTIONAL {{ {union} }}"
+        else:
+            fn = "MAX" if agg["fn"] == "max" else "MIN"
+            sel = f"({fn}(?num) AS ?agg)"
+            where = union
     order = "DESC(?agg)" if agg["order"] == "desc" else "ASC(?agg)"
     return f"""{_PREFIXES}
 PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
@@ -624,35 +802,39 @@ def compile_evidence_query(entities: Sequence[str], plan: Dict[str, Any]) -> str
     for i, f in enumerate(plan["filters"]):
         if f["op"] in ("ne", "not_exists"):
             continue
-        p = f["path"]
         extra = ""
         if "values" in f:
             extra = f"FILTER(?o IN ({', '.join(_iri(x['uri']) for x in f['values'])}))"
         elif "numbers" in f or "text" in f:
             extra = _filter_condition(f, "?o", f"e{i}")
-        if len(p["uris"]) >= 2 and f["op"] != "exists":
-            item_filters.setdefault(tuple(p["uris"][:-1]), []).append((p["uris"][-1], f, i))
-        branch(p["uris"], "filter", extra, p["key"])
+        # 동치 경로마다 분기 — ?path 에 실제 키를 바인딩해 리포트에 원래 표기가 보이게
+        for alt in _alts(f["path"]):
+            if len(alt["uris"]) >= 2 and f["op"] != "exists":
+                item_filters.setdefault(tuple(alt["uris"][:-1]), []).append((alt["uris"][-1], f, i))
+            branch(alt["uris"], "filter", extra, alt["key"])
 
     agg = plan.get("aggregate")
     if agg and agg.get("path"):
         extra = ""
         if agg.get("values"):
             extra = f"FILTER(?o IN ({', '.join(_iri(v['uri']) for v in agg['values'])}))"
-        branch(agg["path"]["uris"], "aggregate", extra, agg["path"]["key"])
+        for alt in _alts(agg["path"]):
+            branch(alt["uris"], "aggregate", extra, alt["key"])
 
     for j, p in enumerate(plan["returns"]):
-        extras = []
-        for leaf, f, i in item_filters.get(tuple(p["uris"][:-1]), []):
-            if leaf == p["uris"][-1]:
-                continue
-            fx = f"?fx{j}_{i}"
-            if "values" in f:
-                cond = f"FILTER({fx} IN ({', '.join(_iri(x['uri']) for x in f['values'])}))"
-            else:
-                cond = _filter_condition(f, fx, f"r{j}_{i}")
-            extras.append(f"?s <{leaf}> {fx} . {cond}")
-        branch(p["uris"], "return", " ".join(extras), p["key"])
+        for k, alt in enumerate(_alts(p)):
+            extras = []
+            # 같은 구조 항목 한정: 자기와 같은 접두를 가진 필터 경로에만 묶인다
+            for leaf, f, i in item_filters.get(tuple(alt["uris"][:-1]), []):
+                if leaf == alt["uris"][-1]:
+                    continue
+                fx = f"?fx{j}_{k}_{i}"
+                if "values" in f:
+                    cond = f"FILTER({fx} IN ({', '.join(_iri(x['uri']) for x in f['values'])}))"
+                else:
+                    cond = _filter_condition(f, fx, f"r{j}_{k}_{i}")
+                extras.append(f"?s <{leaf}> {fx} . {cond}")
+            branch(alt["uris"], "return", " ".join(extras), alt["key"])
 
     if not branches:
         return ""

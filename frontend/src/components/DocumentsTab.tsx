@@ -5,6 +5,7 @@ import UploadDocumentModal from './UploadDocumentModal';
 import EntityDictionaryModal from './EntityDictionaryModal';
 import ExtractionPreviewModal from './ExtractionPreviewModal';
 import AlignmentReviewModal from './AlignmentReviewModal';
+import SchemaAlignmentPanel from './SchemaAlignmentPanel';
 import { docApi } from '../services/api';
 import ConfirmDialog from './ConfirmDialog';
 
@@ -28,6 +29,7 @@ interface Document {
     max_sample_size?: number;
     // Pipeline Persistence
     pipeline_status?: string;
+    schema_warnings?: { pending_proposals?: number; auto_applied?: number; applied?: number } | null;
     pipeline_metadata?: {
         execution_mode?: 'batch' | 'step';
         [key: string]: any;
@@ -56,6 +58,7 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
     const safeDocuments = Array.isArray(documents) ? documents : [];
 
     const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
+    const [isSchemaPanelOpen, setIsSchemaPanelOpen] = useState(false);
 
     // Result Modals State
     const [showPreviewModal, setShowPreviewModal] = useState(false);
@@ -198,6 +201,14 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
                 }}>
                     <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 600 }}>Documents ({safeDocuments.length})</h3>
                     <button
+                        className="btn btn-secondary"
+                        onClick={() => setIsSchemaPanelOpen(true)}
+                        style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginRight: '0.5rem' }}
+                        title="같은 의미를 다른 키·값으로 적은 문서의 매핑 제안·규칙"
+                    >
+                        스키마 정렬
+                    </button>
+                    <button
                         className="btn btn-primary"
                         onClick={() => setIsUploadModalOpen(true)}
                         style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
@@ -250,7 +261,16 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
                                         <td style={{ padding: '1rem' }}>
                                             <span className="badge badge-secondary" style={{ fontSize: '0.75rem' }}>{doc.file_type.toUpperCase()}</span>
                                         </td>
-                                        <td style={{ padding: '1rem' }}>{getStatusBadge(doc.status, doc.pipeline_status, doc.error)}</td>
+                                        <td style={{ padding: '1rem' }}>
+                                            {getStatusBadge(doc.status, doc.pipeline_status, doc.error)}
+                                            {(doc.schema_warnings?.pending_proposals || 0) > 0 && (
+                                                <span className="badge" title="같은 의미를 다른 표기로 적은 필드·값이 있습니다"
+                                                    onClick={(e) => { e.stopPropagation(); setIsSchemaPanelOpen(true); }}
+                                                    style={{ marginLeft: '0.4rem', background: '#fef3c7', color: '#92400e', cursor: 'pointer', fontSize: '0.72rem' }}>
+                                                    스키마 제안 {doc.schema_warnings?.pending_proposals}
+                                                </span>
+                                            )}
+                                        </td>
                                         <td style={{ padding: '1rem', textAlign: 'center', fontSize: '0.85rem' }}>{doc.max_paths === 1000 ? '∞' : (doc.max_paths || '-')}</td>
                                         <td style={{ padding: '1rem', textAlign: 'center', fontSize: '0.85rem' }}>{doc.max_sample_size ? `${doc.max_sample_size / 1000}k` : '-'}</td>
                                         <td style={{ padding: '1rem', textAlign: 'center' }}>
@@ -434,6 +454,9 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
                     onRefresh();
                 }}
             />
+            {isSchemaPanelOpen && (
+                <SchemaAlignmentPanel kbId={kbId} onClose={() => setIsSchemaPanelOpen(false)} onChanged={onRefresh} />
+            )}
         </>
     );
 }
