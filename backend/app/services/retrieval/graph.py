@@ -71,7 +71,7 @@ class GraphRetrievalStrategy(RetrievalStrategy):
         
         # 1+2. Analyze query + extract entities in a SINGLE LLM call (병합: 2 호출 → 1)
         entities, query_analysis = await self._analyze_and_extract(kb_id, query, llm_cfg=llm_cfg, llm_model=llm_model_name)
-        log(f"DEBUG: Query Analysis -> Type: {query_analysis.get('query_type')}, Hops: {query_analysis.get('hop_count', 1)}, Rel: {query_analysis.get('relationship_type')}, Roles: {query_analysis.get('entity_roles')}")
+        log(f"DEBUG: Query Analysis -> Type: {query_analysis.get('query_type')}, Hops: {query_analysis.get('hop_count', 1)}, Rel: {query_analysis.get('relationship_type')}, Roles: {query_analysis.get('entity_roles')}, RelAliases: {query_analysis.get('relation_aliases')}")
         log(f"DEBUG: 🔍 Extracted entities: {entities}")
         
         # 3. Expand entities - find related entities in graph (conditional)
@@ -120,6 +120,7 @@ class GraphRetrievalStrategy(RetrievalStrategy):
             query_type=query_analysis.get("query_type"),
             relationship_keywords=query_analysis.get("relationship_keywords", []),
             entity_roles=query_analysis.get("entity_roles", {}),
+            relation_aliases=query_analysis.get("relation_aliases", []),
             query_text=query,
             **kwargs
         )
@@ -261,6 +262,7 @@ class GraphRetrievalStrategy(RetrievalStrategy):
             "alternatives": [],
             "hop_count": 1,
             "entity_roles": {},
+            "relation_aliases": [],
         }
         entities = set()
 
@@ -291,6 +293,10 @@ class GraphRetrievalStrategy(RetrievalStrategy):
         4. is_multi_hop: true if it chains relations (e.g. "A's B's C").
         5. hop_count: 1, 2, or 3.
         6. alternatives: alternative entity names or related entities.
+        7. relation_aliases: the asked relation/attribute expressed as short words in BOTH Korean and
+           English, including snake_case-style key names a structured (JSON/YAML) document might use.
+           (e.g. "장점" -> ["장점", "pros", "advantages", "benefits", "strengths"];
+                 "단점" -> ["단점", "cons", "disadvantages", "drawbacks"]). [] if no relation is asked.
 
         Query: {query}
 
@@ -301,7 +307,8 @@ class GraphRetrievalStrategy(RetrievalStrategy):
           "relationship_type": "master",
           "is_multi_hop": false,
           "hop_count": 1,
-          "alternatives": []
+          "alternatives": [],
+          "relation_aliases": ["스승", "master", "teacher", "mentor"]
         }}
         """
         try:
@@ -338,6 +345,10 @@ class GraphRetrievalStrategy(RetrievalStrategy):
             if data.get("relationship_type"):
                 analysis["relationship_type"] = data["relationship_type"]
             analysis["alternatives"] = data.get("alternatives", []) or []
+            analysis["relation_aliases"] = [
+                a.strip() for a in (data.get("relation_aliases") or [])
+                if isinstance(a, str) and a.strip()
+            ][:10]
             hop_count = data.get("hop_count")
             if isinstance(hop_count, int) and hop_count >= 1:
                 analysis["hop_count"] = hop_count

@@ -57,7 +57,7 @@ const DEFAULT_PARAMS: Record<StageType, Record<string, any>> = {
         enable_inverse: true,
         inverse_mode: 'always',
         use_schema_mode: false,
-        use_dynamic_schema: false,
+        use_dynamic_schema: true,  // 실제 술어 목록을 LLM 에 주어 지어낸 술어(prop:장점 등) 방지
         enable_entity_expansion: false,
         merge_mode: 'union',
         custom_query_prompt: '',
@@ -676,7 +676,7 @@ export default function PipelineBuilder({
                                     {!isOntologyPromoted ? (
                                         <ParamCheckbox
                                             label="Dynamic Schema"
-                                            checked={params.use_dynamic_schema ?? false}
+                                            checked={params.use_dynamic_schema ?? true}
                                             onChange={(v) => handleParamChange(index, 'use_dynamic_schema', v)}
                                         />
                                     ) : (

@@ -6,13 +6,34 @@ import math
 import httpx
 
 
-# TODO: REMOVE DEBUG LOGGING AFTER DEBUGGING
+# Debug HTTP logging — DEBUG_HTTP_LOGGING=1 일 때만 출력, 인증 헤더는 마스킹.
+_SENSITIVE_HEADERS = {"authorization", "api-key", "x-api-key", "cookie", "x-dep-ticket", "proxy-authorization"}
+
+
+def _debug_http_enabled() -> bool:
+    import os
+    return os.getenv("DEBUG_HTTP_LOGGING", "").lower() in ("1", "true", "yes")
+
+
+def _masked_headers(headers) -> dict:
+    """인증 헤더 값을 가린다 — API 키가 로그에 평문으로 남지 않도록."""
+    out = {}
+    for k, v in dict(headers).items():
+        if k.lower() in _SENSITIVE_HEADERS:
+            out[k] = (v[:10] + "…(masked)") if len(v) > 14 else "***"
+        else:
+            out[k] = v
+    return out
+
+
 async def _log_request(request: httpx.Request):
     """Debug log for outgoing requests"""
+    if not _debug_http_enabled():
+        return
     print(f"\n{'='*20} [DEBUG] HTTP REQUEST START {'='*20}")
     print(f"Method: {request.method}")
     print(f"URL: {request.url}")
-    print(f"Headers: {dict(request.headers)}")
+    print(f"Headers: {_masked_headers(request.headers)}")
     try:
         content = request.read().decode("utf-8")
         print(f"Body: {content[:2000]}{'...' if len(content) > 2000 else ''}")
@@ -22,6 +43,8 @@ async def _log_request(request: httpx.Request):
 
 async def _log_response(response: httpx.Response):
     """Debug log for incoming responses"""
+    if not _debug_http_enabled():
+        return
     print(f"[DEBUG] HTTP RESPONSE: {response.status_code} {response.url}\n")
 # ------------------------------
 

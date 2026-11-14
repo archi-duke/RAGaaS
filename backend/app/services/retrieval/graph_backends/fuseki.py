@@ -62,58 +62,91 @@ class FusekiBackend(GraphBackend):
         stopwords = {'누구', '무엇', '어디', '언제', '어떻게', '왜', '이런', '저런', '그런', '참가자'}
         return [w for w in korean_words if w not in stopwords]
 
+    # 엔티티 링킹 후보 최소 점수 — 이 미만이면 "못 찾음"으로 처리해 엉뚱한 앵커를 피한다.
+    _MIN_LINK_SCORE = 25.0
+
+    def _link_candidate_filter(self, var: str, entity_text: str) -> Optional[str]:
+        """정규화된 라벨(?nl)에 대한 후보 수집 FILTER 절.
+
+        라벨 쪽은 소문자 + '_'/'-' → 공백으로 정규화하고, 질문 엔티티의 각 토큰(어간화)
+        포함 여부 또는 "라벨이 질문 엔티티에 포함되는" 역방향 포함을 OR 로 건다.
+        넓게 모은 뒤 랭킹은 Python(score_candidate)에서 한다.
+        """
+        from app.services.retrieval.entity_linking import normalize_text, tokens
+
+        norm_entity = normalize_text(entity_text)
+        from app.services.retrieval.entity_linking import is_linkable
+        toks = [t for t in dict.fromkeys(tokens(entity_text)) if is_linkable(t)]
+        if not norm_entity:
+            return None
+        conds = [f'CONTAINS({var}, "{escape_sparql_literal(t)}")' for t in toks[:8]]
+        conds.append(f'(STRLEN({var}) >= 3 && CONTAINS("{escape_sparql_literal(norm_entity)}", {var}))')
+        return " || ".join(conds)
+
     def _resolve_entity_to_uri(self, kb_id: str, entity_text: str) -> Optional[str]:
         """텍스트 엔티티를 그래프 URI로 매핑.
-        
+
         Args:
             kb_id: Knowledge Base ID
-            entity_text: 검색할 엔티티 텍스트 (예: "성기훈", "장풍")
-            
+            entity_text: 검색할 엔티티 텍스트 (예: "성기훈", "Micro Frontend Architecture")
+
         Returns:
             발견된 URI 문자열 또는 None
+
+        후보 수집은 정규화 라벨 기준 토큰 포함/역방향 포함으로 넓게 하고, 랭킹은
+        entity_linking.score_candidate (구분자·대소문자·복수형 무시, 토큰 포함,
+        서술문 노드 감점) + out-degree 보너스(관계가 실제로 달린 노드 선호)로 한다.
+        구조화 문서의 'micro_frontend' 같은 snake_case 노드도 자연어로 연결된다.
         """
         try:
-            # SPARQL 문자열 리터럴에 삽입하기 전 이스케이프 (원본 entity_text는 로깅용으로 보존)
-            safe_entity_text = escape_sparql_literal(entity_text)
+            from app.services.retrieval.entity_linking import is_linkable
+            if not is_linkable(entity_text):
+                return None
+            label_filter = self._link_candidate_filter("?nl", entity_text)
+            if not label_filter:
+                return None
 
-            # 1. rdfs:label로 검색 — LIMIT 1 임의 매치 대신 후보를 모아 랭킹한다.
-            #    (부분매칭은 "성기훈" → "성기훈"/"기훈"/"성기훈의 어머니"/"기훈에게 …" 등
-            #     여러 후보를 만들며, 임의 첫 매치는 긴 노이즈 노드를 앵커로 잡을 수 있다.)
+            # 1. rdfs:label 기준 후보
             label_query = f"""
             PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-            SELECT DISTINCT ?uri ?label
+            PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+            SELECT ?uri ?label (COUNT(DISTINCT ?op) AS ?deg)
             FROM <urn:x-arq:UnionGraph>
             WHERE {{
               ?uri rdfs:label ?label .
-              FILTER(CONTAINS(LCASE(STR(?label)), LCASE("{safe_entity_text}")))
+              FILTER(STRSTARTS(STR(?uri), "http://rag.local/inst/"))
+              BIND(REPLACE(REPLACE(LCASE(STR(?label)), "_", " "), "-", " ") AS ?nl)
+              FILTER({label_filter})
+              OPTIONAL {{ ?uri ?op ?oo . FILTER(?op != rdfs:label && ?op != rdf:type) }}
             }}
-            LIMIT 50
+            GROUP BY ?uri ?label
+            LIMIT 300
             """
-
             results = fuseki_client.query_sparql(kb_id, label_query)
             bindings = results.get("results", {}).get("bindings", [])
-
             best_uri = self._pick_best_uri_binding(entity_text, bindings, value_key="label")
             if best_uri:
                 return best_uri
 
-            # 2. URI 마지막 부분으로 검색 (예: inst:Seong_Gi-hun) — 동일하게 랭킹 적용.
-            #    URI 로컬네임을 비교 대상으로 삼는다.
+            # 2. URI 로컬네임 기준 후보 (라벨이 없는 노드 대비)
+            local_filter = self._link_candidate_filter("?nl", entity_text)
             uri_query = f"""
-            PREFIX inst: <http://rag.local/inst/>
-            SELECT DISTINCT ?uri
+            PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+            PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+            SELECT ?uri (COUNT(DISTINCT ?op) AS ?deg)
             FROM <urn:x-arq:UnionGraph>
             WHERE {{
-              ?uri ?p ?o .
-              FILTER(CONTAINS(LCASE(STR(?uri)), LCASE("{safe_entity_text}")))
+              ?uri ?op ?oo .
               FILTER(STRSTARTS(STR(?uri), "http://rag.local/inst/"))
+              FILTER(?op != rdfs:label && ?op != rdf:type)
+              BIND(REPLACE(REPLACE(LCASE(STRAFTER(STR(?uri), "http://rag.local/inst/")), "_", " "), "-", " ") AS ?nl)
+              FILTER({local_filter})
             }}
-            LIMIT 50
+            GROUP BY ?uri
+            LIMIT 300
             """
-
             results = fuseki_client.query_sparql(kb_id, uri_query)
             bindings = results.get("results", {}).get("bindings", [])
-
             best_uri = self._pick_best_uri_binding(entity_text, bindings, value_key=None)
             if best_uri:
                 return best_uri
@@ -129,9 +162,9 @@ class FusekiBackend(GraphBackend):
         """SPARQL 바인딩 후보들에서 entity_text 와 가장 잘 매칭되는 URI 선택.
 
         value_key 가 지정되면 그 변수(예: label)의 값을 비교 기준으로 삼고,
-        None 이면 URI 의 로컬네임(마지막 path 세그먼트, '_'→' ')을 기준으로 삼는다.
-        랭킹은 entity_linking.score_candidate (완전일치 > 접두 > 부분포함, 길이 근접
-        보너스)를 따른다. 매칭 후보가 없으면 None.
+        None 이면 URI 의 로컬네임(마지막 path 세그먼트, URL 디코드)을 기준으로 삼는다.
+        랭킹은 entity_linking.score_candidate + out-degree 보너스(최대 8점, ?deg 가
+        있을 때). 최고점이 _MIN_LINK_SCORE 미만이면 None.
         """
         from app.services.retrieval.entity_linking import score_candidate
 
@@ -143,11 +176,19 @@ class FusekiBackend(GraphBackend):
             if value_key:
                 compare_text = b.get(value_key, {}).get("value", "")
             else:
-                local = uri.rsplit("/", 1)[-1]
-                compare_text = local.replace("_", " ")
+                compare_text = urllib.parse.unquote(uri.rsplit("/", 1)[-1])
             score = score_candidate(entity_text, compare_text)
+            if score <= 0:
+                continue
+            try:
+                deg = int(b.get("deg", {}).get("value", 0))
+            except (TypeError, ValueError):
+                deg = 0
+            score += min(8.0, float(deg))
             if score > best_score:
                 best_uri, best_score = uri, score
+        if best_score < self._MIN_LINK_SCORE:
+            return None
         return best_uri
 
     def _fetch_entity_predicates(self, kb_id: str, entity_uri: str) -> Dict[str, List[str]]:
@@ -452,10 +493,11 @@ class FusekiBackend(GraphBackend):
             return True
 
         for triple in triples:
-            p = triple.get("predicate", "")
-            o = triple.get("object", "")
-            s = triple.get("subject", "") if include_subject else ""
+            p = str(triple.get("predicate", "")).lower()
+            o = str(triple.get("object", "")).lower()
+            s = str(triple.get("subject", "")).lower() if include_subject else ""
             for kw in relation_keywords:
+                kw = str(kw).lower()
                 if kw in p or kw in o or (include_subject and kw in s):
                     return True
         return False
@@ -661,7 +703,8 @@ class FusekiBackend(GraphBackend):
                     log_trace("[Fuseki] Entity-Centric Schema: ENABLED")
                     
                     # 1. 질문에서 엔티티 추출
-                    question_entities = self._extract_entities_from_question(query_text, entities)
+                    question_entities = list(self._extract_entities_from_question(query_text, entities))
+                    primary_entities = list(question_entities)  # 질의 분석(LLM)이 준 엔티티 — 휴리스틱보다 우선
                     log_trace(f"[Fuseki] Extracted entities from question: {question_entities}")
                     
                     # [FIX] LLM이 한글을 영어로 변환하는 경우(예: 장풍->Jangpung) 대비
@@ -685,9 +728,26 @@ class FusekiBackend(GraphBackend):
 
                     # 2. 엔티티를 URI로 매핑 (Instance URI만 유효)
                     resolved_uris = []
+                    primary_resolved = False
                     for entity in question_entities:  # 모든 후보 시도
+                        is_primary = entity in primary_entities
+                        if not is_primary and primary_resolved and any(
+                            entity in pe for pe in primary_entities
+                        ):
+                            # LLM 엔티티(또는 그 번역)가 이미 연결됐다면, 그 엔티티의 조각인
+                            # 휴리스틱 토큰("마이크로 프론트엔드 아키텍처" → "프론트엔드")으로
+                            # 두 번째 앵커를 잡지 않는다 — 엉뚱한 Pattern 2(관계 탐색) 방지.
+                            log_trace(f"[Fuseki] Skip heuristic token '{entity}' (fragment of resolved entity)")
+                            continue
                         uri = self._resolve_entity_to_uri(kb_id, entity)
+                        if uri and any(uri == u for _, u in resolved_uris):
+                            log_trace(f"[Fuseki] Skip '{entity}' -> {uri} (already resolved)")
+                            if is_primary:
+                                primary_resolved = True
+                            continue
                         if uri:
+                            if is_primary:
+                                primary_resolved = True
                             # Instance URI인지 검증 (rel:, prop:, class: 제외)
                             if "/inst/" in uri or "rag.local/inst/" in uri:
                                 resolved_uris.append((entity, uri))
@@ -808,11 +868,38 @@ class FusekiBackend(GraphBackend):
                                 
                                 # [UPGRADED] Fast Path for Pattern 3 (Bidirectional + Partial Match)
                                 # 양방향 조회 + 부분 일치: "장풍"을 검색하면 "장풍의 고수" 등도 포함
+                                # 해석된 URI 를 직접 앵커로도 쓴다: 이름 부분일치만 쓰면 질문 표기
+                                # ("Micro Frontend Architecture")와 라벨("micro_frontend")이 다를 때
+                                # 링킹에 성공하고도 Fast Path 가 0건이 된다.
+                                # 또한 구조화(JSON/YAML) 문서의 중첩 객체는 익명 구조 노드
+                                # (inst:root_N_<key>_M)로 들어가므로, 그 노드를 경유하는 2-hop
+                                # (엔티티 -p0-> 구조노드 -p-> 값)도 함께 가져온다.
+                                entity_iri = f"<{entity_uri}>"
                                 bidirectional_query = f"""
                                 PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-                                SELECT DISTINCT ?s ?p ?o ?sLabel ?oLabel
+                                SELECT DISTINCT ?s ?p ?o ?sLabel ?oLabel ?p0 ?anchorLabel
                                 FROM <urn:x-arq:UnionGraph>
                                 WHERE {{
+                                    {{
+                                        # Outgoing (URI 앵커)
+                                        BIND({entity_iri} AS ?s)
+                                        ?s ?p ?o .
+                                    }}
+                                    UNION
+                                    {{
+                                        # Incoming (URI 앵커)
+                                        BIND({entity_iri} AS ?o)
+                                        ?s ?p ?o .
+                                    }}
+                                    UNION
+                                    {{
+                                        # 구조 노드 경유 2-hop: 엔티티 -p0-> ?s(root_N_…) -p-> ?o
+                                        {entity_iri} ?p0 ?s .
+                                        FILTER(REGEX(STR(?s), "/inst/root_[0-9]+_"))
+                                        ?s ?p ?o .
+                                        OPTIONAL {{ {entity_iri} rdfs:label ?anchorLabel }}
+                                    }}
+                                    UNION
                                     {{
                                         # Outgoing: 엔티티 -> ?p -> ?o (엔티티가 주어, 양방향 부분 일치)
                                         ?s ?p ?o .
@@ -836,8 +923,9 @@ class FusekiBackend(GraphBackend):
                                     FILTER(?p != <http://www.w3.org/1999/02/22-rdf-syntax-ns#predicate>)
                                     FILTER(?p != <http://www.w3.org/1999/02/22-rdf-syntax-ns#object>)
                                     FILTER(?p != <http://www.w3.org/2000/01/rdf-schema#label>)
+                                    FILTER(!STRSTARTS(STR(?s), "http://rag.local/stmt/"))
                                 }}
-                                LIMIT 100
+                                LIMIT 300
                                 """
                                 try:
                                     log_trace(f"[Fuseki] Pattern 3 Bidirectional Fast Path SPARQL:\n{bidirectional_query}")
@@ -854,6 +942,14 @@ class FusekiBackend(GraphBackend):
                                             # [FIX] Label이 없을 경우 URI에서 추출 (KeyError 방지)
                                             s_label = b.get("sLabel", {}).get("value") or (b["s"]["value"].split("/")[-1].split("#")[-1])
                                             o_label = b.get("oLabel", {}).get("value") or (b["o"]["value"].split("/")[-1].split("#")[-1])
+
+                                            if "p0" in b:
+                                                # 구조 노드 경유 2-hop: (엔티티, "tradeoffs.pros", 값) 으로 평탄화해
+                                                # 의미 없는 'root_0_tradeoffs_22' 대신 앵커 엔티티를 주어로 보인다.
+                                                p0_uri = b["p0"]["value"]
+                                                short_p0 = p0_uri.split("/")[-1] if "/" in p0_uri else p0_uri
+                                                short_p = f"{short_p0}.{short_p}"
+                                                s_label = b.get("anchorLabel", {}).get("value") or entity_uri.split("/")[-1]
 
                                             found_triples.append({
                                                 "subject": s_label,
@@ -967,9 +1063,14 @@ class FusekiBackend(GraphBackend):
                     # resolved_uris: List[Tuple[str, str]] -> (name, uri)
                     known_entity_names = [name for name, _ in resolved_uris] if resolved_uris else []
                     relation_keywords = self._extract_relevance_keywords(query_text, known_entity_names)
-                    log_trace(f"[Fuseki] Relevance Check Keywords: {relation_keywords}")
+                    # 질의 분석이 준 관계어 동의어(한/영, 키 이름 형태)를 추가 — 한국어 질문
+                    # ("장점")과 영어 키(predicate "pros") 사이의 언어 차이를 메운다.
+                    # (임베딩은 짧은 한↔영 단어 유사도가 신뢰 불가: 장점~pros 0.20 < 장점~references 0.27)
+                    relation_aliases = [a.lower() for a in (kwargs.get("relation_aliases") or []) if a]
+                    relevance_terms = list(dict.fromkeys(relation_keywords + relation_aliases))
+                    log_trace(f"[Fuseki] Relevance Check Keywords: {relevance_terms}")
 
-                    is_relevant = self._check_triples_relevance(relation_keywords, found_triples)
+                    is_relevant = self._check_triples_relevance(relevance_terms, found_triples)
                     if not is_relevant:
                         log_trace(f"[Fuseki] ⚠️ Fast Path result seems irrelevant to keywords {relation_keywords}. Formatting Fallback to LLM.")
                         skip_llm_generation = False
