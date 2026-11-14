@@ -607,7 +607,9 @@ MODE_LABELS = {
     "overview": "overview(개요 이웃 조회)",
     "pair": "pair(두 엔티티 직접 관계)",
     "none": "none(일치 관계 없음)",
+    "P": "P(질의 계획 — 유형 수준)",
 }
+ROLE_LABELS = {"filter": "필터", "aggregate": "집계", "return": "반환"}
 TIER_LABELS = {1: "완전일치", 2: "어간일치", 3: "토큰포함"}
 
 
@@ -627,8 +629,9 @@ def render_reasoning_report(reasoning: Dict[str, Any], max_triples: int = 15) ->
     ents = an.get("entities") or []
     ent_txt = ", ".join(f"'{e}'({roles[e]})" if e in roles else f"'{e}'" for e in ents) or "(없음)"
     aliases = an.get("relation_aliases") or []
+    tc = f" | 대상 유형: '{an['target_class']}'" if an.get("target_class") else ""
     lines.append(
-        f"[Graph 1/5 질문 분석] intent={an.get('intent') or '-'} | 엔티티: {ent_txt} | "
+        f"[Graph 1/5 질문 분석] intent={an.get('intent') or '-'}{tc} | 엔티티: {ent_txt} | "
         f"관계어: {', '.join(aliases) if aliases else '(없음)'}"
         + (f" | 모델: {an['model']}" if an.get("model") else "")
     )
@@ -637,13 +640,25 @@ def render_reasoning_report(reasoning: Dict[str, Any], max_triples: int = 15) ->
         lines.append(f"    ⚠ 질의 분석 LLM 호출 불가 — 엔티티/관계어를 spaCy 토큰으로 대체: {an['llm_issue']}")
 
     linking = reasoning.get("linking") or []
-    if linking:
-        parts = [f"'{l['entity']}' → inst:{local_name(l['uri'])}" for l in linking]
-        lines.append(f"[Graph 2/5 엔티티 링킹] {' | '.join(parts)}")
-    else:
-        lines.append("[Graph 2/5 엔티티 링킹] 그래프 노드에 연결된 엔티티 없음")
-
     tg = reasoning.get("targeting") or {}
+    kinds_txt = ""
+    if tg.get("kinds"):
+        ks = []
+        for k in tg["kinds"]:
+            how = "rdf:type" if k.get("typed") else "경로 시그니처 추론"
+            ks.append(f"{k['name']}({how}, 멤버 {k['members']}개: {', '.join(k.get('examples') or [])})")
+        kinds_txt = " | 유형: " + "; ".join(ks)
+    if linking:
+        parts = []
+        for l in linking:
+            note = ""
+            if l.get("value_node"):
+                note = " (값 노드 — 부분일치라 조건 힌트로 쓰지 않음)" if l.get("hint_dropped") else " (값 노드 — 조건 값으로 사용)"
+            parts.append(f"'{l['entity']}' → inst:{local_name(l['uri'])}{note}")
+        lines.append(f"[Graph 2/5 엔티티 링킹] {' | '.join(parts)}{kinds_txt}")
+    else:
+        lines.append(f"[Graph 2/5 엔티티 링킹] 그래프 노드에 연결된 엔티티 없음{kinds_txt}")
+
     mode = tg.get("mode") or "-"
     head = f"[Graph 3/5 관계 타게팅] mode={MODE_LABELS.get(mode, mode)}"
     details = []
@@ -661,17 +676,37 @@ def render_reasoning_report(reasoning: Dict[str, Any], max_triples: int = 15) ->
     lines.append(head)
     for sp in tg.get("selected_paths") or []:
         lines.append(f"    · {sp}")
+    plan = tg.get("plan") or {}
+    if plan.get("value_matches"):
+        lines.append(f"    · 값 매칭: {'; '.join(plan['value_matches'])}")
+    for adj in tg.get("adjustments") or []:
+        lines.append(f"    · 조정: {adj}")
+    if tg.get("result_entities") is not None and mode == "P":
+        more = " (상한 초과, 일부만)" if tg.get("truncated") else ""
+        lines.append(f"    · 결과 엔티티 {len(tg['result_entities'])}개{more}: {', '.join(tg['result_entities'])}")
     if reasoning.get("sparql"):
         lines.append("  SPARQL:\n" + "\n".join("    " + l for l in reasoning["sparql"].strip().splitlines()))
 
     triples = reasoning.get("triples") or []
-    lines.append(f"[Graph 4/5 선택 트리플] {len(triples)}건")
-    for i, t in enumerate(triples[:max_triples], 1):
+    grouped = any(t.get("entity") for t in triples)
+    if grouped:
+        n_ent = len({t.get("entity") for t in triples})
+        lines.append(f"[Graph 4/5 선택 트리플] 결과 엔티티 {n_ent}개 · 트리플 {len(triples)}건")
+    else:
+        lines.append(f"[Graph 4/5 선택 트리플] {len(triples)}건")
+    limit = max_triples * 2 if grouped else max_triples
+    current = None
+    for i, t in enumerate(triples[:limit], 1):
+        if grouped and t.get("entity") != current:
+            current = t.get("entity")
+            lines.append(f"  ▸ {current}")
         src = ", ".join(_short_chunk(c) for c in (t.get("chunk_ids") or [])) or "청크 연결 없음"
         arrow = f"—{t['predicate']}→"
-        lines.append(f"  {i}. {t['subject']} {arrow} {str(t['object'])[:80]}   ⟵ {src}")
-    if len(triples) > max_triples:
-        lines.append(f"  … 외 {len(triples) - max_triples}건")
+        role = f"[{ROLE_LABELS.get(t.get('role'), t.get('role'))}] " if t.get("role") else ""
+        indent = "    " if grouped else "  "
+        lines.append(f"{indent}{i}. {role}{t['subject']} {arrow} {str(t['object'])[:80]}   ⟵ {src}")
+    if len(triples) > limit:
+        lines.append(f"  … 외 {len(triples) - limit}건")
 
     chunks = reasoning.get("chunks") or []
     order_txt = reasoning.get("chunk_order_label") or "트리플 연결 순"
