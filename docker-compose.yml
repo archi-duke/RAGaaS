@@ -38,8 +38,11 @@ services:
     volumes:
       - ./data/uploads:/data/uploads
       - backend-data:/app/data
-    ports:
-      - "8000:8000"
+    # 호스트 8000 은 GoJIRA 의 jira-api 가 쓴다. 게이트웨이가 /ragaas/api/ →
+    # ragaas-backend:8000 으로 프록시하므로 호스트 노출이 필요 없다.
+    # 노출하려면 ${RAGAAS_BACKEND_PORT} 로 바꿔 충돌을 피할 것.
+    expose:
+      - "8000"
     networks:
       - default
       - shared-net
