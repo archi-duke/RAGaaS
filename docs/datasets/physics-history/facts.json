@@ -1,0 +1,2282 @@
+{
+ "relations": {
+  "제안함": "인물 → 이론/법칙/방정식/개념/가설. 인물이 해당 이론·개념을 처음 제시하거나 정식화함.",
+  "발견함": "인물 → 현상/법칙/천체/입자. 인물이 자연의 현상·대상을 발견함.",
+  "수행함": "인물 → 실험/관측. 인물이 해당 실험 또는 관측을 수행함.",
+  "저술함": "인물 → 저작(책·논문). 인물이 저작을 집필·출간함.",
+  "소속": "인물 → 기관(대학·연구소·관청). 인물이 해당 기관에 재직·재학·소속됨. time은 소속 시작 연도.",
+  "지도교수_of": "스승 → 제자 (방향 고정: '스승 | 지도교수_of | 제자'). 박사 지도 또는 조수·박사후 연구로 직접 사사한 관계.",
+  "수상함": "인물 → 상. time은 수상 연도(노벨상은 '해당 연도 상' 기준, 예: 아인슈타인 1921년도).",
+  "계승_발전": "이론/개념 A → 이론/개념 B ('A | 계승_발전 | B'): B가 A를 이어받아 발전시킴 (A가 선행).",
+  "일반화함": "이론 B → 이론 A ('B | 일반화함 | A'): B가 더 일반적이며 A를 특수한 경우로 포함함.",
+  "근사_극한": "이론 A → 이론 B ('A | 근사_극한 | B'): A는 B의 근사 또는 특정 극한(저속·약한 중력·장/단파장 등)에서 얻어짐.",
+  "반박함": "인물/실험/관측/이론/저작 → 이론/가설. 주어가 목적어를 논박하거나 반증 근거가 됨.",
+  "확인함": "실험/관측 → 이론/법칙. 실험·관측 결과가 이론의 예측을 확인함.",
+  "통합함": "이론 → 이론/분야/법칙. 이전에 분리되어 있던 대상을 하나의 이론 안에 통합함.",
+  "기반함": "이론/모형/실험/보정법 → 개념/원리. 주어가 목적어를 토대·전제로 삼음.",
+  "시대": "엔티티(인물/이론/기관) → 시대 (고대 자연철학 / 과학혁명 / 고전물리학 / 현대물리학).",
+  "영향_줌": "인물 → 인물 ('A | 영향_줌 | B'): A의 연구·사상이 B에게 직접적 영향을 줌.",
+  "완성함": "인물이 이미 제안된 이론을 이론적으로 완성(예: 재규격화된 QED)했다 — 최초 제안과 구분",
+  "형성에_기여함": "인물이 후대에 하나의 이름으로 정리된 관점·해석의 형성에 기여했다 (예: 코펜하겐 해석, 명칭은 1950년대)"
+ },
+ "facts": [
+  {
+   "id": "F001",
+   "subject": "아리스토텔레스",
+   "relation": "저술함",
+   "object": "자연학",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "era_ancient.md"
+   ]
+  },
+  {
+   "id": "F002",
+   "subject": "아리스토텔레스",
+   "relation": "제안함",
+   "object": "아리스토텔레스 운동론",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "era_ancient.md",
+    "bio_galileo.md"
+   ]
+  },
+  {
+   "id": "F003",
+   "subject": "아리스토텔레스",
+   "relation": "시대",
+   "object": "고대 자연철학",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "era_ancient.md"
+   ]
+  },
+  {
+   "id": "F004",
+   "subject": "아르키메데스",
+   "relation": "발견함",
+   "object": "부력의 원리",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "era_ancient.md"
+   ]
+  },
+  {
+   "id": "F005",
+   "subject": "아르키메데스",
+   "relation": "저술함",
+   "object": "뜬 물체에 관하여",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "era_ancient.md"
+   ]
+  },
+  {
+   "id": "F006",
+   "subject": "아르키메데스",
+   "relation": "시대",
+   "object": "고대 자연철학",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "era_ancient.md"
+   ]
+  },
+  {
+   "id": "F007",
+   "subject": "프톨레마이오스",
+   "relation": "저술함",
+   "object": "알마게스트",
+   "time": "2세기",
+   "fictional": false,
+   "docs": [
+    "era_ancient.md",
+    "debate_heliocentrism.md"
+   ]
+  },
+  {
+   "id": "F008",
+   "subject": "프톨레마이오스",
+   "relation": "제안함",
+   "object": "프톨레마이오스 천동설",
+   "time": "2세기",
+   "fictional": false,
+   "docs": [
+    "era_ancient.md",
+    "debate_heliocentrism.md"
+   ]
+  },
+  {
+   "id": "F009",
+   "subject": "프톨레마이오스 천동설",
+   "relation": "기반함",
+   "object": "주전원",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "era_ancient.md",
+    "debate_heliocentrism.md"
+   ]
+  },
+  {
+   "id": "F010",
+   "subject": "프톨레마이오스",
+   "relation": "시대",
+   "object": "고대 자연철학",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "era_ancient.md"
+   ]
+  },
+  {
+   "id": "F011",
+   "subject": "코페르니쿠스",
+   "relation": "저술함",
+   "object": "천구의 회전에 관하여",
+   "time": "1543",
+   "fictional": false,
+   "docs": [
+    "era_scientific_revolution.md",
+    "debate_heliocentrism.md"
+   ]
+  },
+  {
+   "id": "F012",
+   "subject": "코페르니쿠스",
+   "relation": "제안함",
+   "object": "지동설",
+   "time": "1543",
+   "fictional": false,
+   "docs": [
+    "era_scientific_revolution.md",
+    "debate_heliocentrism.md"
+   ]
+  },
+  {
+   "id": "F013",
+   "subject": "지동설",
+   "relation": "반박함",
+   "object": "프톨레마이오스 천동설",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "debate_heliocentrism.md"
+   ]
+  },
+  {
+   "id": "F014",
+   "subject": "코페르니쿠스",
+   "relation": "시대",
+   "object": "과학혁명",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "era_scientific_revolution.md"
+   ]
+  },
+  {
+   "id": "F015",
+   "subject": "갈릴레오 갈릴레이",
+   "relation": "발견함",
+   "object": "목성의 4대 위성",
+   "time": "1610",
+   "fictional": false,
+   "docs": [
+    "bio_galileo.md",
+    "debate_heliocentrism.md"
+   ]
+  },
+  {
+   "id": "F016",
+   "subject": "갈릴레오 갈릴레이",
+   "relation": "저술함",
+   "object": "두 우주체계에 관한 대화",
+   "time": "1632",
+   "fictional": false,
+   "docs": [
+    "bio_galileo.md",
+    "debate_heliocentrism.md"
+   ]
+  },
+  {
+   "id": "F017",
+   "subject": "갈릴레오 갈릴레이",
+   "relation": "저술함",
+   "object": "새로운 두 과학",
+   "time": "1638",
+   "fictional": false,
+   "docs": [
+    "bio_galileo.md",
+    "theory_classical_mechanics.md"
+   ]
+  },
+  {
+   "id": "F018",
+   "subject": "갈릴레오 갈릴레이",
+   "relation": "발견함",
+   "object": "낙하 법칙",
+   "time": "1604",
+   "fictional": false,
+   "docs": [
+    "bio_galileo.md",
+    "theory_classical_mechanics.md"
+   ]
+  },
+  {
+   "id": "F019",
+   "subject": "갈릴레오 갈릴레이",
+   "relation": "제안함",
+   "object": "갈릴레이 상대성 원리",
+   "time": "1632",
+   "fictional": false,
+   "docs": [
+    "bio_galileo.md",
+    "theory_relativity.md"
+   ]
+  },
+  {
+   "id": "F020",
+   "subject": "갈릴레오 갈릴레이",
+   "relation": "소속",
+   "object": "파도바 대학",
+   "time": "1592",
+   "fictional": false,
+   "docs": [
+    "bio_galileo.md"
+   ]
+  },
+  {
+   "id": "F021",
+   "subject": "갈릴레오 갈릴레이",
+   "relation": "반박함",
+   "object": "아리스토텔레스 운동론",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "bio_galileo.md",
+    "era_scientific_revolution.md"
+   ]
+  },
+  {
+   "id": "F022",
+   "subject": "갈릴레오 갈릴레이",
+   "relation": "수행함",
+   "object": "금성의 위상 관측",
+   "time": "1610",
+   "fictional": false,
+   "docs": [
+    "bio_galileo.md",
+    "debate_heliocentrism.md"
+   ]
+  },
+  {
+   "id": "F023",
+   "subject": "금성의 위상 관측",
+   "relation": "반박함",
+   "object": "프톨레마이오스 천동설",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "debate_heliocentrism.md"
+   ]
+  },
+  {
+   "id": "F024",
+   "subject": "갈릴레오 갈릴레이",
+   "relation": "시대",
+   "object": "과학혁명",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "era_scientific_revolution.md"
+   ]
+  },
+  {
+   "id": "F025",
+   "subject": "요하네스 케플러",
+   "relation": "저술함",
+   "object": "신천문학",
+   "time": "1609",
+   "fictional": false,
+   "docs": [
+    "bio_kepler.md"
+   ]
+  },
+  {
+   "id": "F026",
+   "subject": "요하네스 케플러",
+   "relation": "제안함",
+   "object": "케플러 행성운동 법칙",
+   "time": "1609",
+   "fictional": false,
+   "docs": [
+    "bio_kepler.md",
+    "theory_classical_mechanics.md"
+   ]
+  },
+  {
+   "id": "F027",
+   "subject": "요하네스 케플러",
+   "relation": "제안함",
+   "object": "조화의 법칙(케플러 제3법칙)",
+   "time": "1619",
+   "fictional": false,
+   "docs": [
+    "bio_kepler.md"
+   ]
+  },
+  {
+   "id": "F028",
+   "subject": "티코 브라헤",
+   "relation": "영향_줌",
+   "object": "요하네스 케플러",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "bio_kepler.md"
+   ]
+  },
+  {
+   "id": "F029",
+   "subject": "코페르니쿠스",
+   "relation": "영향_줌",
+   "object": "요하네스 케플러",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "bio_kepler.md",
+    "era_scientific_revolution.md"
+   ]
+  },
+  {
+   "id": "F030",
+   "subject": "요하네스 케플러",
+   "relation": "시대",
+   "object": "과학혁명",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "era_scientific_revolution.md",
+    "bio_kepler.md"
+   ]
+  },
+  {
+   "id": "F031",
+   "subject": "아이작 뉴턴",
+   "relation": "저술함",
+   "object": "프린키피아",
+   "time": "1687",
+   "fictional": false,
+   "docs": [
+    "bio_newton.md",
+    "theory_classical_mechanics.md",
+    "era_scientific_revolution.md"
+   ]
+  },
+  {
+   "id": "F032",
+   "subject": "아이작 뉴턴",
+   "relation": "제안함",
+   "object": "뉴턴 역학",
+   "time": "1687",
+   "fictional": false,
+   "docs": [
+    "bio_newton.md",
+    "theory_classical_mechanics.md"
+   ]
+  },
+  {
+   "id": "F033",
+   "subject": "아이작 뉴턴",
+   "relation": "제안함",
+   "object": "만유인력의 법칙",
+   "time": "1687",
+   "fictional": false,
+   "docs": [
+    "bio_newton.md",
+    "theory_classical_mechanics.md"
+   ]
+  },
+  {
+   "id": "F034",
+   "subject": "아이작 뉴턴",
+   "relation": "저술함",
+   "object": "광학(Opticks)",
+   "time": "1704",
+   "fictional": false,
+   "docs": [
+    "bio_newton.md",
+    "debate_light.md"
+   ]
+  },
+  {
+   "id": "F035",
+   "subject": "아이작 뉴턴",
+   "relation": "제안함",
+   "object": "빛의 입자설",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "bio_newton.md",
+    "debate_light.md"
+   ]
+  },
+  {
+   "id": "F036",
+   "subject": "아이작 뉴턴",
+   "relation": "소속",
+   "object": "케임브리지 대학",
+   "time": "1669",
+   "fictional": false,
+   "docs": [
+    "bio_newton.md"
+   ]
+  },
+  {
+   "id": "F037",
+   "subject": "갈릴레오 갈릴레이",
+   "relation": "영향_줌",
+   "object": "아이작 뉴턴",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "bio_newton.md",
+    "theory_classical_mechanics.md"
+   ]
+  },
+  {
+   "id": "F038",
+   "subject": "아이작 뉴턴",
+   "relation": "시대",
+   "object": "과학혁명",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "era_scientific_revolution.md"
+   ]
+  },
+  {
+   "id": "F039",
+   "subject": "뉴턴 역학",
+   "relation": "일반화함",
+   "object": "낙하 법칙",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "theory_classical_mechanics.md"
+   ]
+  },
+  {
+   "id": "F040",
+   "subject": "만유인력의 법칙",
+   "relation": "통합함",
+   "object": "낙하 법칙",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "theory_classical_mechanics.md"
+   ]
+  },
+  {
+   "id": "F041",
+   "subject": "만유인력의 법칙",
+   "relation": "통합함",
+   "object": "케플러 행성운동 법칙",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "theory_classical_mechanics.md",
+    "bio_newton.md"
+   ]
+  },
+  {
+   "id": "F042",
+   "subject": "크리스티안 하위헌스",
+   "relation": "제안함",
+   "object": "빛의 파동설",
+   "time": "1690",
+   "fictional": false,
+   "docs": [
+    "debate_light.md",
+    "era_scientific_revolution.md"
+   ]
+  },
+  {
+   "id": "F043",
+   "subject": "크리스티안 하위헌스",
+   "relation": "시대",
+   "object": "과학혁명",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "era_scientific_revolution.md"
+   ]
+  },
+  {
+   "id": "F044",
+   "subject": "토머스 영",
+   "relation": "수행함",
+   "object": "이중 슬릿 실험",
+   "time": "1801-1803",
+   "fictional": false,
+   "docs": [
+    "debate_light.md"
+   ]
+  },
+  {
+   "id": "F045",
+   "subject": "이중 슬릿 실험",
+   "relation": "확인함",
+   "object": "빛의 파동설",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "debate_light.md"
+   ]
+  },
+  {
+   "id": "F046",
+   "subject": "이중 슬릿 실험",
+   "relation": "반박함",
+   "object": "빛의 입자설",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "debate_light.md"
+   ]
+  },
+  {
+   "id": "F047",
+   "subject": "오귀스탱 프레넬",
+   "relation": "제안함",
+   "object": "프레넬 회절 이론",
+   "time": "1818",
+   "fictional": false,
+   "docs": [
+    "debate_light.md"
+   ]
+  },
+  {
+   "id": "F048",
+   "subject": "빛의 파동설",
+   "relation": "계승_발전",
+   "object": "프레넬 회절 이론",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "debate_light.md"
+   ]
+  },
+  {
+   "id": "F049",
+   "subject": "사디 카르노",
+   "relation": "저술함",
+   "object": "불의 동력에 관한 고찰",
+   "time": "1824",
+   "fictional": false,
+   "docs": [
+    "theory_thermodynamics.md",
+    "era_classical.md"
+   ]
+  },
+  {
+   "id": "F050",
+   "subject": "사디 카르노",
+   "relation": "제안함",
+   "object": "카르노 순환",
+   "time": "1824",
+   "fictional": false,
+   "docs": [
+    "theory_thermodynamics.md"
+   ]
+  },
+  {
+   "id": "F051",
+   "subject": "카르노 순환",
+   "relation": "계승_발전",
+   "object": "열역학 제2법칙",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "theory_thermodynamics.md"
+   ]
+  },
+  {
+   "id": "F052",
+   "subject": "제임스 줄",
+   "relation": "수행함",
+   "object": "줄의 회전날개 실험",
+   "time": "1845",
+   "fictional": false,
+   "docs": [
+    "exp_heat_work.md",
+    "theory_thermodynamics.md"
+   ]
+  },
+  {
+   "id": "F053",
+   "subject": "줄의 회전날개 실험",
+   "relation": "확인함",
+   "object": "에너지 보존 법칙",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "exp_heat_work.md",
+    "theory_thermodynamics.md"
+   ]
+  },
+  {
+   "id": "F054",
+   "subject": "헤르만 폰 헬름홀츠",
+   "relation": "제안함",
+   "object": "에너지 보존 법칙",
+   "time": "1847",
+   "fictional": false,
+   "docs": [
+    "theory_thermodynamics.md",
+    "exp_heat_work.md"
+   ]
+  },
+  {
+   "id": "F055",
+   "subject": "루돌프 클라우지우스",
+   "relation": "제안함",
+   "object": "열역학 제2법칙",
+   "time": "1850",
+   "fictional": false,
+   "docs": [
+    "theory_thermodynamics.md"
+   ]
+  },
+  {
+   "id": "F056",
+   "subject": "켈빈",
+   "relation": "제안함",
+   "object": "열역학 제2법칙",
+   "time": "1851",
+   "fictional": false,
+   "docs": [
+    "theory_thermodynamics.md"
+   ]
+  },
+  {
+   "id": "F057",
+   "subject": "루돌프 클라우지우스",
+   "relation": "제안함",
+   "object": "엔트로피",
+   "time": "1865",
+   "fictional": false,
+   "docs": [
+    "theory_thermodynamics.md",
+    "era_classical.md"
+   ]
+  },
+  {
+   "id": "F058",
+   "subject": "루트비히 볼츠만",
+   "relation": "제안함",
+   "object": "볼츠만 엔트로피 공식",
+   "time": "1877",
+   "fictional": false,
+   "docs": [
+    "theory_thermodynamics.md",
+    "era_classical.md"
+   ]
+  },
+  {
+   "id": "F059",
+   "subject": "엔트로피",
+   "relation": "계승_발전",
+   "object": "볼츠만 엔트로피 공식",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "theory_thermodynamics.md"
+   ]
+  },
+  {
+   "id": "F060",
+   "subject": "루트비히 볼츠만",
+   "relation": "소속",
+   "object": "빈 대학",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "theory_thermodynamics.md"
+   ]
+  },
+  {
+   "id": "F061",
+   "subject": "요제프 슈테판",
+   "relation": "지도교수_of",
+   "object": "루트비히 볼츠만",
+   "time": "1866",
+   "fictional": false,
+   "docs": [
+    "theory_thermodynamics.md"
+   ]
+  },
+  {
+   "id": "F062",
+   "subject": "제임스 클러크 맥스웰",
+   "relation": "영향_줌",
+   "object": "루트비히 볼츠만",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "theory_thermodynamics.md",
+    "bio_maxwell.md"
+   ]
+  },
+  {
+   "id": "F063",
+   "subject": "루트비히 볼츠만",
+   "relation": "시대",
+   "object": "고전물리학",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "era_classical.md"
+   ]
+  },
+  {
+   "id": "F064",
+   "subject": "외르스테드",
+   "relation": "발견함",
+   "object": "전류의 자기 작용",
+   "time": "1820",
+   "fictional": false,
+   "docs": [
+    "bio_faraday.md",
+    "theory_electromagnetism.md"
+   ]
+  },
+  {
+   "id": "F065",
+   "subject": "마이클 패러데이",
+   "relation": "발견함",
+   "object": "전자기 유도",
+   "time": "1831",
+   "fictional": false,
+   "docs": [
+    "bio_faraday.md",
+    "theory_electromagnetism.md",
+    "era_classical.md"
+   ]
+  },
+  {
+   "id": "F066",
+   "subject": "마이클 패러데이",
+   "relation": "제안함",
+   "object": "역선",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "bio_faraday.md",
+    "bio_maxwell.md"
+   ]
+  },
+  {
+   "id": "F067",
+   "subject": "험프리 데이비",
+   "relation": "지도교수_of",
+   "object": "마이클 패러데이",
+   "time": "1813",
+   "fictional": false,
+   "docs": [
+    "bio_faraday.md"
+   ]
+  },
+  {
+   "id": "F068",
+   "subject": "마이클 패러데이",
+   "relation": "소속",
+   "object": "왕립연구소",
+   "time": "1813",
+   "fictional": false,
+   "docs": [
+    "bio_faraday.md"
+   ]
+  },
+  {
+   "id": "F069",
+   "subject": "마이클 패러데이",
+   "relation": "영향_줌",
+   "object": "제임스 클러크 맥스웰",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "bio_faraday.md",
+    "bio_maxwell.md"
+   ]
+  },
+  {
+   "id": "F070",
+   "subject": "제임스 클러크 맥스웰",
+   "relation": "제안함",
+   "object": "맥스웰 방정식",
+   "time": "1865",
+   "fictional": false,
+   "docs": [
+    "bio_maxwell.md",
+    "theory_electromagnetism.md",
+    "era_classical.md"
+   ]
+  },
+  {
+   "id": "F071",
+   "subject": "제임스 클러크 맥스웰",
+   "relation": "저술함",
+   "object": "전기와 자기에 관한 논고",
+   "time": "1873",
+   "fictional": false,
+   "docs": [
+    "bio_maxwell.md",
+    "theory_electromagnetism.md"
+   ]
+  },
+  {
+   "id": "F072",
+   "subject": "맥스웰 방정식",
+   "relation": "통합함",
+   "object": "광학",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "theory_electromagnetism.md",
+    "bio_maxwell.md"
+   ]
+  },
+  {
+   "id": "F073",
+   "subject": "전자기 유도",
+   "relation": "계승_발전",
+   "object": "맥스웰 방정식",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "theory_electromagnetism.md"
+   ]
+  },
+  {
+   "id": "F074",
+   "subject": "제임스 클러크 맥스웰",
+   "relation": "소속",
+   "object": "캐번디시 연구소",
+   "time": "1871",
+   "fictional": false,
+   "docs": [
+    "bio_maxwell.md"
+   ]
+  },
+  {
+   "id": "F075",
+   "subject": "제임스 클러크 맥스웰",
+   "relation": "시대",
+   "object": "고전물리학",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "era_classical.md"
+   ]
+  },
+  {
+   "id": "F076",
+   "subject": "제임스 클러크 맥스웰",
+   "relation": "제안함",
+   "object": "기체 분자 속도 분포",
+   "time": "1860",
+   "fictional": false,
+   "docs": [
+    "bio_maxwell.md",
+    "theory_thermodynamics.md"
+   ]
+  },
+  {
+   "id": "F077",
+   "subject": "하인리히 헤르츠",
+   "relation": "수행함",
+   "object": "헤르츠 전자기파 실험",
+   "time": "1887",
+   "fictional": false,
+   "docs": [
+    "exp_hertz.md",
+    "theory_electromagnetism.md"
+   ]
+  },
+  {
+   "id": "F078",
+   "subject": "헤르츠 전자기파 실험",
+   "relation": "확인함",
+   "object": "맥스웰 방정식",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "exp_hertz.md",
+    "theory_electromagnetism.md"
+   ]
+  },
+  {
+   "id": "F079",
+   "subject": "하인리히 헤르츠",
+   "relation": "발견함",
+   "object": "광전효과",
+   "time": "1887",
+   "fictional": false,
+   "docs": [
+    "exp_hertz.md",
+    "exp_blackbody_photoelectric.md"
+   ]
+  },
+  {
+   "id": "F080",
+   "subject": "헤르만 폰 헬름홀츠",
+   "relation": "지도교수_of",
+   "object": "하인리히 헤르츠",
+   "time": "1880",
+   "fictional": false,
+   "docs": [
+    "exp_hertz.md"
+   ]
+  },
+  {
+   "id": "F081",
+   "subject": "앨버트 마이컬슨",
+   "relation": "수행함",
+   "object": "마이컬슨-몰리 실험",
+   "time": "1887",
+   "fictional": false,
+   "docs": [
+    "exp_michelson_morley.md"
+   ]
+  },
+  {
+   "id": "F082",
+   "subject": "에드워드 몰리",
+   "relation": "수행함",
+   "object": "마이컬슨-몰리 실험",
+   "time": "1887",
+   "fictional": false,
+   "docs": [
+    "exp_michelson_morley.md"
+   ]
+  },
+  {
+   "id": "F083",
+   "subject": "마이컬슨-몰리 실험",
+   "relation": "반박함",
+   "object": "에테르 가설",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "exp_michelson_morley.md",
+    "theory_relativity.md"
+   ]
+  },
+  {
+   "id": "F084",
+   "subject": "조지 피츠제럴드",
+   "relation": "제안함",
+   "object": "길이 수축 가설",
+   "time": "1889",
+   "fictional": false,
+   "docs": [
+    "exp_michelson_morley.md"
+   ]
+  },
+  {
+   "id": "F085",
+   "subject": "헨드릭 로렌츠",
+   "relation": "제안함",
+   "object": "길이 수축 가설",
+   "time": "1892",
+   "fictional": false,
+   "docs": [
+    "exp_michelson_morley.md"
+   ]
+  },
+  {
+   "id": "F086",
+   "subject": "헨드릭 로렌츠",
+   "relation": "제안함",
+   "object": "로렌츠 변환",
+   "time": "1904",
+   "fictional": false,
+   "docs": [
+    "exp_michelson_morley.md",
+    "theory_relativity.md"
+   ]
+  },
+  {
+   "id": "F087",
+   "subject": "로렌츠 변환",
+   "relation": "계승_발전",
+   "object": "특수상대성이론",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "theory_relativity.md"
+   ]
+  },
+  {
+   "id": "F088",
+   "subject": "알베르트 아인슈타인",
+   "relation": "제안함",
+   "object": "특수상대성이론",
+   "time": "1905",
+   "fictional": false,
+   "docs": [
+    "bio_einstein.md",
+    "theory_relativity.md",
+    "era_modern.md"
+   ]
+  },
+  {
+   "id": "F089",
+   "subject": "뉴턴 역학",
+   "relation": "근사_극한",
+   "object": "특수상대성이론",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "theory_relativity.md",
+    "theory_classical_mechanics.md"
+   ]
+  },
+  {
+   "id": "F090",
+   "subject": "갈릴레이 상대성 원리",
+   "relation": "계승_발전",
+   "object": "특수상대성이론",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "theory_relativity.md"
+   ]
+  },
+  {
+   "id": "F091",
+   "subject": "특수상대성이론",
+   "relation": "기반함",
+   "object": "광속 불변 원리",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "theory_relativity.md"
+   ]
+  },
+  {
+   "id": "F092",
+   "subject": "헤르만 민코프스키",
+   "relation": "제안함",
+   "object": "민코프스키 시공간",
+   "time": "1908",
+   "fictional": false,
+   "docs": [
+    "theory_relativity.md"
+   ]
+  },
+  {
+   "id": "F093",
+   "subject": "특수상대성이론",
+   "relation": "계승_발전",
+   "object": "민코프스키 시공간",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "theory_relativity.md"
+   ]
+  },
+  {
+   "id": "F094",
+   "subject": "헤르만 민코프스키",
+   "relation": "소속",
+   "object": "취리히 연방공과대학",
+   "time": "1896",
+   "fictional": false,
+   "docs": [
+    "theory_relativity.md"
+   ]
+  },
+  {
+   "id": "F095",
+   "subject": "알베르트 아인슈타인",
+   "relation": "소속",
+   "object": "취리히 연방공과대학",
+   "time": "1896",
+   "fictional": false,
+   "docs": [
+    "bio_einstein.md"
+   ]
+  },
+  {
+   "id": "F096",
+   "subject": "알베르트 아인슈타인",
+   "relation": "제안함",
+   "object": "일반상대성이론",
+   "time": "1915",
+   "fictional": false,
+   "docs": [
+    "bio_einstein.md",
+    "theory_relativity.md",
+    "era_modern.md"
+   ]
+  },
+  {
+   "id": "F097",
+   "subject": "일반상대성이론",
+   "relation": "일반화함",
+   "object": "특수상대성이론",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "theory_relativity.md"
+   ]
+  },
+  {
+   "id": "F098",
+   "subject": "만유인력의 법칙",
+   "relation": "근사_극한",
+   "object": "일반상대성이론",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "theory_relativity.md",
+    "theory_classical_mechanics.md"
+   ]
+  },
+  {
+   "id": "F099",
+   "subject": "일반상대성이론",
+   "relation": "기반함",
+   "object": "등가 원리",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "theory_relativity.md"
+   ]
+  },
+  {
+   "id": "F100",
+   "subject": "아서 에딩턴",
+   "relation": "수행함",
+   "object": "1919년 일식 관측",
+   "time": "1919",
+   "fictional": false,
+   "docs": [
+    "exp_eclipse_1919.md"
+   ]
+  },
+  {
+   "id": "F101",
+   "subject": "1919년 일식 관측",
+   "relation": "확인함",
+   "object": "일반상대성이론",
+   "time": "1919",
+   "fictional": false,
+   "docs": [
+    "exp_eclipse_1919.md",
+    "bio_einstein.md"
+   ]
+  },
+  {
+   "id": "F102",
+   "subject": "아서 에딩턴",
+   "relation": "소속",
+   "object": "케임브리지 대학",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "exp_eclipse_1919.md"
+   ]
+  },
+  {
+   "id": "F103",
+   "subject": "알베르트 아인슈타인",
+   "relation": "수상함",
+   "object": "노벨 물리학상",
+   "time": "1921",
+   "fictional": false,
+   "docs": [
+    "bio_einstein.md",
+    "exp_blackbody_photoelectric.md"
+   ]
+  },
+  {
+   "id": "F104",
+   "subject": "알베르트 아인슈타인",
+   "relation": "소속",
+   "object": "스위스 특허청",
+   "time": "1902",
+   "fictional": false,
+   "docs": [
+    "bio_einstein.md"
+   ]
+  },
+  {
+   "id": "F105",
+   "subject": "알베르트 아인슈타인",
+   "relation": "소속",
+   "object": "프린스턴 고등연구소",
+   "time": "1933",
+   "fictional": false,
+   "docs": [
+    "bio_einstein.md",
+    "debate_bohr_einstein.md"
+   ]
+  },
+  {
+   "id": "F106",
+   "subject": "알베르트 아인슈타인",
+   "relation": "시대",
+   "object": "현대물리학",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "era_modern.md"
+   ]
+  },
+  {
+   "id": "F107",
+   "subject": "막스 플랑크",
+   "relation": "제안함",
+   "object": "에너지 양자",
+   "time": "1900",
+   "fictional": false,
+   "docs": [
+    "bio_planck.md",
+    "exp_blackbody_photoelectric.md",
+    "era_modern.md"
+   ]
+  },
+  {
+   "id": "F108",
+   "subject": "막스 플랑크",
+   "relation": "제안함",
+   "object": "플랑크 복사 법칙",
+   "time": "1900",
+   "fictional": false,
+   "docs": [
+    "bio_planck.md",
+    "exp_blackbody_photoelectric.md"
+   ]
+  },
+  {
+   "id": "F109",
+   "subject": "플랑크 복사 법칙",
+   "relation": "기반함",
+   "object": "에너지 양자",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "bio_planck.md"
+   ]
+  },
+  {
+   "id": "F110",
+   "subject": "빈 복사 법칙",
+   "relation": "근사_극한",
+   "object": "플랑크 복사 법칙",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "exp_blackbody_photoelectric.md",
+    "bio_planck.md"
+   ]
+  },
+  {
+   "id": "F111",
+   "subject": "레일리-진스 법칙",
+   "relation": "근사_극한",
+   "object": "플랑크 복사 법칙",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "exp_blackbody_photoelectric.md"
+   ]
+  },
+  {
+   "id": "F112",
+   "subject": "루벤스-쿠를바움 측정",
+   "relation": "확인함",
+   "object": "플랑크 복사 법칙",
+   "time": "1900",
+   "fictional": false,
+   "docs": [
+    "exp_blackbody_photoelectric.md",
+    "bio_planck.md"
+   ]
+  },
+  {
+   "id": "F113",
+   "subject": "막스 플랑크",
+   "relation": "수상함",
+   "object": "노벨 물리학상",
+   "time": "1918",
+   "fictional": false,
+   "docs": [
+    "bio_planck.md"
+   ]
+  },
+  {
+   "id": "F114",
+   "subject": "막스 플랑크",
+   "relation": "소속",
+   "object": "베를린 대학",
+   "time": "1889",
+   "fictional": false,
+   "docs": [
+    "bio_planck.md"
+   ]
+  },
+  {
+   "id": "F115",
+   "subject": "알베르트 아인슈타인",
+   "relation": "제안함",
+   "object": "광양자 가설",
+   "time": "1905",
+   "fictional": false,
+   "docs": [
+    "bio_einstein.md",
+    "exp_blackbody_photoelectric.md",
+    "debate_light.md"
+   ]
+  },
+  {
+   "id": "F116",
+   "subject": "광양자 가설",
+   "relation": "기반함",
+   "object": "에너지 양자",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "exp_blackbody_photoelectric.md"
+   ]
+  },
+  {
+   "id": "F117",
+   "subject": "로버트 밀리컨",
+   "relation": "수행함",
+   "object": "밀리컨 광전효과 실험",
+   "time": "1916",
+   "fictional": false,
+   "docs": [
+    "exp_blackbody_photoelectric.md"
+   ]
+  },
+  {
+   "id": "F118",
+   "subject": "밀리컨 광전효과 실험",
+   "relation": "확인함",
+   "object": "광전 방정식",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "exp_blackbody_photoelectric.md"
+   ]
+  },
+  {
+   "id": "F119",
+   "subject": "막스 플랑크",
+   "relation": "시대",
+   "object": "현대물리학",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "era_modern.md"
+   ]
+  },
+  {
+   "id": "F120",
+   "subject": "어니스트 러더퍼드",
+   "relation": "제안함",
+   "object": "러더퍼드 원자 모형",
+   "time": "1911",
+   "fictional": false,
+   "docs": [
+    "bio_bohr.md",
+    "era_modern.md"
+   ]
+  },
+  {
+   "id": "F121",
+   "subject": "어니스트 러더퍼드",
+   "relation": "지도교수_of",
+   "object": "닐스 보어",
+   "time": "1912",
+   "fictional": false,
+   "docs": [
+    "bio_bohr.md"
+   ]
+  },
+  {
+   "id": "F122",
+   "subject": "닐스 보어",
+   "relation": "제안함",
+   "object": "보어 원자 모형",
+   "time": "1913",
+   "fictional": false,
+   "docs": [
+    "bio_bohr.md",
+    "theory_quantum_mechanics.md",
+    "era_modern.md"
+   ]
+  },
+  {
+   "id": "F123",
+   "subject": "러더퍼드 원자 모형",
+   "relation": "계승_발전",
+   "object": "보어 원자 모형",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "bio_bohr.md"
+   ]
+  },
+  {
+   "id": "F124",
+   "subject": "보어 원자 모형",
+   "relation": "기반함",
+   "object": "에너지 양자",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "bio_bohr.md"
+   ]
+  },
+  {
+   "id": "F125",
+   "subject": "닐스 보어",
+   "relation": "수상함",
+   "object": "노벨 물리학상",
+   "time": "1922",
+   "fictional": false,
+   "docs": [
+    "bio_bohr.md"
+   ]
+  },
+  {
+   "id": "F126",
+   "subject": "닐스 보어",
+   "relation": "소속",
+   "object": "코펜하겐 이론물리학 연구소",
+   "time": "1921",
+   "fictional": false,
+   "docs": [
+    "bio_bohr.md",
+    "bio_heisenberg.md"
+   ]
+  },
+  {
+   "id": "F127",
+   "subject": "닐스 보어",
+   "relation": "제안함",
+   "object": "상보성 원리",
+   "time": "1927",
+   "fictional": false,
+   "docs": [
+    "bio_bohr.md",
+    "debate_bohr_einstein.md"
+   ]
+  },
+  {
+   "id": "F128",
+   "subject": "루이 드브로이",
+   "relation": "제안함",
+   "object": "물질파 가설",
+   "time": "1924",
+   "fictional": false,
+   "docs": [
+    "theory_quantum_mechanics.md",
+    "era_modern.md"
+   ]
+  },
+  {
+   "id": "F129",
+   "subject": "광양자 가설",
+   "relation": "계승_발전",
+   "object": "물질파 가설",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "theory_quantum_mechanics.md"
+   ]
+  },
+  {
+   "id": "F130",
+   "subject": "데이비슨-저머 실험",
+   "relation": "확인함",
+   "object": "물질파 가설",
+   "time": "1927",
+   "fictional": false,
+   "docs": [
+    "theory_quantum_mechanics.md"
+   ]
+  },
+  {
+   "id": "F131",
+   "subject": "루이 드브로이",
+   "relation": "수상함",
+   "object": "노벨 물리학상",
+   "time": "1929",
+   "fictional": false,
+   "docs": [
+    "theory_quantum_mechanics.md"
+   ]
+  },
+  {
+   "id": "F132",
+   "subject": "베르너 하이젠베르크",
+   "relation": "제안함",
+   "object": "행렬역학",
+   "time": "1925",
+   "fictional": false,
+   "docs": [
+    "bio_heisenberg.md",
+    "theory_quantum_mechanics.md"
+   ]
+  },
+  {
+   "id": "F133",
+   "subject": "베르너 하이젠베르크",
+   "relation": "제안함",
+   "object": "불확정성 원리",
+   "time": "1927",
+   "fictional": false,
+   "docs": [
+    "bio_heisenberg.md",
+    "theory_quantum_mechanics.md",
+    "debate_bohr_einstein.md"
+   ]
+  },
+  {
+   "id": "F134",
+   "subject": "아르놀트 조머펠트",
+   "relation": "지도교수_of",
+   "object": "베르너 하이젠베르크",
+   "time": "1923",
+   "fictional": false,
+   "docs": [
+    "bio_heisenberg.md"
+   ]
+  },
+  {
+   "id": "F135",
+   "subject": "아르놀트 조머펠트",
+   "relation": "지도교수_of",
+   "object": "볼프강 파울리",
+   "time": "1921",
+   "fictional": false,
+   "docs": [
+    "bio_heisenberg.md",
+    "theory_quantum_mechanics.md"
+   ]
+  },
+  {
+   "id": "F136",
+   "subject": "닐스 보어",
+   "relation": "영향_줌",
+   "object": "베르너 하이젠베르크",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "bio_heisenberg.md",
+    "bio_bohr.md"
+   ]
+  },
+  {
+   "id": "F137",
+   "subject": "막스 보른",
+   "relation": "제안함",
+   "object": "확률 해석",
+   "time": "1926",
+   "fictional": false,
+   "docs": [
+    "theory_quantum_mechanics.md",
+    "debate_bohr_einstein.md"
+   ]
+  },
+  {
+   "id": "F138",
+   "subject": "막스 보른",
+   "relation": "소속",
+   "object": "괴팅겐 대학",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "bio_heisenberg.md"
+   ]
+  },
+  {
+   "id": "F139",
+   "subject": "베르너 하이젠베르크",
+   "relation": "소속",
+   "object": "괴팅겐 대학",
+   "time": "1923",
+   "fictional": false,
+   "docs": [
+    "bio_heisenberg.md"
+   ]
+  },
+  {
+   "id": "F140",
+   "subject": "베르너 하이젠베르크",
+   "relation": "소속",
+   "object": "라이프치히 대학",
+   "time": "1927",
+   "fictional": false,
+   "docs": [
+    "bio_heisenberg.md"
+   ]
+  },
+  {
+   "id": "F141",
+   "subject": "베르너 하이젠베르크",
+   "relation": "수상함",
+   "object": "노벨 물리학상",
+   "time": "1932",
+   "fictional": false,
+   "docs": [
+    "bio_heisenberg.md"
+   ]
+  },
+  {
+   "id": "F142",
+   "subject": "막스 보른",
+   "relation": "수상함",
+   "object": "노벨 물리학상",
+   "time": "1954",
+   "fictional": false,
+   "docs": [
+    "theory_quantum_mechanics.md"
+   ]
+  },
+  {
+   "id": "F143",
+   "subject": "에르빈 슈뢰딩거",
+   "relation": "제안함",
+   "object": "슈뢰딩거 방정식",
+   "time": "1926",
+   "fictional": false,
+   "docs": [
+    "theory_quantum_mechanics.md"
+   ]
+  },
+  {
+   "id": "F144",
+   "subject": "물질파 가설",
+   "relation": "계승_발전",
+   "object": "슈뢰딩거 방정식",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "theory_quantum_mechanics.md"
+   ]
+  },
+  {
+   "id": "F145",
+   "subject": "에르빈 슈뢰딩거",
+   "relation": "수상함",
+   "object": "노벨 물리학상",
+   "time": "1933",
+   "fictional": false,
+   "docs": [
+    "theory_quantum_mechanics.md",
+    "theory_qed.md"
+   ]
+  },
+  {
+   "id": "F146",
+   "subject": "볼프강 파울리",
+   "relation": "제안함",
+   "object": "배타 원리",
+   "time": "1925",
+   "fictional": false,
+   "docs": [
+    "theory_quantum_mechanics.md",
+    "bio_heisenberg.md"
+   ]
+  },
+  {
+   "id": "F147",
+   "subject": "볼프강 파울리",
+   "relation": "수상함",
+   "object": "노벨 물리학상",
+   "time": "1945",
+   "fictional": false,
+   "docs": [
+    "theory_quantum_mechanics.md"
+   ]
+  },
+  {
+   "id": "F148",
+   "subject": "베르너 하이젠베르크",
+   "relation": "시대",
+   "object": "현대물리학",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "era_modern.md"
+   ]
+  },
+  {
+   "id": "F149",
+   "subject": "폴 디랙",
+   "relation": "제안함",
+   "object": "디랙 방정식",
+   "time": "1928",
+   "fictional": false,
+   "docs": [
+    "theory_qed.md"
+   ]
+  },
+  {
+   "id": "F150",
+   "subject": "디랙 방정식",
+   "relation": "통합함",
+   "object": "특수상대성이론",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "theory_qed.md"
+   ]
+  },
+  {
+   "id": "F151",
+   "subject": "디랙 방정식",
+   "relation": "통합함",
+   "object": "양자역학",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "theory_qed.md"
+   ]
+  },
+  {
+   "id": "F152",
+   "subject": "폴 디랙",
+   "relation": "수상함",
+   "object": "노벨 물리학상",
+   "time": "1933",
+   "fictional": false,
+   "docs": [
+    "theory_qed.md"
+   ]
+  },
+  {
+   "id": "F153",
+   "subject": "폴 디랙",
+   "relation": "소속",
+   "object": "케임브리지 대학",
+   "time": "1923",
+   "fictional": false,
+   "docs": [
+    "theory_qed.md"
+   ]
+  },
+  {
+   "id": "F154",
+   "subject": "칼 앤더슨",
+   "relation": "발견함",
+   "object": "양전자",
+   "time": "1932",
+   "fictional": false,
+   "docs": [
+    "theory_qed.md"
+   ]
+  },
+  {
+   "id": "F155",
+   "subject": "칼 앤더슨",
+   "relation": "수행함",
+   "object": "앤더슨 안개상자 실험",
+   "time": "1932",
+   "fictional": false,
+   "docs": [
+    "theory_qed.md"
+   ]
+  },
+  {
+   "id": "F156",
+   "subject": "앤더슨 안개상자 실험",
+   "relation": "확인함",
+   "object": "디랙 방정식",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "theory_qed.md"
+   ]
+  },
+  {
+   "id": "F157",
+   "subject": "디랙 방정식",
+   "relation": "계승_발전",
+   "object": "양자전기역학",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "theory_qed.md"
+   ]
+  },
+  {
+   "id": "F158",
+   "subject": "리처드 파인만",
+   "relation": "완성함",
+   "object": "양자전기역학",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "bio_feynman.md",
+    "theory_qed.md"
+   ]
+  },
+  {
+   "id": "F159",
+   "subject": "줄리언 슈윙거",
+   "relation": "완성함",
+   "object": "양자전기역학",
+   "time": "1947-1949",
+   "fictional": false,
+   "docs": [
+    "theory_qed.md",
+    "era_modern.md"
+   ]
+  },
+  {
+   "id": "F160",
+   "subject": "도모나가 신이치로",
+   "relation": "완성함",
+   "object": "양자전기역학",
+   "time": "1943-1948",
+   "fictional": false,
+   "docs": [
+    "theory_qed.md",
+    "era_modern.md"
+   ]
+  },
+  {
+   "id": "F161",
+   "subject": "리처드 파인만",
+   "relation": "수상함",
+   "object": "노벨 물리학상",
+   "time": "1965",
+   "fictional": false,
+   "docs": [
+    "bio_feynman.md",
+    "theory_qed.md"
+   ]
+  },
+  {
+   "id": "F162",
+   "subject": "줄리언 슈윙거",
+   "relation": "수상함",
+   "object": "노벨 물리학상",
+   "time": "1965",
+   "fictional": false,
+   "docs": [
+    "theory_qed.md"
+   ]
+  },
+  {
+   "id": "F163",
+   "subject": "도모나가 신이치로",
+   "relation": "수상함",
+   "object": "노벨 물리학상",
+   "time": "1965",
+   "fictional": false,
+   "docs": [
+    "theory_qed.md"
+   ]
+  },
+  {
+   "id": "F164",
+   "subject": "리처드 파인만",
+   "relation": "제안함",
+   "object": "파인만 다이어그램",
+   "time": "1948",
+   "fictional": false,
+   "docs": [
+    "bio_feynman.md",
+    "theory_qed.md"
+   ]
+  },
+  {
+   "id": "F165",
+   "subject": "양자전기역학",
+   "relation": "기반함",
+   "object": "재규격화",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "theory_qed.md",
+    "bio_feynman.md"
+   ]
+  },
+  {
+   "id": "F166",
+   "subject": "램 이동 측정",
+   "relation": "확인함",
+   "object": "양자전기역학",
+   "time": "1947",
+   "fictional": false,
+   "docs": [
+    "theory_qed.md",
+    "bio_feynman.md"
+   ]
+  },
+  {
+   "id": "F167",
+   "subject": "존 휠러",
+   "relation": "지도교수_of",
+   "object": "리처드 파인만",
+   "time": "1942",
+   "fictional": false,
+   "docs": [
+    "bio_feynman.md"
+   ]
+  },
+  {
+   "id": "F168",
+   "subject": "리처드 파인만",
+   "relation": "소속",
+   "object": "칼텍",
+   "time": "1950",
+   "fictional": false,
+   "docs": [
+    "bio_feynman.md"
+   ]
+  },
+  {
+   "id": "F169",
+   "subject": "리처드 파인만",
+   "relation": "저술함",
+   "object": "파인만의 물리학 강의",
+   "time": "1963",
+   "fictional": false,
+   "docs": [
+    "bio_feynman.md"
+   ]
+  },
+  {
+   "id": "F170",
+   "subject": "양자전기역학",
+   "relation": "시대",
+   "object": "현대물리학",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "era_modern.md"
+   ]
+  },
+  {
+   "id": "F171",
+   "subject": "알베르트 아인슈타인",
+   "relation": "저술함",
+   "object": "EPR 논문",
+   "time": "1935",
+   "fictional": false,
+   "docs": [
+    "debate_bohr_einstein.md",
+    "bio_einstein.md"
+   ]
+  },
+  {
+   "id": "F172",
+   "subject": "EPR 논문",
+   "relation": "반박함",
+   "object": "코펜하겐 해석",
+   "time": "1935",
+   "fictional": false,
+   "docs": [
+    "debate_bohr_einstein.md"
+   ]
+  },
+  {
+   "id": "F173",
+   "subject": "닐스 보어",
+   "relation": "반박함",
+   "object": "EPR 논문",
+   "time": "1935",
+   "fictional": false,
+   "docs": [
+    "debate_bohr_einstein.md"
+   ]
+  },
+  {
+   "id": "F174",
+   "subject": "닐스 보어",
+   "relation": "형성에_기여함",
+   "object": "코펜하겐 해석",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "debate_bohr_einstein.md",
+    "bio_bohr.md"
+   ]
+  },
+  {
+   "id": "F175",
+   "subject": "베르너 하이젠베르크",
+   "relation": "형성에_기여함",
+   "object": "코펜하겐 해석",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "debate_bohr_einstein.md",
+    "bio_heisenberg.md"
+   ]
+  },
+  {
+   "id": "F176",
+   "subject": "코펜하겐 해석",
+   "relation": "기반함",
+   "object": "상보성 원리",
+   "time": null,
+   "fictional": false,
+   "docs": [
+    "debate_bohr_einstein.md"
+   ]
+  },
+  {
+   "id": "F177",
+   "subject": "존 벨",
+   "relation": "제안함",
+   "object": "벨 부등식",
+   "time": "1964",
+   "fictional": false,
+   "docs": [
+    "debate_bohr_einstein.md"
+   ]
+  },
+  {
+   "id": "F178",
+   "subject": "알랭 아스페",
+   "relation": "수행함",
+   "object": "아스페 실험",
+   "time": "1982",
+   "fictional": false,
+   "docs": [
+    "debate_bohr_einstein.md"
+   ]
+  },
+  {
+   "id": "F179",
+   "subject": "아스페 실험",
+   "relation": "반박함",
+   "object": "국소적 숨은 변수 이론",
+   "time": "1982",
+   "fictional": false,
+   "docs": [
+    "debate_bohr_einstein.md"
+   ]
+  },
+  {
+   "id": "F180",
+   "subject": "요하네스 크뢰벨",
+   "relation": "소속",
+   "object": "할스테트 정밀물리연구소",
+   "time": "1862",
+   "fictional": true,
+   "docs": [
+    "bio_kroebel.md"
+   ]
+  },
+  {
+   "id": "F181",
+   "subject": "요하네스 크뢰벨",
+   "relation": "수행함",
+   "object": "크뢰벨 회전원판 실험",
+   "time": "1868",
+   "fictional": true,
+   "docs": [
+    "exp_heat_work.md",
+    "bio_kroebel.md"
+   ]
+  },
+  {
+   "id": "F182",
+   "subject": "크뢰벨 회전원판 실험",
+   "relation": "확인함",
+   "object": "에너지 보존 법칙",
+   "time": null,
+   "fictional": true,
+   "docs": [
+    "exp_heat_work.md"
+   ]
+  },
+  {
+   "id": "F183",
+   "subject": "제임스 줄",
+   "relation": "영향_줌",
+   "object": "요하네스 크뢰벨",
+   "time": null,
+   "fictional": true,
+   "docs": [
+    "bio_kroebel.md"
+   ]
+  },
+  {
+   "id": "F184",
+   "subject": "요하네스 크뢰벨",
+   "relation": "저술함",
+   "object": "열과 일의 정밀측정",
+   "time": "1872",
+   "fictional": true,
+   "docs": [
+    "bio_kroebel.md"
+   ]
+  },
+  {
+   "id": "F185",
+   "subject": "요하네스 크뢰벨",
+   "relation": "제안함",
+   "object": "크뢰벨 보정",
+   "time": "1868",
+   "fictional": true,
+   "docs": [
+    "exp_heat_work.md",
+    "bio_kroebel.md"
+   ]
+  },
+  {
+   "id": "F186",
+   "subject": "크뢰벨 보정",
+   "relation": "기반함",
+   "object": "에너지 보존 법칙",
+   "time": null,
+   "fictional": true,
+   "docs": [
+    "exp_heat_work.md"
+   ]
+  },
+  {
+   "id": "F187",
+   "subject": "요하네스 크뢰벨",
+   "relation": "지도교수_of",
+   "object": "아델하이트 피르나우",
+   "time": null,
+   "fictional": true,
+   "docs": [
+    "bio_kroebel.md"
+   ]
+  },
+  {
+   "id": "F188",
+   "subject": "아델하이트 피르나우",
+   "relation": "소속",
+   "object": "할스테트 정밀물리연구소",
+   "time": null,
+   "fictional": true,
+   "docs": [
+    "bio_kroebel.md"
+   ]
+  },
+  {
+   "id": "F189",
+   "subject": "아델하이트 피르나우",
+   "relation": "수행함",
+   "object": "피르나우 저온 흑체 측정",
+   "time": "1903",
+   "fictional": true,
+   "docs": [
+    "exp_blackbody_photoelectric.md",
+    "bio_kroebel.md"
+   ]
+  },
+  {
+   "id": "F190",
+   "subject": "피르나우 저온 흑체 측정",
+   "relation": "확인함",
+   "object": "플랑크 복사 법칙",
+   "time": "1903",
+   "fictional": true,
+   "docs": [
+    "exp_blackbody_photoelectric.md"
+   ]
+  },
+  {
+   "id": "F191",
+   "subject": "피르나우 저온 흑체 측정",
+   "relation": "반박함",
+   "object": "빈 복사 법칙",
+   "time": "1903",
+   "fictional": true,
+   "docs": [
+    "exp_blackbody_photoelectric.md"
+   ]
+  },
+  {
+   "id": "F192",
+   "subject": "피르나우 저온 흑체 측정",
+   "relation": "기반함",
+   "object": "크뢰벨 보정",
+   "time": null,
+   "fictional": true,
+   "docs": [
+    "exp_blackbody_photoelectric.md"
+   ]
+  },
+  {
+   "id": "F193",
+   "subject": "요하네스 크뢰벨",
+   "relation": "시대",
+   "object": "고전물리학",
+   "time": null,
+   "fictional": true,
+   "docs": [
+    "bio_kroebel.md"
+   ]
+  },
+  {
+   "id": "F194",
+   "subject": "아델하이트 피르나우",
+   "relation": "시대",
+   "object": "현대물리학",
+   "time": null,
+   "fictional": true,
+   "docs": [
+    "bio_kroebel.md"
+   ]
+  },
+  {
+   "id": "F195",
+   "subject": "할스테트 정밀물리연구소",
+   "relation": "시대",
+   "object": "고전물리학",
+   "time": "1859",
+   "fictional": true,
+   "docs": [
+    "bio_kroebel.md"
+   ]
+  },
+  {
+   "id": "F196",
+   "subject": "막스 플랑크",
+   "relation": "영향_줌",
+   "object": "아델하이트 피르나우",
+   "time": null,
+   "fictional": true,
+   "docs": [
+    "bio_planck.md",
+    "bio_kroebel.md"
+   ]
+  },
+  {
+   "id": "F197",
+   "subject": "아델하이트 피르나우",
+   "relation": "저술함",
+   "object": "저온 복사 측정 보고",
+   "time": "1905",
+   "fictional": true,
+   "docs": [
+    "bio_kroebel.md"
+   ]
+  }
+ ]
+}
