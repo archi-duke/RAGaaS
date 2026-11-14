@@ -7,6 +7,7 @@ import './index.css';
 import Dashboard from './pages/Dashboard';
 import KnowledgeBaseDetail from './pages/KnowledgeBaseDetail';
 import GraphViewer from './pages/KnowledgeGraphViewer';
+import Settings from './pages/Settings';
 
 // 셸(NETRIX platform-app)이 MF remote 마운트 시 주입하는 props (계약: PLATFORM-MF-CONTRACT.md §1).
 // standalone(dev) 진입 시에는 전부 undefined — 없어도 동작.
@@ -39,7 +40,9 @@ function ShellBridge({ resetKey, page, onNavigate }: ShellProps) {
       ? 'kb'
       : location.pathname.startsWith('/graph-viewer')
         ? 'graph'
-        : 'knowledges';
+        : location.pathname.startsWith('/settings')
+          ? 'settings'
+          : 'knowledges';
     onNavigate?.(p, {});
   }, [location.pathname]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -58,6 +61,7 @@ function App(props: ShellProps) {
         <Route path="/" element={<Dashboard />} />
         <Route path="/kb/:id" element={<KnowledgeBaseDetail />} />
         <Route path="/graph-viewer" element={<GraphViewer />} />
+        <Route path="/settings" element={<Settings />} />
       </Routes>
     </Router>
   );
