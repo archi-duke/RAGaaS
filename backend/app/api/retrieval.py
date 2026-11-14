@@ -136,7 +136,7 @@ class ChatRequest(BaseModel):
     enable_inverse_search: bool = False
     inverse_extraction_mode: str = "auto"
     use_schema_mode: bool = True  # Schema-aware SPARQL generation for promoted KBs
-    use_dynamic_schema: bool = False  # Dynamic schema injection for non-promoted KBs
+    use_dynamic_schema: bool = True  # Dynamic schema injection for non-promoted KBs (기본 ON — 미주입 시 LLM 이 술어를 지어냄)
     use_raw_log: bool = False
     
     # Pipeline configuration (optional - if provided, uses pipeline executor)
