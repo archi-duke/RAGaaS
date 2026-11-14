@@ -328,14 +328,37 @@ class CleanupService:
             except Exception as e:
                 print(f"[Cleanup] Warning - failed to check/cleanup empty collection: {e}")
             
-            # Delete Related Mappings (triple_chunk_mappings)
+            # Delete Related Mappings (triple_chunk_mappings — 레거시 컬렉션)
+            # (이전 코드는 존재하지 않는 Document.get_motor_client() 를 호출해 매번 실패했다)
             try:
-                # Use raw mongodb access via Document's database.
-                db = Document.get_motor_client()[Document.get_settings().motor_db_name]
+                from app.core import database as _database
+                from app.core.config import settings as _settings
+                db = _database.client[_settings.MONGO_DB]
                 res = await db["triple_chunk_mappings"].delete_many({"doc_id": doc_id})
                 print(f"[Cleanup] ✅ Deleted {res.deleted_count} triple_chunk_mappings for {doc_id}")
             except Exception as e:
                 print(f"[Cleanup] ⚠️ Failed to clean triple_chunk_mappings: {e}")
+
+            # 스키마 매핑 (docs/design-schema-mismatch.md): 제안의 문서 참조 제거,
+            # 보유 문서가 없어진 대기 제안 삭제, 유형 카탈로그 캐시 무효화.
+            # KB 규칙(수락·자동)은 KB 단위 정책이므로 유지한다.
+            try:
+                from app.models.schema_mapping import SchemaMappingProposal
+                removed = pruned = 0
+                for prop in await SchemaMappingProposal.find(SchemaMappingProposal.kb_id == kb_id).to_list():
+                    if doc_id in (prop.doc_ids or []):
+                        prop.doc_ids = [d for d in prop.doc_ids if d != doc_id]
+                        removed += 1
+                        if not prop.doc_ids and prop.status == "pending":
+                            await prop.delete()
+                            pruned += 1
+                        else:
+                            await prop.save()
+                from app.services.retrieval.graph_backends.fuseki import FusekiBackend
+                FusekiBackend.invalidate_class_catalog(kb_id)
+                print(f"[Cleanup] ✅ Schema proposals: {removed} references removed, {pruned} pending proposals pruned")
+            except Exception as e:
+                print(f"[Cleanup] ⚠️ Schema proposal cleanup skipped: {e}")
     
             # Broadcast update
             try:
