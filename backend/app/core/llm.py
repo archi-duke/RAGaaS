@@ -131,6 +131,13 @@ def _handle_response(status_code: int, text: str, url: str, model: str) -> str:
     return answer
 
 
+def no_thinking_extra_body(model: Optional[str]) -> Optional[dict]:
+    """추론 모델(z.ai GLM 계열)의 사고과정 출력 비활성 옵션. 그 외 모델은 None."""
+    if model and "glm" in model.lower():
+        return {"thinking": {"type": "disabled"}}
+    return None
+
+
 async def achat(
     cfg: dict,
     messages: List[Dict[str, str]],

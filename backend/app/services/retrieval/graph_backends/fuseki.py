@@ -115,6 +115,7 @@ class FusekiBackend(GraphBackend):
             WHERE {{
               ?uri rdfs:label ?label .
               FILTER(STRSTARTS(STR(?uri), "http://rag.local/inst/"))
+              FILTER(!REGEX(STR(?uri), "/inst/root_[0-9]+_"))  # 익명 구조 노드는 앵커가 될 수 없음
               BIND(REPLACE(REPLACE(LCASE(STR(?label)), "_", " "), "-", " ") AS ?nl)
               FILTER({label_filter})
               OPTIONAL {{ ?uri ?op ?oo . FILTER(?op != rdfs:label && ?op != rdf:type) }}
@@ -138,6 +139,7 @@ class FusekiBackend(GraphBackend):
             WHERE {{
               ?uri ?op ?oo .
               FILTER(STRSTARTS(STR(?uri), "http://rag.local/inst/"))
+              FILTER(!REGEX(STR(?uri), "/inst/root_[0-9]+_"))  # 익명 구조 노드는 앵커가 될 수 없음
               FILTER(?op != rdfs:label && ?op != rdf:type)
               BIND(REPLACE(REPLACE(LCASE(STRAFTER(STR(?uri), "http://rag.local/inst/")), "_", " "), "-", " ") AS ?nl)
               FILTER({local_filter})
@@ -630,6 +632,228 @@ class FusekiBackend(GraphBackend):
         loop_result["raw_gen"] = last_raw_gen
         return loop_result
 
+    # ------------------------------------------------------------------
+    # 관계 타게팅 (docs/design-graph-relation-targeting.md)
+    # ------------------------------------------------------------------
+
+    _JOSAS = ["에게", "으로", "에서", "하고", "이나", "이다", "까지", "부터",
+              "은", "는", "이", "가", "을", "를", "의", "와", "과", "로"]
+
+    def _resolve_anchors(
+        self, kb_id: str, query_text: str, entities: List[str], kwargs: Dict[str, Any], log_trace
+    ) -> List[Tuple[str, str]]:
+        """질문 엔티티 → 앵커 URI (최대 2개).
+
+        - LLM 이 준 엔티티(primary)를 먼저 시도하고, 하나라도 연결되면 휴리스틱/spaCy/번역
+          토큰으로 두 번째 앵커를 잡지 않는다 (엉뚱한 두 엔티티 관계 조회 방지).
+        - 관계어 풀에 있는 단어("pros", "장점")는 앵커 후보에서 뺀다.
+        - 두 번째 앵커는 그것도 primary 일 때만 인정한다 ("A와 B의 관계").
+        """
+        from app.services.retrieval.entity_linking import _compact
+
+        primary = [e for e in (kwargs.get("primary_entities") or []) if e]
+        others: List[str] = [e for e in (entities or []) if e and e not in primary]
+        # 질문 텍스트의 조사 제거 토큰 (LLM 이 한글을 영어로 바꾼 경우 대비)
+        for t in query_text.split():
+            t_clean = t.rstrip(".,?!")
+            for josa in self._JOSAS:
+                if t_clean.endswith(josa) and len(t_clean) > len(josa):
+                    t_clean = t_clean[: -len(josa)]
+                    break
+            if t_clean and len(t_clean) > 1 and t_clean not in primary and t_clean not in others:
+                others.append(t_clean)
+
+        alias_compacts = {
+            _compact(a) for a in (kwargs.get("relation_aliases") or []) if isinstance(a, str)
+        }
+        alias_compacts.discard("")
+
+        resolved: List[Tuple[str, str]] = []
+        linking_log: List[Dict[str, str]] = []
+        primary_resolved = False
+        for entity in primary + others:
+            is_primary = entity in primary
+            if not is_primary and primary_resolved:
+                continue
+            if not is_primary and resolved:
+                break
+            if _compact(entity) in alias_compacts:
+                log_trace(f"[Fuseki] Skip '{entity}' as anchor (relation word)")
+                continue
+            uri = self._resolve_entity_to_uri(kb_id, entity)
+            if not uri or "/inst/" not in uri:
+                continue
+            if any(uri == u for _, u in resolved):
+                primary_resolved = primary_resolved or is_primary
+                continue
+            if resolved and not is_primary:
+                continue
+            resolved.append((entity, uri))
+            linking_log.append({"entity": entity, "uri": uri, "primary": is_primary})
+            log_trace(f"[Fuseki] Resolved '{entity}' -> {uri}")
+            primary_resolved = primary_resolved or is_primary
+            if len(resolved) >= 2:
+                break
+        kwargs.setdefault("_reasoning", {})["linking"] = linking_log
+        return resolved
+
+    def _entity_role(self, entity_name: str, query_text: str, kwargs: Dict[str, Any]) -> str:
+        """앵커 역할: LLM entity_roles 우선, 없으면 조사로 판별. 기본 subject."""
+        role = (kwargs.get("entity_roles") or {}).get(entity_name)
+        if role in ("subject", "object"):
+            return role
+        idx = query_text.find(entity_name)
+        if idx != -1:
+            after = query_text[idx + len(entity_name): idx + len(entity_name) + 2]
+            if after.startswith(("을", "를")):
+                return "object"
+        return "subject"
+
+    async def _select_paths_with_llm(
+        self, query_text: str, catalog: List[Dict[str, Any]], kwargs: Dict[str, Any]
+    ) -> Tuple[str, List[Dict[str, Any]], str]:
+        """B 단계: 카탈로그(닫힌 집합)에서 LLM 이 경로 선택."""
+        from app.core.models_resolver import resolve_model_config
+        from app.core.llm import achat, no_thinking_extra_body
+        from app.services.retrieval import relation_targeting as rt
+
+        cfg = await resolve_model_config(kwargs.get("llm_model_config") or {})
+        messages, items = rt.build_path_select_messages(query_text, catalog)
+        content = await achat(
+            cfg, messages, model=cfg.get("model"), temperature=0,
+            response_format={"type": "json_object"},
+            extra_body=no_thinking_extra_body(cfg.get("model")),
+        )
+        return rt.validate_llm_selection(rt.parse_json_loose(content), items)
+
+    def _run_triple_query(self, kb_id: str, sparql: str, anchor_label: str, limit: Optional[int] = None):
+        from app.services.retrieval import relation_targeting as rt
+        res = fuseki_client.query_sparql(kb_id, sparql)
+        return rt.parse_triple_bindings(res.get("results", {}).get("bindings", []), anchor_label, limit=limit)
+
+    def _targeted_result(self, sparql: str, triples: List[Dict[str, Any]], reasoning: Dict[str, Any],
+                         trace_logs: List[str]) -> Dict[str, Any]:
+        from app.services.retrieval import relation_targeting as rt
+        ranked = rt.rank_chunk_ids(triples)
+        reasoning["sparql"] = sparql
+        reasoning["triples"] = triples
+        reasoning["chunks"] = ranked
+        public_triples = [
+            {"subject": t["subject"], "predicate": t["predicate"], "object": t["object"],
+             "chunk_ids": t["chunk_ids"], "path": t["path"]}
+            for t in triples
+        ]
+        return {
+            "chunk_ids": [c["chunk_id"] for c in ranked],
+            "chunk_order": "linkage",
+            "sparql_query": sparql.strip(),
+            "triples": public_triples,
+            "found_entities": [],
+            "used_fallback": False,
+            "reasoning": reasoning,
+            "trace_logs": trace_logs,
+        }
+
+    async def _relation_targeted_query(
+        self, kb_id: str, query_text: str, resolved: List[Tuple[str, str]], kwargs: Dict[str, Any], log_trace
+    ) -> Tuple[Optional[Dict[str, Any]], List[str]]:
+        """앵커가 확정된 질문의 관계 타게팅 검색.
+
+        반환: (결과 dict | None, LLM SPARQL 생성 경로용 context_predicates)
+        결과가 None 이면 호출부가 C(LLM SPARQL 생성) 경로로 진행한다.
+        """
+        from app.services.retrieval import relation_targeting as rt
+
+        trace_logs = kwargs.get("_trace_logs_ref")
+        reasoning: Dict[str, Any] = dict(kwargs.get("_reasoning") or {})
+
+        # 두 엔티티 관계: 양 끝 URI 를 고정한 직접 관계 조회
+        if len(resolved) >= 2:
+            (n1, u1), (n2, u2) = resolved[0], resolved[1]
+            sparql = rt.build_pair_query(u1, u2)
+            triples = self._run_triple_query(kb_id, sparql, "")
+            log_trace(f"[Fuseki] Pair query {n1} ↔ {n2}: {len(triples)} triples")
+            if triples:
+                reasoning["targeting"] = {"mode": "pair", "matches": [], "selected_paths": [f"{n1} ↔ {n2}"]}
+                return self._targeted_result(sparql, triples, reasoning, trace_logs), []
+            preds = list(set(self._fetch_outgoing_predicates(kb_id, u1) + self._fetch_incoming_predicates(kb_id, u1)
+                             + self._fetch_outgoing_predicates(kb_id, u2) + self._fetch_incoming_predicates(kb_id, u2)))
+            kwargs["_reasoning"] = {**reasoning, "targeting": {
+                "mode": "C", "reason": f"{n1}와 {n2} 사이 직접 관계 없음 → LLM SPARQL 생성"}}
+            return None, preds
+
+        entity_name, anchor_uri = resolved[0]
+        anchor_label = rt.local_name(anchor_uri)
+        role = self._entity_role(entity_name, query_text, kwargs)
+
+        cat_res = fuseki_client.query_sparql(kb_id, rt.build_catalog_query(anchor_uri))
+        catalog = rt.parse_catalog(cat_res.get("results", {}).get("bindings", []))
+        catalog_preds = list(dict.fromkeys(u for p in catalog for u in p["uris"]))
+        log_trace(f"[Fuseki] Relation catalog for {anchor_label}: {len(catalog)} paths (role={role})")
+        targeting: Dict[str, Any] = {"catalog_size": len(catalog), "matches": [], "role": role}
+
+        intent = (kwargs.get("intent") or "").lower() or None
+        selected: List[Dict[str, Any]] = []
+        mode = None
+
+        if intent == "overview":
+            mode = "overview"
+        else:
+            primary = kwargs.get("primary_entities") or []
+            resolved_names = {n for n, _ in resolved}
+            unresolved = [e for e in primary if e not in resolved_names]
+            pool = rt.build_alias_pool(
+                kwargs.get("relation_aliases"), kwargs.get("relationship_type"), unresolved, query_text
+            )
+            targeting["alias_pool"] = pool
+            if pool:
+                selected, matches = rt.match_paths(catalog, pool, role)
+                if selected:
+                    mode = "A"
+                    targeting["matches"] = matches
+            if not selected and catalog:
+                try:
+                    b_mode, picked, reason = await self._select_paths_with_llm(query_text, catalog, kwargs)
+                    targeting["reason"] = reason
+                    log_trace(f"[Fuseki] LLM path selection: mode={b_mode}, paths={[p['key'] for p in picked]}")
+                    if b_mode == "targeted":
+                        mode, selected = "B", picked
+                    elif b_mode == "overview":
+                        mode = "overview"
+                    else:
+                        mode = "none"
+                except Exception as e:
+                    log_trace(f"[Fuseki] LLM path selection unavailable ({e}); delegating to LLM SPARQL generation")
+                    kwargs["_reasoning"] = {**reasoning, "targeting": {
+                        **targeting, "mode": "C", "reason": "LLM 경로 선택 호출 실패 → LLM SPARQL 생성"}}
+                    return None, catalog_preds
+            if not catalog:
+                mode = "none"
+                targeting["reason"] = "앵커에 연결된 관계 경로 없음"
+
+        if mode == "overview":
+            sparql = rt.build_overview_query(anchor_uri)
+            triples = self._run_triple_query(kb_id, sparql, anchor_label, limit=rt.OVERVIEW_LIMIT)
+            targeting.update({"mode": "overview", "selected_paths": ["depth-1 이웃 (구조 노드 하위 제외)"]})
+            reasoning["targeting"] = targeting
+            return self._targeted_result(sparql, triples, reasoning, trace_logs), []
+
+        if mode in ("A", "B") and selected:
+            sparql = rt.build_targeted_query(anchor_uri, selected)
+            triples = self._run_triple_query(kb_id, sparql, anchor_label)
+            targeting.update({"mode": mode, "selected_paths": [rt.path_label(p) for p in selected]})
+            reasoning["targeting"] = targeting
+            log_trace(f"[Fuseki] Targeted query ({mode}): {len(triples)} triples")
+            return self._targeted_result(sparql, triples, reasoning, trace_logs), []
+
+        # mode == none: Strict Mode — 일치하는 관계가 없으면 빈 결과 (이웃 전체 조회로 떨어지지 않음)
+        targeting["mode"] = "none"
+        targeting.setdefault(
+            "reason", f"관계어 {targeting.get('alias_pool') or []}와 일치하는 경로 없음"
+        )
+        reasoning["targeting"] = targeting
+        return self._targeted_result("", [], reasoning, trace_logs), []
+
     async def query(
         self,
         kb_id: str,
@@ -649,6 +873,8 @@ class FusekiBackend(GraphBackend):
 
         def log_trace(msg: str):
             trace_logs.append(msg)
+
+        kwargs["_trace_logs_ref"] = trace_logs
 
         # 1. Try using SPARQLGenerator (LLM-based)
         llm_model_config = kwargs.get("llm_model_config") or {}
@@ -699,383 +925,22 @@ class FusekiBackend(GraphBackend):
                         is_multihop_pattern = True
                         log_trace(f"[Fuseki] 🔄 Multi-hop pattern detected (의 x{count_ui}). Skipping Fast Path, delegating to LLM.")
                 
+                # 분석기가 멀티홉으로 판정한 질문도 LLM SPARQL 생성 경로(C)로 보낸다.
+                if kwargs.get("query_type") == "multi_hop" or (kwargs.get("hop_count") or 1) >= 2:
+                    if not is_multihop_pattern:
+                        log_trace("[Fuseki] Multi-hop by query analysis. Delegating to LLM SPARQL generation.")
+                    is_multihop_pattern = True
+
                 if entity_centric_enabled and query_text and not is_multihop_pattern:
-                    log_trace("[Fuseki] Entity-Centric Schema: ENABLED")
-                    
-                    # 1. 질문에서 엔티티 추출
-                    question_entities = list(self._extract_entities_from_question(query_text, entities))
-                    primary_entities = list(question_entities)  # 질의 분석(LLM)이 준 엔티티 — 휴리스틱보다 우선
-                    log_trace(f"[Fuseki] Extracted entities from question: {question_entities}")
-                    
-                    # [FIX] LLM이 한글을 영어로 변환하는 경우(예: 장풍->Jangpung) 대비
-                    # 질문 텍스트에서 명사 형태(조사 제거)를 직접 추출하여 후보에 추가
-                    try:
-                        tokens = query_text.split()
-                        for t in tokens:
-                            t_clean = t.rstrip(".,?!")
-                            # 기본적인 한국어 조사 제거 (가장 긴 조사부터)
-                            josas = ["에게", "으로", "에서", "하고", "이나", "이다", "까지", "부터", "은", "는", "이", "가", "을", "를", "의", "와", "과", "로"]
-                            for josa in josas:
-                                if t_clean.endswith(josa) and len(t_clean) > len(josa):
-                                    t_clean = t_clean[:-len(josa)]
-                                    break
-                            
-                            if t_clean and len(t_clean) > 1 and t_clean not in question_entities:
-                                question_entities.append(t_clean)
-                        log_trace(f"[Fuseki] Expanded entities with heuristic: {question_entities}")
-                    except Exception as e_heuristic:
-                        log_trace(f"[Fuseki] Heuristic entity expansion failed: {e_heuristic}")
-
-                    # 2. 엔티티를 URI로 매핑 (Instance URI만 유효)
-                    resolved_uris = []
-                    primary_resolved = False
-                    for entity in question_entities:  # 모든 후보 시도
-                        is_primary = entity in primary_entities
-                        if not is_primary and primary_resolved and any(
-                            entity in pe for pe in primary_entities
-                        ):
-                            # LLM 엔티티(또는 그 번역)가 이미 연결됐다면, 그 엔티티의 조각인
-                            # 휴리스틱 토큰("마이크로 프론트엔드 아키텍처" → "프론트엔드")으로
-                            # 두 번째 앵커를 잡지 않는다 — 엉뚱한 Pattern 2(관계 탐색) 방지.
-                            log_trace(f"[Fuseki] Skip heuristic token '{entity}' (fragment of resolved entity)")
-                            continue
-                        uri = self._resolve_entity_to_uri(kb_id, entity)
-                        if uri and any(uri == u for _, u in resolved_uris):
-                            log_trace(f"[Fuseki] Skip '{entity}' -> {uri} (already resolved)")
-                            if is_primary:
-                                primary_resolved = True
-                            continue
-                        if uri:
-                            if is_primary:
-                                primary_resolved = True
-                            # Instance URI인지 검증 (rel:, prop:, class: 제외)
-                            if "/inst/" in uri or "rag.local/inst/" in uri:
-                                resolved_uris.append((entity, uri))
-                                log_trace(f"[Fuseki] Resolved '{entity}' -> {uri}")
-                            else:
-                                log_trace(f"[Fuseki] Skipped '{entity}' -> {uri} (not an instance)")
-                        
-                        # 최대 2개의 유효한 엔티티만 수집
-                        if len(resolved_uris) >= 2:
-                            break
-                    
-                    # 3. Pattern 분류 및 처리
+                    # 관계 타게팅 경로 (docs/design-graph-relation-targeting.md)
+                    resolved_uris = self._resolve_anchors(kb_id, query_text, entities, kwargs, log_trace)
                     if resolved_uris:
-                        num_entities = len(resolved_uris)
-                        
-                        if num_entities == 1:
-                            # 단일 엔티티: 패턴 1 또는 패턴 3 구분 필요
-                            entity_name, entity_uri = resolved_uris[0]
-                            # SPARQL 문자열 리터럴 삽입용 이스케이프 (entity_name 원본은 조사 판별 등에 계속 사용)
-                            safe_entity_name = escape_sparql_literal(entity_name)
-
-                            # 질문 분석: Object인지 Subject인지 판단
-                            # 1차: LLM 이 판별한 엔티티 역할(entity_roles), 없으면 조사(Josa) 폴백
-                            entity_roles = kwargs.get("entity_roles") or {}
-                            role = entity_roles.get(entity_name)
-                            if role == "object":
-                                is_object_pattern, is_subject_pattern = True, False
-                                log_trace(f"[Fuseki] Role by LLM: '{entity_name}' = object → Pattern 1")
-                            elif role == "subject":
-                                is_object_pattern, is_subject_pattern = False, True
-                                log_trace(f"[Fuseki] Role by LLM: '{entity_name}' = subject → Pattern 3")
-                            else:
-                                # 폴백: 엔티티명 바로 뒤의 조사 확인 (기존 동작 불변)
-                                entity_idx = query_text.find(entity_name)
-                                if entity_idx != -1:
-                                    after_entity = query_text[entity_idx + len(entity_name):entity_idx + len(entity_name) + 2]
-                                    is_object_pattern = after_entity.startswith(("을", "를"))
-                                    is_subject_pattern = after_entity.startswith(("의", "이", "가"))
-                                else:
-                                    is_object_pattern = False
-                                    is_subject_pattern = False
-                            
-                            if is_object_pattern:
-                                # 패턴 1: ? -> P -> O (Subject 미상)
-                                # 예: "장풍을 사용하는 참가자는?"
-                                log_trace(f"[Fuseki] Pattern 1 detected: ? -> P -> {entity_name}")
-                                
-                                # [UPGRADED] Fast Path for Pattern 1 (Bidirectional + Partial Match)
-                                # 양방향 조회 + 부분 일치: "장풍"을 검색하면 "장풍의 고수", "장풍의 창시자" 등도 포함
-                                bidirectional_query = f"""
-                                PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-                                SELECT DISTINCT ?s ?p ?o ?sLabel ?oLabel
-                                FROM <urn:x-arq:UnionGraph>
-                                WHERE {{
-                                    {{
-                                        # Incoming: ?s -> ?p -> 엔티티 (엔티티가 목적어, 양방향 부분 일치)
-                                        ?s ?p ?o .
-                                        ?o rdfs:label ?oLabel .
-                                        FILTER(CONTAINS(LCASE(?oLabel), LCASE("{safe_entity_name}")) || CONTAINS(LCASE("{safe_entity_name}"), LCASE(?oLabel)))
-                                        FILTER(STRLEN(?oLabel) > 1)
-                                    }}
-                                    UNION
-                                    {{
-                                        # Outgoing: 엔티티 -> ?p -> ?o (엔티티가 주어, 양방향 부분 일치)
-                                        ?s ?p ?o .
-                                        ?s rdfs:label ?sLabel .
-                                        FILTER(CONTAINS(LCASE(?sLabel), LCASE("{safe_entity_name}")) || CONTAINS(LCASE("{safe_entity_name}"), LCASE(?sLabel)))
-                                        FILTER(STRLEN(?sLabel) > 1)
-                                    }}
-                                    OPTIONAL {{ ?s rdfs:label ?sLabel }}
-                                    OPTIONAL {{ ?o rdfs:label ?oLabel }}
-                                    # Reification 메타데이터 제외 (rdf:subject, rdf:predicate, rdf:object)
-                                    FILTER(?p != <http://www.w3.org/1999/02/22-rdf-syntax-ns#type>)
-                                    FILTER(?p != <http://www.w3.org/1999/02/22-rdf-syntax-ns#subject>)
-                                    FILTER(?p != <http://www.w3.org/1999/02/22-rdf-syntax-ns#predicate>)
-                                    FILTER(?p != <http://www.w3.org/1999/02/22-rdf-syntax-ns#object>)
-                                    FILTER(?p != <http://www.w3.org/2000/01/rdf-schema#label>)
-                                }}
-                                LIMIT 100
-                                """
-                                try:
-                                    log_trace(f"[Fuseki] Pattern 1 Bidirectional Fast Path SPARQL:\n{bidirectional_query}")
-                                    fast_results = fuseki_client.query_sparql(kb_id, bidirectional_query)
-                                    fast_bindings = fast_results.get("results", {}).get("bindings", [])
-                                    if fast_bindings:
-                                        log_trace(f"[Fuseki] Pattern 1: Bidirectional Fast Path successful. Found {len(fast_bindings)} triples (incoming + outgoing).")
-                                        for b in fast_bindings:
-                                            p_uri = b["p"]["value"]
-                                            # [FIX] UI 표시를 위해 'rel:' 접두어 제거
-                                            short_p = p_uri.split("/")[-1] if "/" in p_uri else p_uri
-                                            # 만약 'rel:' 같은게 붙어있으면 뗌 (예: rel:고수 -> 고수)
-                                            short_p = short_p.replace("rel:", "").replace("prop:", "")
-                                            
-                                            # [FIX] Label이 없을 경우 URI에서 추출 (KeyError 방지)
-                                            s_label = b.get("sLabel", {}).get("value") or (b["s"]["value"].split("/")[-1].split("#")[-1])
-                                            o_label = b.get("oLabel", {}).get("value") or (b["o"]["value"].split("/")[-1].split("#")[-1])
-
-                                            found_triples.append({
-                                                "subject": s_label,
-                                                "predicate": short_p,
-                                                "object": o_label
-                                            })
-                                            found_uris.add(b["s"]["value"])
-                                            found_uris.add(b["o"]["value"])
-                                        skip_llm_generation = True
-                                        log_trace(f"[Fuseki] Pattern 1: Fast Path complete. Skipping LLM.")
-                                    else:
-                                        # Fallback to predicate collection
-                                        context_predicates = self._fetch_incoming_predicates(kb_id, entity_uri)
-                                        log_trace(f"[Fuseki] Pattern 1 ({entity_name}): collected {len(context_predicates)} incoming predicates")
-                                except Exception as e:
-                                    log_trace(f"[Fuseki] Pattern 1: Fast Path failed: {e}")
-                                
-                            else:
-                                # 패턴 3: S -> P -> ? (Object 미상) - 기본값
-                                # 예: "성기훈의 후배는 누구야?"
-                                log_trace(f"[Fuseki] Pattern 3 detected: {entity_name} -> P -> ?")
-                                
-                                # [UPGRADED] Fast Path for Pattern 3 (Bidirectional + Partial Match)
-                                # 양방향 조회 + 부분 일치: "장풍"을 검색하면 "장풍의 고수" 등도 포함
-                                # 해석된 URI 를 직접 앵커로도 쓴다: 이름 부분일치만 쓰면 질문 표기
-                                # ("Micro Frontend Architecture")와 라벨("micro_frontend")이 다를 때
-                                # 링킹에 성공하고도 Fast Path 가 0건이 된다.
-                                # 또한 구조화(JSON/YAML) 문서의 중첩 객체는 익명 구조 노드
-                                # (inst:root_N_<key>_M)로 들어가므로, 그 노드를 경유하는 2-hop
-                                # (엔티티 -p0-> 구조노드 -p-> 값)도 함께 가져온다.
-                                entity_iri = f"<{entity_uri}>"
-                                bidirectional_query = f"""
-                                PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-                                SELECT DISTINCT ?s ?p ?o ?sLabel ?oLabel ?p0 ?anchorLabel
-                                FROM <urn:x-arq:UnionGraph>
-                                WHERE {{
-                                    {{
-                                        # Outgoing (URI 앵커)
-                                        BIND({entity_iri} AS ?s)
-                                        ?s ?p ?o .
-                                    }}
-                                    UNION
-                                    {{
-                                        # Incoming (URI 앵커)
-                                        BIND({entity_iri} AS ?o)
-                                        ?s ?p ?o .
-                                    }}
-                                    UNION
-                                    {{
-                                        # 구조 노드 경유 2-hop: 엔티티 -p0-> ?s(root_N_…) -p-> ?o
-                                        {entity_iri} ?p0 ?s .
-                                        FILTER(REGEX(STR(?s), "/inst/root_[0-9]+_"))
-                                        ?s ?p ?o .
-                                        OPTIONAL {{ {entity_iri} rdfs:label ?anchorLabel }}
-                                    }}
-                                    UNION
-                                    {{
-                                        # Outgoing: 엔티티 -> ?p -> ?o (엔티티가 주어, 양방향 부분 일치)
-                                        ?s ?p ?o .
-                                        ?s rdfs:label ?sLabel .
-                                        FILTER(CONTAINS(LCASE(?sLabel), LCASE("{safe_entity_name}")) || CONTAINS(LCASE("{safe_entity_name}"), LCASE(?sLabel)))
-                                        FILTER(STRLEN(?sLabel) > 1)
-                                    }}
-                                    UNION
-                                    {{
-                                        # Incoming: ?s -> ?p -> 엔티티 (엔티티가 목적어, 양방향 부분 일치)
-                                        ?s ?p ?o .
-                                        ?o rdfs:label ?oLabel .
-                                        FILTER(CONTAINS(LCASE(?oLabel), LCASE("{safe_entity_name}")) || CONTAINS(LCASE("{safe_entity_name}"), LCASE(?oLabel)))
-                                        FILTER(STRLEN(?oLabel) > 1)
-                                    }}
-                                    OPTIONAL {{ ?s rdfs:label ?sLabel }}
-                                    OPTIONAL {{ ?o rdfs:label ?oLabel }}
-                                    # Reification 메타데이터 제외
-                                    FILTER(?p != <http://www.w3.org/1999/02/22-rdf-syntax-ns#type>)
-                                    FILTER(?p != <http://www.w3.org/1999/02/22-rdf-syntax-ns#subject>)
-                                    FILTER(?p != <http://www.w3.org/1999/02/22-rdf-syntax-ns#predicate>)
-                                    FILTER(?p != <http://www.w3.org/1999/02/22-rdf-syntax-ns#object>)
-                                    FILTER(?p != <http://www.w3.org/2000/01/rdf-schema#label>)
-                                    FILTER(!STRSTARTS(STR(?s), "http://rag.local/stmt/"))
-                                }}
-                                LIMIT 300
-                                """
-                                try:
-                                    log_trace(f"[Fuseki] Pattern 3 Bidirectional Fast Path SPARQL:\n{bidirectional_query}")
-                                    fast_results = fuseki_client.query_sparql(kb_id, bidirectional_query)
-                                    fast_bindings = fast_results.get("results", {}).get("bindings", [])
-                                    if fast_bindings:
-                                        log_trace(f"[Fuseki] Pattern 3: Bidirectional Fast Path successful. Found {len(fast_bindings)} triples (outgoing + incoming).")
-                                        for b in fast_bindings:
-                                            p_uri = b["p"]["value"]
-                                            # [FIX] UI 표시를 위해 'rel:' 접두어 제거
-                                            short_p = p_uri.split("/")[-1] if "/" in p_uri else p_uri
-                                            short_p = short_p.replace("rel:", "").replace("prop:", "")
-
-                                            # [FIX] Label이 없을 경우 URI에서 추출 (KeyError 방지)
-                                            s_label = b.get("sLabel", {}).get("value") or (b["s"]["value"].split("/")[-1].split("#")[-1])
-                                            o_label = b.get("oLabel", {}).get("value") or (b["o"]["value"].split("/")[-1].split("#")[-1])
-
-                                            if "p0" in b:
-                                                # 구조 노드 경유 2-hop: (엔티티, "tradeoffs.pros", 값) 으로 평탄화해
-                                                # 의미 없는 'root_0_tradeoffs_22' 대신 앵커 엔티티를 주어로 보인다.
-                                                p0_uri = b["p0"]["value"]
-                                                short_p0 = p0_uri.split("/")[-1] if "/" in p0_uri else p0_uri
-                                                short_p = f"{short_p0}.{short_p}"
-                                                s_label = b.get("anchorLabel", {}).get("value") or entity_uri.split("/")[-1]
-
-                                            found_triples.append({
-                                                "subject": s_label,
-                                                "predicate": short_p,
-                                                "object": o_label
-                                            })
-                                            found_uris.add(b["s"]["value"])
-                                            found_uris.add(b["o"]["value"])
-                                        skip_llm_generation = True
-                                        log_trace(f"[Fuseki] Pattern 3: Fast Path complete. Skipping LLM.")
-                                    else:
-                                        # Fallback to predicate collection
-                                        outgoing_preds = self._fetch_outgoing_predicates(kb_id, entity_uri)
-                                        incoming_preds = self._fetch_incoming_predicates(kb_id, entity_uri)
-                                        context_predicates = list(set(outgoing_preds + incoming_preds))
-                                        log_trace(f"[Fuseki] Pattern 3 ({entity_name}): collected {len(context_predicates)} predicates (out+in)")
-                                except Exception as e:
-                                    log_trace(f"[Fuseki] Pattern 3: Fast Path failed: {e}")
-                            
-                        elif num_entities >= 2:
-                            # 패턴 2: S -> ? -> O (Relation 미상)
-                            # 예: "성기훈과 조상우의 관계는?"
-                            entity1_name, uri1 = resolved_uris[0]
-                            entity2_name, uri2 = resolved_uris[1]
-                            # SPARQL 문자열 리터럴 삽입용 이스케이프 (원본은 로깅 등에 계속 사용)
-                            safe_entity1_name = escape_sparql_literal(entity1_name)
-                            safe_entity2_name = escape_sparql_literal(entity2_name)
-
-                            log_trace(f"[Fuseki] Pattern 2 detected: {entity1_name} -> ? -> {entity2_name}")
-                            
-                            # 직접 연결 확인 및 트리플 데이터 즉시 확보 (Fast Path with Partial Match)
-                            direct_triple_query = f"""
-                            PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-                            SELECT DISTINCT ?s ?p ?o ?sLabel ?oLabel
-                            FROM <urn:x-arq:UnionGraph>
-                            WHERE {{
-                                {{
-                                    # Entity1 -> Entity2 (양방향 부분 일치)
-                                    ?s ?p ?o .
-                                    ?s rdfs:label ?sLabel .
-                                    ?o rdfs:label ?oLabel .
-                                    FILTER(CONTAINS(LCASE(?sLabel), LCASE("{safe_entity1_name}")) || CONTAINS(LCASE("{safe_entity1_name}"), LCASE(?sLabel)))
-                                    FILTER(CONTAINS(LCASE(?oLabel), LCASE("{safe_entity2_name}")) || CONTAINS(LCASE("{safe_entity2_name}"), LCASE(?oLabel)))
-                                    FILTER(STRLEN(?sLabel) > 1)
-                                    FILTER(STRLEN(?oLabel) > 1)
-                                }}
-                                UNION
-                                {{
-                                    # Entity2 -> Entity1 (양방향 부분 일치)
-                                    ?s ?p ?o .
-                                    ?s rdfs:label ?sLabel .
-                                    ?o rdfs:label ?oLabel .
-                                    FILTER(CONTAINS(LCASE(?sLabel), LCASE("{safe_entity2_name}")) || CONTAINS(LCASE("{safe_entity2_name}"), LCASE(?sLabel)))
-                                    FILTER(CONTAINS(LCASE(?oLabel), LCASE("{safe_entity1_name}")) || CONTAINS(LCASE("{safe_entity1_name}"), LCASE(?oLabel)))
-                                    FILTER(STRLEN(?sLabel) > 1)
-                                    FILTER(STRLEN(?oLabel) > 1)
-                                }}
-                                # Reification 메타데이터 제외
-                                FILTER(?p != <http://www.w3.org/1999/02/22-rdf-syntax-ns#type>)
-                                FILTER(?p != <http://www.w3.org/1999/02/22-rdf-syntax-ns#subject>)
-                                FILTER(?p != <http://www.w3.org/1999/02/22-rdf-syntax-ns#predicate>)
-                                FILTER(?p != <http://www.w3.org/1999/02/22-rdf-syntax-ns#object>)
-                                FILTER(?p != <http://www.w3.org/2000/01/rdf-schema#label>)
-                            }}
-                            """
-                            try:
-                                log_trace(f"[Fuseki] Pattern 2 Fast Path SPARQL:\n{direct_triple_query}")
-                                fast_results = fuseki_client.query_sparql(kb_id, direct_triple_query)
-                                fast_bindings = fast_results.get("results", {}).get("bindings", [])
-                                
-                                if fast_bindings:
-                                    log_trace(f"[Fuseki] Pattern 2: Fast Path successful. Found {len(fast_bindings)} direct triples.")
-                                    # Fast Path 결과를 저장소에 미리 담아둠 (나중에 LLM 결과와 합쳐짐)
-                                    for b in fast_bindings:
-                                        p_uri = b["p"]["value"]
-                                        # [FIX] UI 표시를 위해 'rel:' 접두어 제거
-                                        short_p = p_uri.split("/")[-1] if "/" in p_uri else p_uri
-                                        short_p = short_p.replace("rel:", "").replace("prop:", "")
-
-                                        # [FIX] Label이 없을 경우 URI에서 추출 (KeyError 방지)
-                                        s_label = b.get("sLabel", {}).get("value") or (b["s"]["value"].split("/")[-1].split("#")[-1])
-                                        o_label = b.get("oLabel", {}).get("value") or (b["o"]["value"].split("/")[-1].split("#")[-1])
-
-                                        found_triples.append({
-                                            "subject": s_label,
-                                            "predicate": short_p,
-                                            "object": o_label
-                                        })
-                                        # URI도 secondary lookup을 위해 추가
-                                        found_uris.add(b["s"]["value"])
-                                        found_uris.add(b["o"]["value"])
-                                    
-                                    # Fast Path로 이미 정답을 찾았으므로 LLM 호출 건너뛰기
-                                    skip_llm_generation = True
-                                    log_trace(f"[Fuseki] Pattern 2: Fast Path complete. Skipping LLM generation (already have {len(found_triples)} triples).")
-                                else:
-                                    log_trace(f"[Fuseki] Pattern 2: No direct relation found via Fast Path. Falling back to surrounding predicates.")
-                                    # 직접 연결 없으면 주변 Predicate 수집 (LLM 안내용)
-                                    preds1_out = self._fetch_outgoing_predicates(kb_id, uri1)
-                                    preds1_in = self._fetch_incoming_predicates(kb_id, uri1)
-                                    preds2_out = self._fetch_outgoing_predicates(kb_id, uri2)
-                                    preds2_in = self._fetch_incoming_predicates(kb_id, uri2)
-                                    all_preds = preds1_out + preds1_in + preds2_out + preds2_in
-                                    context_predicates = list(set(all_preds))
-                            except Exception as e:
-                                log_trace(f"[Fuseki] Pattern 2: Error in Fast Path query: {e}")
-
-                # [RELEVANCE CHECK]
-                # Fast Path가 무차별적으로 데이터를 가져오는 것을 방지
-                if skip_llm_generation and found_triples:
-                    # resolved_uris: List[Tuple[str, str]] -> (name, uri)
-                    known_entity_names = [name for name, _ in resolved_uris] if resolved_uris else []
-                    relation_keywords = self._extract_relevance_keywords(query_text, known_entity_names)
-                    # 질의 분석이 준 관계어 동의어(한/영, 키 이름 형태)를 추가 — 한국어 질문
-                    # ("장점")과 영어 키(predicate "pros") 사이의 언어 차이를 메운다.
-                    # (임베딩은 짧은 한↔영 단어 유사도가 신뢰 불가: 장점~pros 0.20 < 장점~references 0.27)
-                    relation_aliases = [a.lower() for a in (kwargs.get("relation_aliases") or []) if a]
-                    relevance_terms = list(dict.fromkeys(relation_keywords + relation_aliases))
-                    log_trace(f"[Fuseki] Relevance Check Keywords: {relevance_terms}")
-
-                    is_relevant = self._check_triples_relevance(relevance_terms, found_triples)
-                    if not is_relevant:
-                        log_trace(f"[Fuseki] ⚠️ Fast Path result seems irrelevant to keywords {relation_keywords}. Formatting Fallback to LLM.")
-                        skip_llm_generation = False
-                        found_triples = [] # Reset to avoid noise
-                        found_uris = set()
+                        targeted, catalog_preds = await self._relation_targeted_query(
+                            kb_id, query_text, resolved_uris, kwargs, log_trace
+                        )
+                        if targeted is not None:
+                            return targeted
+                        context_predicates = catalog_preds
 
                 # LLM 호출 (Fast Path로 이미 답을 찾은 경우 건너뜀) — QueryGenerationLoop로 감싸서
                 # 생성 실패/0건 시 최대 2회까지 에러 되먹임 재시도한다.
@@ -1109,59 +974,6 @@ class FusekiBackend(GraphBackend):
                 generated_sparql = loop_result.get("query") if loop_result else None
                 log_trace(f"[Fuseki] extracted generated_sparql (postprocessed): {generated_sparql}")
 
-                # [NEW] Fast Path 데이터 우선 처리 (LLM 결과와 독립적)
-                if skip_llm_generation and found_triples:
-                    # Fast Path로 이미 트리플을 찾았으므로 바로 결과에 반영
-                    log_trace(f"[Fuseki] Using Fast Path results: {len(found_triples)} triples, {len(found_uris)} URIs")
-                    triples = found_triples  # 최종 결과에 직접 할당
-                
-                    # Chunk ID 조회를 위해 found_uris 사용
-                    if found_uris:
-                        uri_list = " ".join([f"<{u}>" for u in found_uris])
-                        # [FIX] SELECT 절이 누락돼 있어 QueryBadFormed 로 항상 0 청크를 반환하던 버그.
-                        # LLM 경로(하단 reification_query)와 동일하게 SELECT DISTINCT ?sourceNodeId 추가.
-                        reification_query = f"""
-                        PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
-                        PREFIX meta: <http://rag.local/meta/>
-                        SELECT DISTINCT ?sourceNodeId
-                        FROM <urn:x-arq:UnionGraph>
-                        WHERE {{
-                          VALUES ?target {{ {uri_list} }} .
-                          {{
-                            ?stmt rdf:type rdf:Statement ;
-                                  rdf:subject ?target ;
-                                  meta:sourceNodeId ?sourceNodeId .
-                          }} UNION {{
-                            ?stmt rdf:type rdf:Statement ;
-                                  rdf:object ?target ;
-                                  meta:sourceNodeId ?sourceNodeId .
-                          }}
-                        }}
-                        LIMIT 100
-                        """
-                        try:
-                            reif_results = fuseki_client.query_sparql(kb_id, reification_query)
-                            reif_bindings = reif_results.get("results", {}).get("bindings", [])
-                            for rb in reif_bindings:
-                                if "sourceNodeId" in rb:
-                                    node_id = rb["sourceNodeId"]["value"]
-                                    if node_id:
-                                        chunk_ids.append(node_id)
-                            log_trace(f"[Fuseki] Fast Path: Found {len(chunk_ids)} chunk IDs via reification")
-                        except Exception as e:
-                            log_trace(f"[Fuseki] Fast Path: Reification query failed: {e}")
-                
-                        # Fast Path 성공 시 즉시 결과 반환
-                        log_trace(f"[Fuseki] Fast Path complete. Returning {len(triples)} triples and {len(chunk_ids)} chunks.")
-                        return {
-                            "chunk_ids": chunk_ids,
-                            "sparql_query": "-- FAST PATH BYPASS (Direct Relationship Found) --", 
-                            "triples": triples,
-                            "found_entities": [t["subject"] for t in triples] + [t["object"] for t in triples],
-                            "used_fallback": False,
-                            "trace_logs": trace_logs
-                        }
-                
             # SPARQL 실행 로직 (Fast Path 밖으로 이동)
                 if generated_sparql:
                         # generated_sparql은 _generate_and_execute_sparql() 안에서
@@ -1367,6 +1179,7 @@ class FusekiBackend(GraphBackend):
                                 "sparql_query": full_query.strip(),
                                 "triples": final_triples,
                                 "found_entities": list(found_entities),
+                                "reasoning": kwargs.get("_reasoning"),
                                 "trace_logs": trace_logs
                             }
                         else:
@@ -1380,7 +1193,8 @@ class FusekiBackend(GraphBackend):
                                     "sparql_query": full_query.strip(),
                                     "triples": [],
                                     "found_entities": [],
-                                    "trace_logs": trace_logs
+                                    "reasoning": kwargs.get("_reasoning"),
+                                "trace_logs": trace_logs
                                 }
                         
             except Exception as e:
@@ -1400,6 +1214,7 @@ class FusekiBackend(GraphBackend):
             "sparql_query": sparql_query.strip() if sparql_query else "No Results / Generation Failed", 
             "triples": [], 
             "found_entities": [],
+            "reasoning": kwargs.get("_reasoning"),
             "trace_logs": trace_logs
         }
 
