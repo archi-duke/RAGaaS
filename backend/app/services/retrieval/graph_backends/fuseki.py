@@ -652,6 +652,10 @@ class FusekiBackend(GraphBackend):
         from app.services.retrieval.entity_linking import _compact
 
         primary = [e for e in (kwargs.get("primary_entities") or []) if e]
+        if (kwargs.get("intent") or "").lower() == "class_query":
+            # 유형 질문은 LLM 이 준 엔티티와 그 번역만 앵커 후보로 — spaCy/휴리스틱 토큰('가장')이
+            # 문장형 값 노드에 잘못 연결되는 것 방지
+            entities, query_text = list(kwargs.get("translated_entities") or []), ""
         others: List[str] = [e for e in (entities or []) if e and e not in primary]
         # 질문 텍스트의 조사 제거 토큰 (LLM 이 한글을 영어로 바꾼 경우 대비)
         for t in query_text.split():
@@ -666,6 +670,8 @@ class FusekiBackend(GraphBackend):
         alias_compacts = {
             _compact(a) for a in (kwargs.get("relation_aliases") or []) if isinstance(a, str)
         }
+        if kwargs.get("target_class"):
+            alias_compacts.add(_compact(str(kwargs["target_class"])))  # '스타일' 은 대상 유형이지 앵커가 아님
         alias_compacts.discard("")
 
         resolved: List[Tuple[str, str]] = []
@@ -854,6 +860,196 @@ class FusekiBackend(GraphBackend):
         reasoning["targeting"] = targeting
         return self._targeted_result("", [], reasoning, trace_logs), []
 
+    # ------------------------------------------------------------------
+    # 유형 수준 질문 — 질의 계획 (docs/design-graph-class-query.md)
+    # ------------------------------------------------------------------
+
+    _CLASS_CATALOG_CACHE: Dict[str, Tuple[str, float, List[Dict[str, Any]], Dict[str, List[Dict[str, Any]]]]] = {}
+    _CLASS_CATALOG_TTL = 300.0
+    _MAX_KINDS = 6
+
+    def _bindings(self, kb_id: str, sparql: str) -> List[Dict[str, Any]]:
+        return fuseki_client.query_sparql(kb_id, sparql).get("results", {}).get("bindings", [])
+
+    def _is_record(self, kb_id: str, uri: str) -> bool:
+        """레코드(시스템 predicate 외 outgoing 있음) 여부. 값 노드면 False."""
+        from app.services.retrieval import class_query as cq
+        try:
+            res = fuseki_client.query_sparql(kb_id, cq.has_outgoing_query(uri))
+            if "boolean" in res:
+                return bool(res["boolean"])
+        except Exception:
+            pass
+        return True  # 판별 불가 시 기존 동작(앵커 경로) 유지
+
+    def _class_catalog(self, kb_id: str, log_trace):
+        """유형 + 유형별 경로 카탈로그 (지문 + TTL 캐시)."""
+        import time as _time
+        from app.services.retrieval import class_query as cq
+
+        fp_rows = self._bindings(kb_id, "SELECT (COUNT(*) AS ?n) FROM <urn:x-arq:UnionGraph> WHERE { ?s ?p ?o }")
+        fingerprint = (fp_rows[0].get("n", {}).get("value") if fp_rows else "0") or "0"
+        cached = self._CLASS_CATALOG_CACHE.get(kb_id)
+        if cached and cached[0] == fingerprint and _time.time() - cached[1] < self._CLASS_CATALOG_TTL:
+            log_trace(f"[Fuseki] Class catalog cache hit (triples={fingerprint})")
+            return cached[2], cached[3]
+
+        kinds = cq.infer_kinds(self._bindings(kb_id, cq.build_member_query()))[: self._MAX_KINDS]
+        catalogs = {
+            k["name"]: cq.parse_kind_catalog(self._bindings(kb_id, cq.build_kind_catalog_query(k["members"])))
+            for k in kinds
+        }
+        self._CLASS_CATALOG_CACHE[kb_id] = (fingerprint, _time.time(), kinds, catalogs)
+        log_trace(f"[Fuseki] Class catalog built: {[(k['name'], len(k['members'])) for k in kinds]}")
+        return kinds, catalogs
+
+    async def _plan_with_llm(self, query_text, kinds, catalogs, value_hints, kwargs, retry_note=""):
+        from app.core.models_resolver import resolve_model_config
+        from app.core.llm import achat, no_thinking_extra_body
+        from app.services.retrieval import class_query as cq
+        from app.services.retrieval.relation_targeting import parse_json_loose
+
+        cfg = await resolve_model_config(kwargs.get("llm_model_config") or {})
+        hint_labels = [cq.local_name(u) for u in value_hints]
+        messages = cq.build_plan_messages(query_text, kinds, catalogs, hint_labels, retry_note)
+        content = await achat(
+            cfg, messages, model=cfg.get("model"), temperature=0,
+            response_format={"type": "json_object"},
+            extra_body=no_thinking_extra_body(cfg.get("model")),
+        )
+        return parse_json_loose(content)
+
+    async def _class_level_query(
+        self, kb_id: str, query_text: str, value_hints: List[str], kwargs: Dict[str, Any], log_trace
+    ) -> Tuple[Optional[Dict[str, Any]], List[str]]:
+        """유형 수준 질문: 카탈로그 → LLM 질의 계획 → 검증 → 컴파일·실행.
+
+        반환: (결과 | None, C 경로용 context_predicates). None 이면 자유 Text-to-SPARQL(C).
+        """
+        from app.services.retrieval import class_query as cq
+
+        trace_logs = kwargs.get("_trace_logs_ref")
+        reasoning: Dict[str, Any] = dict(kwargs.get("_reasoning") or {})
+        kinds, catalogs = self._class_catalog(kb_id, log_trace)
+        all_preds = list(dict.fromkeys(u for c in catalogs.values() for p in c for u in p["uris"]))
+        kind_info = [{"name": k["name"], "members": len(k["members"]), "examples": k["examples"],
+                      "typed": bool(k.get("class_uri"))} for k in kinds]
+        targeting: Dict[str, Any] = {
+            "mode": "P", "kinds": kind_info,
+            "catalog_size": sum(len(c) for c in catalogs.values()),
+        }
+        if not kinds:
+            kwargs["_reasoning"] = {**reasoning, "targeting": {
+                "mode": "C", "reason": "그래프에서 유형(레코드 집합)을 찾지 못함 → 자유 Text-to-SPARQL"}}
+            return None, all_preds
+
+        try:
+            raw = await self._plan_with_llm(query_text, kinds, catalogs, value_hints, kwargs)
+            checked = cq.validate_plan(raw, kinds, catalogs, value_hints)
+            if checked["status"] == "reject":
+                log_trace(f"[Fuseki] Plan rejected: {checked['message']} — retrying once")
+                note = f"\n이전 계획이 반려됨: {checked['message']}. 목록의 번호·값만 사용해 다시 작성하라."
+                raw = await self._plan_with_llm(query_text, kinds, catalogs, value_hints, kwargs, note)
+                checked = cq.validate_plan(raw, kinds, catalogs, value_hints)
+        except Exception as e:
+            log_trace(f"[Fuseki] Plan LLM unavailable ({e}); delegating to free Text-to-SPARQL")
+            kwargs["_reasoning"] = {**reasoning, "targeting": {
+                **targeting, "mode": "C", "reason": "질의 계획 LLM 호출 불가 → 자유 Text-to-SPARQL"}}
+            return None, all_preds
+
+        status = checked["status"]
+        targeting["raw_plan"] = raw
+        log_trace(f"[Fuseki] Plan status={status} {checked.get('message', '')}")
+
+        if status in ("reject", "unsupported"):
+            why = "질의 계획으로 표현할 수 없음" if status == "unsupported" else "계획 검증 반려"
+            kwargs["_reasoning"] = {**reasoning, "targeting": {
+                **targeting, "mode": "C", "reason": f"{why}({checked.get('message', '')}) → 자유 Text-to-SPARQL"}}
+            return None, all_preds
+
+        if status in ("none", "zero"):
+            targeting["mode"] = "P" if status == "zero" else "none"
+            targeting["reason"] = checked.get("message") or "질문이 묻는 속성이 카탈로그에 없음"
+            reasoning["targeting"] = targeting
+            reasoning.update({"sparql": "", "triples": [], "chunks": []})
+            return {
+                "chunk_ids": [], "chunk_order": "linkage", "sparql_query": "", "triples": [],
+                "found_entities": [], "used_fallback": False, "reasoning": reasoning,
+                "result_summary": f"질의 계획 결과: 조건을 만족하는 엔티티 없음 ({targeting['reason']})",
+                "trace_logs": trace_logs,
+            }, []
+
+        plan = checked["plan"]
+        member_sparql = cq.compile_member_query(plan)
+        entities = [cq._val(b, "e") for b in self._bindings(kb_id, member_sparql) if cq._val(b, "e")]
+        truncated = len(entities) > cq.MAX_RESULT_ENTITIES
+        entities = entities[: cq.MAX_RESULT_ENTITIES]
+        sparql_parts = [f"# 1) 조건을 만족하는 엔티티\n{member_sparql}"]
+
+        agg_values = None
+        agg = plan.get("aggregate")
+        if agg and agg["fn"] in ("count", "max", "min") and entities:
+            agg_sparql = cq.compile_aggregate_query(entities, agg)
+            rows = []
+            for b in self._bindings(kb_id, agg_sparql):
+                try:
+                    rows.append((cq._val(b, "e"), float(cq._val(b, "agg") or 0)))
+                except ValueError:
+                    continue
+            top = rows if agg.get("having") else cq.pick_top_with_ties(rows, agg["limit"])
+            entities = [e for e, _ in top]
+            agg_values = dict(top)
+            sparql_parts.append(f"# 2) 집계\n{agg_sparql}")
+
+        triples: List[Dict[str, Any]] = []
+        if entities:
+            ev_sparql = cq.compile_evidence_query(entities, plan)
+            if ev_sparql:
+                triples = cq.parse_evidence(self._bindings(kb_id, ev_sparql), entities)
+                sparql_parts.append(f"# {len(sparql_parts) + 1}) 근거 트리플 + 청크\n{ev_sparql}")
+        # 집계값을 합성 트리플로 (센 트리플들의 청크를 근거로)
+        if agg_values:
+            for e in entities:
+                cids = sorted({c for t in triples if t["entity_uri"] == e and t["role"] == "aggregate"
+                               for c in t["chunk_ids"]})
+                triples.insert(0, {
+                    "entity": cq.local_name(e), "entity_uri": e, "role": "aggregate",
+                    "subject": cq.local_name(e), "predicate": f"{agg['fn']}({agg['path']['key']})",
+                    "object": f"{agg_values[e]:g}", "path": "aggregate", "dir": "out",
+                    "chunk_ids": cids, "edge_chunk_ids": [],
+                })
+            pos = {u: i for i, u in enumerate(entities)}
+            triples.sort(key=lambda t: (pos.get(t["entity_uri"], 999),
+                                        0 if t["path"] == "aggregate" else 1))
+
+        ranked = cq.rank_chunk_ids_grouped(triples, entities)
+        summary = cq.plan_summary(plan)
+        targeting.update({
+            "plan": summary,
+            "selected_paths": [f"필터: {f}" for f in summary["filters"]]
+                              + ([f"집계: {summary['aggregate']}"] if summary["aggregate"] else [])
+                              + [f"반환: {r}" for r in summary["returns"]],
+            "reason": plan.get("reason") or "",
+            "adjustments": checked.get("adjustments") or [],
+            "result_entities": [cq.local_name(e) for e in entities],
+            "truncated": truncated,
+        })
+        reasoning["targeting"] = targeting
+        sparql = "\n\n".join(sparql_parts)
+        reasoning.update({"sparql": sparql, "triples": triples, "chunks": ranked})
+        log_trace(f"[Fuseki] Class plan: {len(entities)} entities, {len(triples)} triples, {len(ranked)} chunks")
+        return {
+            "chunk_ids": [c["chunk_id"] for c in ranked],
+            "chunk_order": "linkage",
+            "sparql_query": sparql,
+            "triples": cq.triples_view(triples),
+            "found_entities": [],
+            "used_fallback": False,
+            "reasoning": reasoning,
+            "result_summary": cq.result_summary(entities, plan, agg_values, truncated),
+            "trace_logs": trace_logs,
+        }, []
+
     async def query(
         self,
         kb_id: str,
@@ -917,30 +1113,61 @@ class FusekiBackend(GraphBackend):
                 resolved_uris = []  # Entity-Centric 블록을 건너뛰어도 이후 참조가 안전하도록 기본값 보장
                 entity_centric_enabled = kwargs.get("enable_entity_centric_schema", True)  # 기본 활성화
                 
-                # [OPTION 3] Multi-hop Pattern Detection - Skip Fast Path if multi-hop detected
+                # 라우팅 (docs/design-graph-relation-targeting.md, docs/design-graph-class-query.md)
+                intent = (kwargs.get("intent") or "").lower()
+                is_class_query = intent == "class_query"
                 is_multihop_pattern = False
-                if query_text and "의" in query_text:
-                    count_ui = query_text.count("의")
-                    if count_ui >= 2:
+                if not is_class_query:
+                    # [OPTION 3] '의' x2 휴리스틱 — 유형 질문("…의 …스타일")은 제외
+                    if query_text and query_text.count("의") >= 2:
                         is_multihop_pattern = True
-                        log_trace(f"[Fuseki] 🔄 Multi-hop pattern detected (의 x{count_ui}). Skipping Fast Path, delegating to LLM.")
-                
-                # 분석기가 멀티홉으로 판정한 질문도 LLM SPARQL 생성 경로(C)로 보낸다.
-                if kwargs.get("query_type") == "multi_hop" or (kwargs.get("hop_count") or 1) >= 2:
-                    if not is_multihop_pattern:
-                        log_trace("[Fuseki] Multi-hop by query analysis. Delegating to LLM SPARQL generation.")
-                    is_multihop_pattern = True
+                        log_trace(f"[Fuseki] 🔄 Multi-hop pattern detected (의 x{query_text.count('의')}). Delegating to LLM SPARQL generation.")
+                    # 분석기가 멀티홉으로 판정한 질문도 LLM SPARQL 생성 경로(C)로 보낸다.
+                    if query_type == "multi_hop" or intent == "multi_hop" or (kwargs.get("hop_count") or 1) >= 2:
+                        if not is_multihop_pattern:
+                            log_trace("[Fuseki] Multi-hop by query analysis. Delegating to LLM SPARQL generation.")
+                        is_multihop_pattern = True
 
                 if entity_centric_enabled and query_text and not is_multihop_pattern:
-                    # 관계 타게팅 경로 (docs/design-graph-relation-targeting.md)
                     resolved_uris = self._resolve_anchors(kb_id, query_text, entities, kwargs, log_trace)
-                    if resolved_uris:
+                    value_hints: List[str] = []
+                    go_class = False
+                    if resolved_uris and len(resolved_uris) == 1 and not self._is_record(kb_id, resolved_uris[0][1]):
+                        # 앵커가 값 노드(outgoing 없음) → 결과가 아니라 조건 값. 유형 경로로.
+                        # 값 힌트는 완전일치일 때만 ('규칙' → '도메인_규칙_테스트_용이' 같은 부분일치 제외)
+                        from app.services.retrieval.entity_linking import _compact
+                        ent, uri = resolved_uris[0]
+                        go_class = True
+                        link = kwargs["_reasoning"]["linking"][0]
+                        if _compact(ent) == _compact(urllib.parse.unquote(uri.rsplit("/", 1)[-1])):
+                            value_hints = [uri]
+                            link["value_node"] = True
+                        else:
+                            link["value_node"] = True
+                            link["hint_dropped"] = True
+                        log_trace(f"[Fuseki] Anchor {uri} is a value node → class-level query (hint={'yes' if value_hints else 'no'})")
+                    elif resolved_uris:
                         targeted, catalog_preds = await self._relation_targeted_query(
                             kb_id, query_text, resolved_uris, kwargs, log_trace
                         )
-                        if targeted is not None:
+                        t_mode = ((targeted or {}).get("reasoning") or {}).get("targeting", {}).get("mode")
+                        if targeted is not None and not (is_class_query and t_mode == "none"):
                             return targeted
-                        context_predicates = catalog_preds
+                        if targeted is not None:
+                            # 레코드 앵커에서 일치 관계가 없고 유형 질문이면 → 유형 경로 (앵커는 값 힌트)
+                            value_hints = [u for _, u in resolved_uris]
+                            go_class = True
+                        else:
+                            context_predicates = catalog_preds
+                    else:
+                        go_class = True  # 앵커 없음 → 유형 경로
+                    if go_class:
+                        class_result, class_preds = await self._class_level_query(
+                            kb_id, query_text, value_hints, kwargs, log_trace
+                        )
+                        if class_result is not None:
+                            return class_result
+                        context_predicates = class_preds or context_predicates
 
                 # LLM 호출 (Fast Path로 이미 답을 찾은 경우 건너뜀) — QueryGenerationLoop로 감싸서
                 # 생성 실패/0건 시 최대 2회까지 에러 되먹임 재시도한다.
@@ -1114,46 +1341,36 @@ class FusekiBackend(GraphBackend):
                             
                                 log_trace(f"[Fuseki] Secondary lookup retrieved {len(real_triples)} real triples.")
 
-                            # [MOVED & IMPROVED] Query Reification for sourceNodeId if ANY URIs found
-                            # This should run even if real_triples were extracted directly from LLM
-                            if found_uris:
-                                # Optimize: Use VALUES for faster filtering
-                                uri_list = " ".join([f"<{u}>" for u in found_uris])
-                            
-                                reification_query = f"""
-                                PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
-                                PREFIX meta: <http://rag.local/meta/>
-                                SELECT DISTINCT ?sourceNodeId
-                                FROM <urn:x-arq:UnionGraph>
-                                WHERE {{
-                                  VALUES ?target {{ {uri_list} }} .
-                                  {{
-                                    ?stmt rdf:type rdf:Statement ;
-                                          rdf:subject ?target ;
-                                          meta:sourceNodeId ?sourceNodeId .
-                                  }} UNION {{
-                                    ?stmt rdf:type rdf:Statement ;
-                                          rdf:object ?target ;
-                                          meta:sourceNodeId ?sourceNodeId .
-                                  }}
-                                }}
-                                LIMIT 100
-                                """
-                            
-                                print(f"[DEBUG FUSEKI] Reification Query for sourceNodeId...", flush=True)
-                                try:
-                                    reif_results = fuseki_client.query_sparql(kb_id, reification_query)
-                                    reif_bindings = reif_results.get("results", {}).get("bindings", [])
-                                
-                                    for rb in reif_bindings:
-                                        if "sourceNodeId" in rb:
-                                            node_id = rb["sourceNodeId"]["value"]
-                                            if node_id:
-                                                discovered_chunk_ids.add(node_id)
-                                
-                                    log_trace(f"[Fuseki] Found {len(discovered_chunk_ids)} unique sourceNodeIds from Reification")
-                                except Exception as e:
-                                    log_trace(f"[Fuseki] Warning: Reification query failed: {e}")
+                            # 근거 청크 조인 (docs/design-graph-class-query.md §6)
+                            # 1) 바인딩에 s/p/o 가 있으면 그 트리플과 정확히 일치하는 statement 로 조인
+                            # 2) 없으면 노드 기반 — outgoing 이 있는 노드(레코드·구조 노드)만.
+                            #    공유 값 노드(high, small …)가 문서 전체 청크를 끌어오던 문제 방지.
+                            from app.services.retrieval import class_query as cq
+                            chunk_join_mode = None
+                            try:
+                                spo = cq.extract_spo_from_bindings(bindings)
+                                if spo:
+                                    for rb in self._bindings(kb_id, cq.build_spo_join_query(spo)):
+                                        c = cq._val(rb, "chunk")
+                                        if c:
+                                            discovered_chunk_ids.add(c)
+                                    chunk_join_mode = "spo"
+                                elif found_uris:
+                                    uris = [u for u in found_uris if u.startswith("http://rag.local/inst/")][:200]
+                                    if uris:
+                                        for rb in self._bindings(kb_id, cq.build_record_node_chunk_query(uris)):
+                                            c = cq._val(rb, "chunk")
+                                            if c:
+                                                discovered_chunk_ids.add(c)
+                                    chunk_join_mode = "node"
+                                log_trace(f"[Fuseki] Chunk join ({chunk_join_mode}): {len(discovered_chunk_ids)} chunks")
+                            except Exception as e:
+                                log_trace(f"[Fuseki] Chunk join skipped: {e}")
+                            if chunk_join_mode:
+                                kwargs.setdefault("_reasoning", {})["chunk_order_label"] = (
+                                    "트리플 s-p-o 정확 조인 (자유 SPARQL)" if chunk_join_mode == "spo"
+                                    else "노드 연결 순 (자유 SPARQL — 트리플 단위 매핑 없음)"
+                                )
 
                             # Use real_triples if found, otherwise fall back to dummy triples (which will fail mapping but show entity)
                             final_triples = real_triples if real_triples else triples
