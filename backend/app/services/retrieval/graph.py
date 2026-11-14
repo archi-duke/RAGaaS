@@ -121,6 +121,10 @@ class GraphRetrievalStrategy(RetrievalStrategy):
             relationship_keywords=query_analysis.get("relationship_keywords", []),
             entity_roles=query_analysis.get("entity_roles", {}),
             relation_aliases=query_analysis.get("relation_aliases", []),
+            relationship_type=query_analysis.get("relationship_type"),
+            primary_entities=query_analysis.get("primary_entities", []),
+            intent=query_analysis.get("intent"),
+            hop_count=query_analysis.get("hop_count", 1),
             query_text=query,
             **kwargs
         )
@@ -151,8 +155,11 @@ class GraphRetrievalStrategy(RetrievalStrategy):
         
         # 5. Fetch content from Milvus
         results = []
+        ordered = graph_result.get("chunk_order") == "linkage"
         if chunk_ids:
-            results = await self._fetch_chunks(kb_id, chunk_ids, query, top_k, emb_service=emb_service)
+            results = await self._fetch_chunks(
+                kb_id, chunk_ids, query, top_k, emb_service=emb_service, ordered=ordered
+            )
         
         # 6. Graph-Guided Fallback: If SPARQL found entities but no chunks, or if no results at all
         # We use the entities found by SPARQL (e.g. 'Duke', 'Oh Il-nam') to guide the vector/hybrid search
@@ -174,6 +181,11 @@ class GraphRetrievalStrategy(RetrievalStrategy):
              log(f"DEBUG: Strict Mode - Fallback search disabled. Returning empty/metadata-only results.")
 
         
+        # 6.5 추론 리포트 (Execution Log 맨 앞) — docs/design-graph-relation-targeting.md
+        reasoning = self._build_reasoning(graph_result, query_analysis, entities, results, ordered, llm_model_name)
+        from app.services.retrieval.relation_targeting import render_reasoning_report
+        trace_logs[:0] = render_reasoning_report(reasoning)
+
         # 7. Add graph metadata
         # dead-chip 방지: 추출 엔티티 중 실제 그래프 노드로 존재하는 것만 clickable 로 표시.
         # (번역 변이 "Seong Gi-hun" 이나 일반개념어는 그래프에 노드가 없어 뷰어가 빈 화면이 됨)
@@ -188,6 +200,7 @@ class GraphRetrievalStrategy(RetrievalStrategy):
             "triples": graph_triples,
             "total_chunks_found": len(results), # Use final results count (includes Entity-Guided chunks)
             "query_analysis": query_analysis,
+            "reasoning": self._public_reasoning(reasoning),
             "trace_logs": trace_logs
         }
 
@@ -207,6 +220,57 @@ class GraphRetrievalStrategy(RetrievalStrategy):
             }]
         
         return results
+
+    def _build_reasoning(
+        self,
+        graph_result: Dict[str, Any],
+        query_analysis: Dict[str, Any],
+        entities: List[str],
+        results: List[Dict[str, Any]],
+        ordered: bool,
+        llm_model_name: Optional[str],
+    ) -> Dict[str, Any]:
+        """백엔드 reasoning + 질의 분석 + 실제 조회된 청크로 추론 리포트 데이터 구성."""
+        reasoning: Dict[str, Any] = dict(graph_result.get("reasoning") or {})
+        reasoning["analysis"] = {
+            "intent": query_analysis.get("intent"),
+            "entities": query_analysis.get("primary_entities") or entities,
+            "entity_roles": query_analysis.get("entity_roles") or {},
+            "relation_aliases": query_analysis.get("relation_aliases") or [],
+            "model": llm_model_name,
+            "llm_issue": query_analysis.get("llm_issue"),
+        }
+        fetched = {r.get("chunk_id") for r in results}
+        if ordered:
+            chunks = reasoning.get("chunks") or []
+            for c in chunks:
+                c["missing"] = c["chunk_id"] not in fetched
+            reasoning["chunk_order_label"] = "트리플 연결 순"
+        else:
+            # LLM SPARQL 생성 경로: 트리플↔청크 매핑이 없어 임베딩 유사도 순
+            tg = reasoning.setdefault("targeting", {})
+            tg.setdefault("mode", "C" if graph_result.get("sparql_query") else "none")
+            reasoning.setdefault("sparql", graph_result.get("sparql_query") or "")
+            reasoning.setdefault("triples", graph_result.get("triples") or [])
+            reasoning["chunks"] = [
+                {"chunk_id": r.get("chunk_id"), "triple_idx": [], "kind": "triple"}
+                for r in results if r.get("chunk_id") and r.get("chunk_id") != "GRAPH_METADATA_ONLY"
+            ]
+            reasoning["chunk_order_label"] = "임베딩 유사도 순 (LLM SPARQL 결과는 트리플별 청크 매핑 없음)"
+        sq = reasoning.get("sparql") or ""
+        if sq.startswith("--") or sq.startswith("No Results"):
+            reasoning["sparql"] = ""
+        return reasoning
+
+    @staticmethod
+    def _public_reasoning(reasoning: Dict[str, Any]) -> Dict[str, Any]:
+        """UI 용 reasoning (내부 URI 필드 제거)."""
+        out = {k: v for k, v in reasoning.items() if k != "triples"}
+        out["triples"] = [
+            {k: t.get(k) for k in ("subject", "predicate", "object", "chunk_ids", "path") if k in t}
+            for t in (reasoning.get("triples") or [])
+        ]
+        return out
 
     def _compute_clickable_entities(self, entities: List[str], triples: List[Dict[str, Any]]) -> List[str]:
         """추출 엔티티 중 실제 그래프 노드(트리플 subject/object)로 존재하는 것만 반환.
@@ -263,6 +327,8 @@ class GraphRetrievalStrategy(RetrievalStrategy):
             "hop_count": 1,
             "entity_roles": {},
             "relation_aliases": [],
+            "intent": None,
+            "primary_entities": [],
         }
         entities = set()
 
@@ -284,6 +350,13 @@ class GraphRetrievalStrategy(RetrievalStrategy):
 
         Extract:
         1. entities: key entities (subjects, objects, proper nouns) as objects with a grammatical "role".
+           - Entities include TOPICS and CONCEPTS, not only people/places: technical terms, products,
+             architectures, methods (e.g. "micro frontend", "Kubernetes", "event sourcing").
+             The thing the question is ABOUT is always an entity — never return an empty list when
+             the query names a topic. (e.g. "pros of micro frontend?" -> name "micro frontend")
+           - Only entities actually mentioned in the query. Never guess the answer entity.
+           - The ATTRIBUTE or RELATION being asked (pros, cons, prerequisites, 장점, 테스트 복잡도,
+             스승, "when to avoid") is NOT an entity — put it in relation_aliases instead.
            - role = "subject" if the entity is the actor/owner of the relationship being asked,
                     "object" if it is the target, "ambiguous" if unclear or symmetric.
            - Keep entity "name" in its ORIGINAL language as it appears in the query. Do NOT translate.
@@ -293,22 +366,35 @@ class GraphRetrievalStrategy(RetrievalStrategy):
         4. is_multi_hop: true if it chains relations (e.g. "A's B's C").
         5. hop_count: 1, 2, or 3.
         6. alternatives: alternative entity names or related entities.
-        7. relation_aliases: the asked relation/attribute expressed as short words in BOTH Korean and
-           English, including snake_case-style key names a structured (JSON/YAML) document might use.
-           (e.g. "장점" -> ["장점", "pros", "advantages", "benefits", "strengths"];
-                 "단점" -> ["단점", "cons", "disadvantages", "drawbacks"]). [] if no relation is asked.
+        7. relation_aliases: REQUIRED whenever the question asks for a specific attribute/relation of an
+           entity ("X of Y", "Y의 X", "what are the X for Y", "when/why should ... Y", "Y의 스승").
+           Give 4-8 short forms, MOST LIKELY KEY FIRST: the word as written in the query, Korean and
+           English synonyms, singular/plural, and snake_case key names a JSON/YAML document might use.
+           [] ONLY for overview questions that ask about the entity in general.
+           (e.g. "pros of micro frontend?" -> ["pros", "장점", "advantages", "benefits"];
+                 "마이크로 프론트엔드의 장점" -> ["장점", "pros", "advantages", "benefits"];
+                 "what are the prerequisites for X?" -> ["prerequisites", "전제조건", "requirements"];
+                 "X의 테스트 복잡도는?" -> ["테스트 복잡도", "testing_complexity", "test complexity"];
+                 "when should I avoid X?" -> ["avoid", "avoid_signals", "피해야 할 때", "when_not_to_use"];
+                 "성기훈의 스승은?" -> ["스승", "master", "teacher", "mentor"])
+        8. intent: one of
+           "attribute"        — asks a specific attribute/relation of one entity (most questions)
+           "overview"         — asks about the entity in general ("X에 대해 알려줘", "tell me about X", "X란?")
+           "relation_between" — asks how two named entities are related ("A와 B의 관계")
+           "multi_hop"        — chains relations ("A의 스승의 제자")
 
         Query: {query}
 
         Output format:
         {{
-          "entities": [{{"name": "성기훈", "role": "subject"}}, {{"name": "오일남", "role": "object"}}],
-          "translated_entities": ["Seong Gi-hun", "Oh Il-nam"],
+          "entities": [{{"name": "홍길동", "role": "subject"}}, {{"name": "Acme Corp", "role": "object"}}],
+          "translated_entities": ["Hong Gil-dong"],
           "relationship_type": "master",
           "is_multi_hop": false,
           "hop_count": 1,
           "alternatives": [],
-          "relation_aliases": ["스승", "master", "teacher", "mentor"]
+          "relation_aliases": ["스승", "master", "teacher", "mentor"],
+          "intent": "attribute"
         }}
         """
         try:
@@ -349,6 +435,23 @@ class GraphRetrievalStrategy(RetrievalStrategy):
                 a.strip() for a in (data.get("relation_aliases") or [])
                 if isinstance(a, str) and a.strip()
             ][:10]
+            # 질의 의도 + LLM 엔티티(primary) — 그래프 백엔드의 앵커 우선순위·경로 선택에 사용
+            intent = data.get("intent")
+            if intent in ("attribute", "overview", "relation_between", "multi_hop"):
+                analysis["intent"] = intent
+            analysis["primary_entities"] = [
+                (e.get("name") if isinstance(e, dict) else e)
+                for e in data.get("entities", [])
+                if (e.get("name") if isinstance(e, dict) else e)
+            ]
+            if not analysis["relation_aliases"] and data.get("relationship_type"):
+                analysis["relation_aliases"] = [str(data["relationship_type"])]
+            # 관계어와 같은 엔티티는 엔티티에서 제거 ("pros" 가 앵커 후보가 되는 것 방지)
+            from app.services.retrieval.entity_linking import _compact
+            alias_c = {_compact(a) for a in analysis["relation_aliases"]}
+            alias_c.discard("")
+            entities = {e for e in entities if _compact(e) not in alias_c}
+            analysis["primary_entities"] = [e for e in analysis["primary_entities"] if _compact(e) not in alias_c]
             hop_count = data.get("hop_count")
             if isinstance(hop_count, int) and hop_count >= 1:
                 analysis["hop_count"] = hop_count
@@ -358,6 +461,8 @@ class GraphRetrievalStrategy(RetrievalStrategy):
                 analysis["query_type"] = "relationship"
         except Exception as e:
             logger.warning(f"[Graph] Merged analyze/extract LLM call failed: {e}")
+            # 추론 리포트에 표시 (분석 LLM 없이 spaCy 토큰만으로 진행됨을 알림)
+            analysis["llm_issue"] = str(e)[:200]
 
         # --- spaCy 가제티어 (로컬, 비 LLM — 기존 _extract_entities 계승) ---
         try:
@@ -510,7 +615,14 @@ class GraphRetrievalStrategy(RetrievalStrategy):
             logger.error(f"Error in fallback search: {e}")
             return []
 
-    async def _fetch_chunks(self, kb_id: str, chunk_ids: List[str], query: str, top_k: int, emb_service=None) -> List[Dict[str, Any]]:
+    async def _fetch_chunks(self, kb_id: str, chunk_ids: List[str], query: str, top_k: int, emb_service=None,
+                            ordered: bool = False) -> List[Dict[str, Any]]:
+        """그래프가 찾은 청크 id 의 본문을 Milvus 에서 조회.
+
+        ordered=True (관계 타게팅 경로): 주어진 id 순서(트리플 연결 순)를 그대로 유지하고
+        임베딩 호출을 생략한다. 점수는 1.0 - 0.01*rank 로 매겨 파이프라인 병합에서도
+        순서가 보존되게 한다. ordered=False: 기존처럼 질문 임베딩 cosine × 1.5 로 정렬.
+        """
         if emb_service is None:
             emb_service = default_embedding_service
         # Get existing collection
@@ -540,7 +652,26 @@ class GraphRetrievalStrategy(RetrievalStrategy):
             return []
 
         retrieved = []
-        
+
+        if ordered:
+            by_id = {h.get("chunk_id"): h for h in results}
+            for rank, cid in enumerate(target_ids):
+                hit = by_id.get(cid)
+                if not hit:
+                    continue
+                retrieved.append({
+                    "chunk_id": cid,
+                    "content": hit.get("content"),
+                    "score": max(0.0, 1.0 - 0.01 * len(retrieved)),
+                    "metadata": {
+                        "doc_id": hit.get("doc_id"),
+                        "source": "graph",
+                        "graph_rank": rank + 1,
+                        "ordering": "triple_linkage",
+                    },
+                })
+            return retrieved[:top_k]
+
         # Calculate cosine similarity for scoring (so we can merge with vector results)
         query_vec = (await emb_service.get_embeddings([query]))[0]
         

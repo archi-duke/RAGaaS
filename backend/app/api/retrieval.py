@@ -644,12 +644,21 @@ async def chat_with_kb(
         if triples:
             # Check type of triples
             # Graph logic might return strings like "(s) -[p]-> (o)" OR dicts
+            # 관계 타게팅 경로의 트리플은 근거 청크 id 를 갖는다 → 컨텍스트의 [Chunk n] 번호를 붙여
+            # 답변 LLM 이 트리플과 청크의 연결을 보도록 한다.
+            chunk_no = {
+                r.get("chunk_id"): i + 1 for i, r in enumerate(results[:10]) if r.get("chunk_id")
+            }
             formatted_triples = []
             for t in triples:
                 if isinstance(t, str):
                     formatted_triples.append(f"- {t}")
                 elif isinstance(t, dict):
-                    formatted_triples.append(f"- {t.get('subject', '?')} {t.get('predicate', '?')} {t.get('object', '?')}")
+                    refs = sorted({chunk_no[c] for c in (t.get("chunk_ids") or []) if c in chunk_no})
+                    ref_txt = (" " + " ".join(f"[Chunk {n}]" for n in refs)) if refs else ""
+                    formatted_triples.append(
+                        f"- {t.get('subject', '?')} {t.get('predicate', '?')} {t.get('object', '?')}{ref_txt}"
+                    )
             
             triples_text = "\n".join(formatted_triples)
             context_parts.append(f"### Graph Relationships (Derived from Knowledge Graph):\n{triples_text}\n")
@@ -683,6 +692,24 @@ async def chat_with_kb(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to generate response: {str(e)}")
     
+    # 답변 근거 요약 (Execution Log 마지막 줄) — 그래프 트리플/청크 중 무엇이 쓰였는지
+    try:
+        g_meta = results[0].get("graph_metadata") if results else None
+        n_triples = len((g_meta or {}).get("triples") or [])
+        n_chunks = len([r for r in results[:10] if r.get("chunk_id") != "GRAPH_METADATA_ONLY"])
+        cited = sorted({int(n) for n in re.findall(r"\[Chunk (\d+)\]", answer or "")})
+        cited_txt = ", ".join(f"[Chunk {n}]" for n in cited) if cited else "(인용 표기 없음)"
+        cited_ids = [
+            str(results[n - 1].get("chunk_id", "")).split("::")[-1]
+            for n in cited if 0 < n <= len(results)
+        ]
+        execution_logs.append(
+            f"[Answer] 근거: 그래프 트리플 {n_triples}건 + 청크 {n_chunks}건 | 답변이 인용한 청크: {cited_txt}"
+            + (f" = {', '.join(cited_ids)}" if cited_ids else "")
+        )
+    except Exception as e_ans:
+        print(f"[Answer] grounding summary skipped: {e_ans}")
+
     # Determine display strategy name
     if pipeline_config and pipeline_config.get("stages"):
         # Pipeline Mode
@@ -714,7 +741,16 @@ async def chat_with_kb(
     # Detect error and fallback states from execution logs
     has_error = False
     used_fallback = False
+    in_reasoning_report = False
     for log_entry in execution_logs:
+        # 그래프 추론 리포트 구간은 데이터(트리플 값 'graceful_fallback' 등)를 그대로 싣으므로 스캔 제외
+        if "━━ 추론 리포트 ━━" in log_entry:
+            in_reasoning_report = True
+            continue
+        if in_reasoning_report:
+            if "── 상세 trace ──" in log_entry:
+                in_reasoning_report = False
+            continue
         log_lower = log_entry.lower()
         if "error" in log_lower or "failed" in log_lower or "generation failed" in log_lower:
             has_error = True

@@ -418,6 +418,9 @@ export default function SearchResults({ chunks, kbId, graphBackend, logs, pipeli
                         width: '100%',
                         boxSizing: 'border-box'
                     }}>
+                        {/* 그래프 추론 과정 (관계 타게팅 리포트) */}
+                        {graphMetadata?.reasoning && <GraphReasoningCard reasoning={graphMetadata.reasoning} />}
+
                         {/* Execution Logs */}
                         <div className="card" style={{ padding: '1rem', width: '100%', boxSizing: 'border-box' }}>
                             <div style={{ fontSize: '0.9rem', fontWeight: 600, marginBottom: '0.5rem' }}>
@@ -453,6 +456,96 @@ export default function SearchResults({ chunks, kbId, graphBackend, logs, pipeli
                     </div>
                 )}
             </div>
+        </div>
+    );
+}
+
+// 그래프 추론 과정 카드: 질문 분석 → 엔티티 링킹 → 관계 타게팅 → 선택 트리플 → 근거 청크
+// (docs/design-graph-relation-targeting.md)
+const MODE_LABELS: Record<string, string> = {
+    A: 'A · 결정적 매칭',
+    B: 'B · LLM 경로 선택',
+    C: 'C · LLM SPARQL 생성',
+    overview: '개요 이웃 조회',
+    pair: '두 엔티티 직접 관계',
+    none: '일치 관계 없음',
+};
+const TIER_LABELS: Record<number, string> = { 1: '완전일치', 2: '어간일치', 3: '토큰포함' };
+const shortChunk = (cid: string) => (cid && cid.includes('::') ? cid.split('::').pop() : cid);
+
+function GraphReasoningCard({ reasoning }: { reasoning: any }) {
+    const [showSparql, setShowSparql] = React.useState(false);
+    const an = reasoning.analysis || {};
+    const tg = reasoning.targeting || {};
+    const triples: any[] = reasoning.triples || [];
+    const chunks: any[] = reasoning.chunks || [];
+    const roles = an.entity_roles || {};
+
+    const step = (no: number, title: string, body: React.ReactNode) => (
+        <div style={{ display: 'flex', gap: '0.75rem', padding: '0.5rem 0', borderBottom: '1px solid var(--border, #e2e8f0)' }}>
+            <div style={{
+                flex: '0 0 1.6rem', height: '1.6rem', borderRadius: '50%', background: '#6366f1', color: 'white',
+                fontSize: '0.75rem', fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center'
+            }}>{no}</div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: '0.8rem', fontWeight: 600, marginBottom: '0.25rem' }}>{title}</div>
+                <div style={{ fontSize: '0.8rem', lineHeight: 1.5, wordBreak: 'break-word' }}>{body}</div>
+            </div>
+        </div>
+    );
+    const chip = (text: string, color = '#e0e7ff', fg = '#3730a3') => (
+        <span style={{ display: 'inline-block', background: color, color: fg, borderRadius: '4px', padding: '0 6px', margin: '0 4px 4px 0', fontSize: '0.75rem' }}>{text}</span>
+    );
+
+    return (
+        <div className="card" style={{ padding: '1rem', width: '100%', boxSizing: 'border-box' }}>
+            <div style={{ fontSize: '0.9rem', fontWeight: 600, marginBottom: '0.5rem' }}>Graph Reasoning</div>
+            {step(1, '질문 분석', <>
+                <div>intent: <b>{an.intent || '-'}</b>{an.model ? <span style={{ opacity: 0.7 }}> · 모델 {an.model}</span> : null}</div>
+                <div>엔티티: {(an.entities || []).map((e: string) => chip(roles[e] ? `${e} (${roles[e]})` : e))}</div>
+                <div>관계어: {(an.relation_aliases || []).length ? an.relation_aliases.map((a: string) => chip(a, '#fef3c7', '#92400e')) : '(없음)'}</div>
+                {an.llm_issue && <div style={{ color: 'tomato' }}>⚠ 질의 분석 LLM 호출 불가 — spaCy 토큰으로 대체: {an.llm_issue}</div>}
+            </>)}
+            {step(2, '엔티티 링킹', (reasoning.linking || []).length
+                ? (reasoning.linking || []).map((l: any) => <div key={l.uri}>'{l.entity}' → <code>inst:{decodeURIComponent(String(l.uri).split('/').pop() || '')}</code></div>)
+                : '그래프 노드에 연결된 엔티티 없음')}
+            {step(3, `관계 타게팅 — ${MODE_LABELS[tg.mode] || tg.mode || '-'}`, <>
+                {(tg.matches || []).map((m: any, i: number) => (
+                    <div key={i}>'{m.alias}' = <code>{m.matched}</code>{m.expanded ? ' (하위 경로 전체)' : ''} · {TIER_LABELS[m.tier] || ''}{m.inverse ? ' · 역관계' : ''}</div>
+                ))}
+                {tg.catalog_size != null && <div style={{ opacity: 0.8 }}>후보 경로 {tg.catalog_size}개 중 {(tg.selected_paths || []).length}개 선택</div>}
+                {(tg.selected_paths || []).length > 0 && <div>{tg.selected_paths.map((sp: string) => chip(sp, '#dcfce7', '#166534'))}</div>}
+                {tg.reason && <div style={{ opacity: 0.8 }}>근거: {tg.reason}</div>}
+                {reasoning.sparql && (
+                    <div>
+                        <button onClick={() => setShowSparql(!showSparql)} style={{ fontSize: '0.75rem', background: 'none', border: 'none', color: '#6366f1', cursor: 'pointer', padding: 0 }}>
+                            {showSparql ? '▾ 실행한 SPARQL 숨기기' : '▸ 실행한 SPARQL 보기'}
+                        </button>
+                        {showSparql && <pre style={{ background: '#1e293b', color: '#e2e8f0', padding: '0.5rem', borderRadius: '4px', fontSize: '0.7rem', overflowX: 'auto' }}>{reasoning.sparql}</pre>}
+                    </div>
+                )}
+            </>)}
+            {step(4, `선택 트리플 ${triples.length}건`, triples.length ? (
+                <ol style={{ margin: 0, paddingLeft: '1.2rem' }}>
+                    {triples.slice(0, 30).map((t: any, i: number) => (
+                        <li key={i}>
+                            {t.subject} <b>—{t.predicate}→</b> {String(t.object)}
+                            {(t.chunk_ids || []).length > 0 && <span style={{ opacity: 0.6 }}> ⟵ {(t.chunk_ids || []).map(shortChunk).join(', ')}</span>}
+                        </li>
+                    ))}
+                    {triples.length > 30 && <li style={{ listStyle: 'none', opacity: 0.6 }}>… 외 {triples.length - 30}건</li>}
+                </ol>
+            ) : '선택된 트리플 없음 (Strict Mode: 빈 결과)')}
+            {step(5, `근거 청크 ${chunks.length}건 (${reasoning.chunk_order_label || '트리플 연결 순'})`, chunks.length ? (
+                chunks.map((c: any, i: number) => (
+                    <div key={i}>
+                        #{i + 1} <code>{shortChunk(c.chunk_id)}</code>
+                        {(c.triple_idx || []).length > 0 && <span> ⟵ 트리플 {(c.triple_idx || []).join(', ')}</span>}
+                        {c.kind === 'edge' && <span style={{ opacity: 0.6 }}> (구조 간선)</span>}
+                        {c.missing && <span style={{ color: 'tomato' }}> — 벡터 저장소에 본문 없음</span>}
+                    </div>
+                ))
+            ) : '근거 청크 없음')}
         </div>
     );
 }
