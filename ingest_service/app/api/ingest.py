@@ -134,6 +134,19 @@ class IngestRequest(BaseModel):
     subject_restoration_llm: Optional[Dict[str, Any]] = None
     noun_extraction_llm: Optional[Dict[str, Any]] = None
     embedding_model: Optional[Dict[str, Any]] = None
+    # KB 스키마 매핑 (docs/design-schema-mismatch.md §5) — backend 가 규칙·어휘를 실어 보낸다
+    schema_rules: Optional[List[Dict[str, Any]]] = None
+    schema_vocab: Optional[Dict[str, Any]] = None
+    replace_existing: bool = False  # 재정규화: 추출 성공 후 같은 doc_id 의 기존 데이터를 지우고 삽입
+
+
+async def _delete_existing_doc_data(request: "IngestRequest") -> None:
+    print(f"[IngestJob] replace_existing: deleting previous data for doc {request.doc_id}")
+    await milvus_connector.delete_by_doc_id(request.kb_id, request.doc_id)
+    if request.graph_store == "fuseki":
+        await fuseki_connector.delete_by_doc_id(request.kb_id, request.doc_id)
+    else:
+        await neo4j_connector.delete_by_doc_id(request.kb_id, request.doc_id)
 
 
 class IngestResponse(BaseModel):
@@ -207,8 +220,14 @@ async def process_ingest_job(job_id: str, request: IngestRequest):
                 kb_id=request.kb_id,
                 doc_id=request.doc_id,
                 embed_model=embed_model,
+                schema_rules=request.schema_rules,
+                schema_vocab=request.schema_vocab,
             )
             print(f"[IngestJob] Structured extraction: {result['node_count']} chunks, {result['triple_count']} triples")
+            if request.replace_existing:
+                # 재정규화: 추출 성공 후, 엔티티 해석 전에 기존 데이터를 지운다
+                # (해석이 같은 문서의 이전 데이터와 매칭해 identity 를 바꾸는 것 방지)
+                await _delete_existing_doc_data(request)
             await _apply_entity_resolution(result, request.kb_id, request.graph_store, "IngestJob")
             jobs[job_id]["progress"] = 10
         else:
@@ -312,6 +331,18 @@ async def process_ingest_job(job_id: str, request: IngestRequest):
         await send_pipeline_status(request.callback_url, job_id, request.doc_id, request.kb_id, "STORING",
                                    progress=jobs[job_id].get("progress"))
         
+        # 4.9 텍스트 문서: 단일 세그먼트 key 규칙을 predicate 에 적용
+        if request.schema_rules and not _is_structured_file(request.file_path) and result.get("triples"):
+            from app.core.schema_normalizer import apply_to_triples
+            n_pred = apply_to_triples(result["triples"], request.schema_rules)
+            if n_pred:
+                result.setdefault("schema_report", {"applied": [], "auto": [], "merged": []})["applied"].append(
+                    {"rule_id": None, "count": n_pred, "source": "predicate", "target": "rules"})
+
+        # 4.95 재정규화(텍스트 문서): 추출이 성공한 뒤에 기존 데이터를 지운다 (실패 시 기존 데이터 유지)
+        if request.replace_existing and not _is_structured_file(request.file_path):
+            await _delete_existing_doc_data(request)
+
         # 5. Save (Milvus, Neo4j/Fuseki)
         print(f"[IngestJob] Saving to databases for doc {request.doc_id}...")
         
@@ -407,6 +438,7 @@ async def process_ingest_job(job_id: str, request: IngestRequest):
             "node_count": result["node_count"],
             "triple_count": result["triple_count"],
             "inference_count": inference_count,
+            "schema_report": result.get("schema_report"),
         }
         jobs[job_id]["updated_at"] = datetime.utcnow().isoformat()
         print(f"[IngestJob] ✅ Job {job_id} COMPLETED for doc {request.doc_id}")

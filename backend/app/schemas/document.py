@@ -41,6 +41,11 @@ class Document(DocumentBase):
     # 로컬 변환(ragaas-converter) 문서의 원본 정보
     source_info: Optional[dict] = None
 
+    # KB 스키마 매핑 (docs/design-schema-mismatch.md)
+    schema_warnings: Optional[dict] = None
+    schema_rules_version: Optional[int] = 0
+    source_retained: Optional[bool] = False
+
     # Pipeline State (for Resuming)
     pipeline_status: Optional[str] = None
     pipeline_metadata: Optional[dict] = None

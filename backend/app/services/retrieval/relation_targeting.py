@@ -679,8 +679,12 @@ def render_reasoning_report(reasoning: Dict[str, Any], max_triples: int = 15) ->
     plan = tg.get("plan") or {}
     if plan.get("value_matches"):
         lines.append(f"    · 값 매칭: {'; '.join(plan['value_matches'])}")
+    for e in tg.get("equivalences") or []:
+        lines.append(f"    · 동치: {e}")
     for adj in tg.get("adjustments") or []:
         lines.append(f"    · 조정: {adj}")
+    for w in tg.get("warnings") or []:
+        lines.append(f"    ⚠ {w}")
     if tg.get("result_entities") is not None and mode == "P":
         more = " (상한 초과, 일부만)" if tg.get("truncated") else ""
         lines.append(f"    · 결과 엔티티 {len(tg['result_entities'])}개{more}: {', '.join(tg['result_entities'])}")

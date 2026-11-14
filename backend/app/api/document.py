@@ -21,6 +21,17 @@ router = APIRouter()
 _STRUCTURED_EXTENSIONS = (".json", ".yaml", ".yml")
 
 
+async def _schema_payload_for(kb, filename: str) -> Dict[str, Any]:
+    """인제스트 요청에 실을 KB 스키마 매핑 규칙·어휘 (docs/design-schema-mismatch.md §5)."""
+    if kb.graph_backend != "ontology":
+        return {}
+    from app.services.schema_alignment.service import ingest_schema_payload, rules_for_ingest
+    if _is_structured_filename(filename):
+        return await ingest_schema_payload(str(kb.id))
+    rules = await rules_for_ingest(str(kb.id))   # 텍스트 문서: 단일 세그먼트 key 규칙만 predicate 에
+    return {"schema_rules": rules or None}
+
+
 def _is_structured_filename(filename: str) -> bool:
     """구조화 문서(.json/.yaml/.yml) 여부 판정 (대소문자 무관)."""
     if not filename:
@@ -823,6 +834,7 @@ async def upload_document(
                     subject_restoration_llm=model_configs["subject_restoration_llm"],
                     noun_extraction_llm=model_configs["noun_extraction_llm"],
                     embedding_model=model_configs["embedding_model"],
+                    **(await _schema_payload_for(kb, doc.filename)),
                 )
         except Exception as e:
             logger.error(f"[Ingest] Service call failed: {e}")
@@ -1036,6 +1048,25 @@ async def ingest_callback(payload: IngestCallback):
         "progress": doc.progress,
         "error": doc.error
     })
+
+    # 스키마 정렬: auto 규칙 기록 · 카탈로그 무효화 · 매핑 제안 생성 (백그라운드)
+    if payload.status == "completed":
+        try:
+            import asyncio as _asyncio
+            from app.services.retrieval.graph_backends.fuseki import FusekiBackend
+            from app.services.schema_alignment.service import on_document_ingested
+            FusekiBackend.invalidate_class_catalog(payload.kb_id)
+            _asyncio.create_task(on_document_ingested(
+                payload.kb_id, payload.doc_id, (payload.result or {}).get("schema_report")))
+        except Exception as e:
+            logger.warning(f"[Schema] post-ingest hook skipped: {e}")
+
+    # 구조화 원본(YAML/JSON)은 재정규화(재인제스트)를 위해 보존 — 문서 삭제 시 함께 지운다
+    if payload.status == "completed" and _is_structured_filename(doc.filename):
+        if doc.file_path and os.path.exists(doc.file_path) and not doc.source_retained:
+            doc.source_retained = True
+            await doc.save()
+        return {"ok": True}
 
     # Cleanup source file if completed
     if payload.status == "completed":

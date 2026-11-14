@@ -118,8 +118,14 @@ class StructuredExtractor:
         kb_id: str,
         doc_id: str,
         embed_model: Any,
+        schema_rules: Optional[List[Dict[str, Any]]] = None,
+        schema_vocab: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """Parse a JSON/YAML file and produce the pipeline-compatible result dict."""
+        """Parse a JSON/YAML file and produce the pipeline-compatible result dict.
+
+        schema_rules / schema_vocab: KB 매핑 규칙·어휘 (docs/design-schema-mismatch.md §5).
+        파싱 직후 레코드 트리에 적용해 identity·구조 노드·청크·트리플이 표준 키·값으로 나온다.
+        """
         start = time.time()
         stats: List[Dict[str, Any]] = []
 
@@ -131,6 +137,21 @@ class StructuredExtractor:
 
         data = self._parse(file_path, raw_text)
         stats.append({"step": "Step 0: Parse", "duration": round(time.time() - t0, 2)})
+
+        # --- Step 0.5: KB 스키마 매핑 규칙 적용 --------------------------------
+        schema_report: Dict[str, Any] = {"applied": [], "auto": [], "merged": []}
+        if schema_rules or schema_vocab:
+            from app.core.schema_normalizer import merge_reports, normalize_record
+            reports = []
+            for record, _ck, _coll in self._top_level_records(data):
+                if isinstance(record, dict):
+                    reports.append(normalize_record(record, schema_rules, schema_vocab))
+            schema_report = merge_reports(reports)
+            stats.append({
+                "step": f"Step 0.5: Schema rules ({len(schema_report['applied'])} applied, "
+                        f"{len(schema_report['auto'])} auto)",
+                "duration": round(time.time() - t0, 2),
+            })
 
         # --- Per-document mutable state -------------------------------------
         self._triples: List[Dict[str, Any]] = []
@@ -211,6 +232,7 @@ class StructuredExtractor:
             "node_count": len(nodes),
             "triple_count": len(self._triples),
             "stats": stats,
+            "schema_report": schema_report,
         }
 
     # ------------------------------------------------------------------

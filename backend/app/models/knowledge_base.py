@@ -14,6 +14,7 @@ class KnowledgeBase(Document):
     enable_graph_rag: bool = False
     graph_backend: Optional[str] = "ontology"
     is_promoted: bool = False
+    schema_rules_version: int = 0  # 스키마 매핑 규칙이 바뀔 때마다 +1 (docs/design-schema-mismatch.md)
     promotion_metadata: Dict[str, Any] = {}
     sparql_prompt_template: Optional[str] = None
     pipeline_config: Dict[str, Any] = Field(default_factory=lambda: {"stages": []})

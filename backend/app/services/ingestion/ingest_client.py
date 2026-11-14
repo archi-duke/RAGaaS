@@ -4,7 +4,7 @@ Ingest Service Client
 메인 백엔드에서 Ingest Service API를 호출하기 위한 클라이언트.
 """
 import httpx
-from typing import Dict, Any, Optional
+from typing import List, Dict, Any, Optional
 import os
 
 # Ingest Service URL (docker-compose 환경변수 또는 기본값)
@@ -53,6 +53,9 @@ class IngestServiceClient:
         subject_restoration_llm: Optional[Dict[str, Any]] = None,
         noun_extraction_llm: Optional[Dict[str, Any]] = None,
         embedding_model: Optional[Dict[str, Any]] = None,
+        schema_rules: Optional[List[Dict[str, Any]]] = None,
+        schema_vocab: Optional[Dict[str, Any]] = None,
+        replace_existing: bool = False,
     ) -> Dict[str, Any]:
         """인제스션 작업 생성"""
         payload = {
@@ -79,6 +82,10 @@ class IngestServiceClient:
             "subject_restoration_llm": subject_restoration_llm,
             "noun_extraction_llm": noun_extraction_llm,
             "embedding_model": embedding_model,
+            # KB 스키마 매핑 (docs/design-schema-mismatch.md §5)
+            "schema_rules": schema_rules,
+            "schema_vocab": schema_vocab,
+            "replace_existing": replace_existing,
         }
 
         

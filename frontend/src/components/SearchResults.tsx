@@ -533,7 +533,9 @@ function GraphReasoningCard({ reasoning }: { reasoning: any }) {
                         {(tg.plan.value_matches || []).length > 0 && <div style={{ opacity: 0.7 }}>값 매칭: {tg.plan.value_matches.join('; ')}</div>}
                     </div>
                 )}
+                {(tg.equivalences || []).map((e: string, i: number) => <div key={`eq${i}`}>{chip('≡ 동치', '#ede9fe', '#5b21b6')}{e}</div>)}
                 {(tg.adjustments || []).map((a: string, i: number) => <div key={i} style={{ opacity: 0.7 }}>조정: {a}</div>)}
+                {(tg.warnings || []).map((w: string, i: number) => <div key={`w${i}`} style={{ color: '#b45309' }}>⚠ {w}</div>)}
                 {tg.mode === 'P' && tg.result_entities && <div>결과 엔티티 {tg.result_entities.length}개{tg.truncated ? ' (상한 초과)' : ''}: <b>{tg.result_entities.join(', ')}</b></div>}
                 {tg.reason && <div style={{ opacity: 0.8 }}>근거: {tg.reason}</div>}
                 {reasoning.sparql && (
