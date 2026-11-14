@@ -101,10 +101,17 @@ def _build_payload(
     if not messages:
         raise LLMError("LLM 호출 messages 가 비어 있습니다.")
     payload: dict = {"model": resolved_model, "messages": messages}
-    if temperature is not None:
-        payload["temperature"] = temperature
-    if max_tokens is not None:
-        payload["max_tokens"] = max_tokens
+    if is_reasoning_model(resolved_model):
+        # OpenAI 추론 모델(gpt-5, o-시리즈): temperature 는 기본값(1)만 허용, max_tokens 대신
+        # max_completion_tokens (추론 토큰 포함이므로 넉넉히). 추론 강도는 기본 low.
+        if max_tokens is not None:
+            payload["max_completion_tokens"] = max(max_tokens * 4, 4000)
+        payload["reasoning_effort"] = "low"
+    else:
+        if temperature is not None:
+            payload["temperature"] = temperature
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
     if response_format is not None:
         payload["response_format"] = response_format
     if extra_body:
@@ -129,6 +136,14 @@ def _handle_response(status_code: int, text: str, url: str, model: str) -> str:
             f"모델/게이트웨이 설정을 확인하세요."
         )
     return answer
+
+
+def is_reasoning_model(model: Optional[str]) -> bool:
+    """OpenAI 추론 모델 여부 (gpt-5 계열 — chat 변형 제외, o1/o3/o4 계열)."""
+    m = (model or "").lower()
+    if m.startswith("gpt-5"):
+        return "chat" not in m
+    return m.startswith(("o1", "o3", "o4"))
 
 
 def no_thinking_extra_body(model: Optional[str]) -> Optional[dict]:
