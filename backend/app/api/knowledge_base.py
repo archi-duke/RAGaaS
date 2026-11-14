@@ -241,7 +241,17 @@ async def promote_knowledge_base(
         
         config = payload.get("config", payload)
         
+        # 스키마 유도 모델: KB 그래프 단계 모델 → KB 기본 LLM (DB 등록 키 사용)
+        from app.core.models_resolver import resolve_model_config
+        llm_model_cfg = {}
+        for st in (kb.pipeline_config or {}).get("stages") or []:
+            if st.get("type") == "graph" and (st.get("params") or {}).get("llm_model"):
+                llm_model_cfg = st["params"]["llm_model"]
+        llm_model_cfg = config.get("llm_model") or llm_model_cfg or (kb.llm_model_config or {})
+        promoter_llm_cfg = await resolve_model_config(llm_model_cfg) if llm_model_cfg else None
+
         promoter = OntologyPromoter(
+            llm_cfg=promoter_llm_cfg,
             confidence_threshold=config.get("confidence_threshold", 0.6),
             min_evidence_count=config.get("min_evidence_count", 1),
             detect_cycles=config.get("detect_cycles", True),

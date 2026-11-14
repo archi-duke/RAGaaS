@@ -43,7 +43,11 @@ class OntologyPromoter:
         min_evidence_count: int = 2,
         detect_cycles: bool = True,
         remove_hypothetical: bool = True,
+        llm_cfg: Optional[dict] = None,
     ):
+        # 스키마 유도 LLM 설정 (models_resolver 로 해석된 cfg — DB 등록 키·KB 모델 사용).
+        # 이전에는 OPENAI_API_KEY 환경변수 + gpt-4o 고정이라 키를 DB 에 두는 운영에서 실행이 불가했다.
+        self.llm_cfg = llm_cfg
         self.confidence_threshold = confidence_threshold
         self.min_evidence_count = min_evidence_count
         self.detect_cycles = detect_cycles
@@ -239,45 +243,27 @@ class OntologyPromoter:
         return result
     
     def _call_llm_for_schema(self, prompt: str) -> dict:
-        """LLM API 호출"""
-        api_key = os.environ.get("OPENAI_API_KEY")
-        if not api_key:
-             raise ValueError("Ontology promoter model API key is not configured.")
+        """LLM API 호출 (공통 진입점 app.core.llm.chat — 추론 모델·GLM 파라미터 호환)."""
+        from app.core.llm import chat, no_thinking_extra_body
+        from app.services.retrieval.relation_targeting import parse_json_loose
 
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
-        
-        payload = {
-            "model": "gpt-4o",
-            "messages": [
-                {"role": "user", "content": prompt}
-            ],
-            "temperature": 0.1,
-        }
-        
+        cfg = self.llm_cfg
+        if not cfg:
+            api_key = os.environ.get("OPENAI_API_KEY")
+            if not api_key:
+                raise ValueError("Ontology promoter model API key is not configured.")
+            cfg = {"model": "gpt-4o", "api_key": api_key, "base_url": "https://api.openai.com/v1"}
         try:
-            response = requests.post(
-                "https://api.openai.com/v1/chat/completions",
-                headers=headers,
-                json=payload,
-                timeout=180,  # o1 takes longer
+            content = chat(
+                cfg,
+                [{"role": "user", "content": prompt}],
+                model=cfg.get("model"),
+                temperature=0.1,
+                extra_body=no_thinking_extra_body(cfg.get("model")),
+                timeout=300,
             )
-            response.raise_for_status()
-            from app.core.llm import extract_content_from_dict
-            content = extract_content_from_dict(response.json())
-            
-            # Debug: Print raw response
             print(f"[OntologyPromoter] LLM Raw Response (first 500 chars): {content[:500]}")
-            
-            # JSON clean up
-            if "```json" in content:
-                content = content.split("```json")[1].split("```")[0]
-            elif "```" in content:
-                content = content.split("```")[1].split("```")[0]
-            
-            result = json.loads(content.strip())
+            result = parse_json_loose(content) or {}
             print(f"[OntologyPromoter] Parsed JSON keys: {list(result.keys())}")
             return result
         except Exception as e:
@@ -752,20 +738,7 @@ Now analyze the input and generate the schema.
         }
         
         return g
-        
-        # owl:sameAs 동의어 병합
-        same_as_pairs = list(g.subject_objects(OWL.sameAs))
-        for canonical, alias in same_as_pairs:
-            # alias를 canonical로 대체
-            for s, p, o in list(result.triples((alias, None, None))):
-                result.remove((s, p, o))
-                result.add((canonical, p, o))
-            for s, p, o in list(result.triples((None, None, alias))):
-                result.remove((s, p, o))
-                result.add((s, p, canonical))
-        
-        return result
-    
+
     def _step3_hierarchy_finalization(self, g: Graph) -> Graph:
         """Step 3: Hierarchy Finalization - cycle 제거"""
         result = Graph()

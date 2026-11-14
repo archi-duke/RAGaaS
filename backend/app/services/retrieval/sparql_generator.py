@@ -120,7 +120,8 @@ You MUST respond in JSON format:
                 else:
                     schema_text += f"   - {cls_key}\n"
 
-        relations = schema_info.get('relations', [])
+        # 승격·선언 경로는 'properties' 키로 저장한다 (이전엔 'relations' 만 읽어 승격 속성이 무시됐다)
+        relations = schema_info.get('relations') or schema_info.get('properties') or []
         if relations:
             schema_text += "\n2. Relations:\n"
             for rel in relations:
@@ -156,7 +157,7 @@ You MUST respond in JSON format:
         
         if schema_info:
             # Extract names from promoted schema
-            rels = schema_info.get("relations", [])
+            rels = schema_info.get("relations") or schema_info.get("properties") or []
             for r in rels:
                 if isinstance(r, dict):
                     all_predicates.add(r.get("label", r.get("uri")))
