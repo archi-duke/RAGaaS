@@ -98,6 +98,25 @@ class IngestServiceClient:
             response.raise_for_status()
             return response.json()
 
+    async def replay_triples(
+        self,
+        kb_id: str,
+        doc_id: str,
+        graph_store: str = "fuseki",
+        schema_rules: Optional[List[Dict[str, Any]]] = None,
+        generate_inverse: bool = False,
+    ) -> Dict[str, Any]:
+        """저장된 추출 트리플에 KB 규칙을 적용해 문서 그래프만 교체 (docs/design-graph-promotion.md)."""
+        async with httpx.AsyncClient(timeout=600.0) as client:
+            response = await client.post(
+                f"{self.base_url}/api/v2/replay",
+                json={"kb_id": kb_id, "doc_id": doc_id, "graph_store": graph_store,
+                      "schema_rules": schema_rules, "generate_inverse": generate_inverse},
+                headers=service_headers(),
+            )
+            response.raise_for_status()
+            return response.json()
+
     async def create_preview(
         self,
         kb_id: str,

@@ -87,8 +87,10 @@ async def list_rules(kb_id: str):
 @router.post("/{kb_id}/schema/rules")
 async def create_rule(kb_id: str, body: RuleBody):
     from app.models.schema_mapping import SchemaMappingRule
-    if body.rule_type not in ("key", "value", "ignore"):
-        raise HTTPException(status_code=400, detail="rule_type 은 key|value|ignore")
+    if body.rule_type not in ("key", "value", "ignore", "entity", "class"):
+        raise HTTPException(status_code=400, detail="rule_type 은 key|value|ignore|entity|class")
+    if body.rule_type in ("entity", "class") and not (body.source_value and body.target_value):
+        raise HTTPException(status_code=400, detail="entity/class 규칙은 source_value/target_value 필요")
     if body.rule_type == "key" and not (body.source_path and body.target_path):
         raise HTTPException(status_code=400, detail="key 규칙은 source_path/target_path 필요")
     if body.rule_type == "value" and not (body.source_value and body.target_value):
@@ -140,6 +142,16 @@ async def renormalize(kb_id: str, body: RenormalizeBody = RenormalizeBody()):
         return await renormalize_documents(kb_id, body.doc_ids)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.post("/{kb_id}/schema/replay")
+async def replay(kb_id: str, body: RenormalizeBody = RenormalizeBody()):
+    """텍스트 문서 트리플 리플레이 (doc_ids 없으면 KB 의 모든 텍스트 문서)."""
+    from app.models.document import Document
+    from app.services.schema_alignment.service import _is_structured_name, replay_documents
+    ids = body.doc_ids or [str(d.id) for d in await Document.find(Document.kb_id == kb_id).to_list()
+                           if not _is_structured_name(d.filename)]
+    return await replay_documents(kb_id, ids)
 
 
 @router.post("/{kb_id}/documents/{doc_id}/reingest")

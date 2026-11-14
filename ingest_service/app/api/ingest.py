@@ -513,6 +513,48 @@ async def create_ingest_job(
     )
 
 
+class ReplayRequest(BaseModel):
+    """트리플 리플레이: 저장된 추출 트리플(raw 사본)에 KB 규칙을 적용해 문서 그래프만 교체.
+    LLM 재호출·재청킹·재임베딩 없음 → 청크 근거(source_node_id) 유지, 멱등.
+    (docs/design-graph-promotion.md §3(c) L1)"""
+    kb_id: str
+    doc_id: str
+    graph_store: str = "fuseki"
+    schema_rules: Optional[List[Dict[str, Any]]] = None
+    generate_inverse: bool = False
+
+
+@router.post("/replay")
+async def replay_triples(request: ReplayRequest):
+    import json as _json
+    import os as _os
+    import shutil as _shutil
+    from app.utils.temp_storage import temp_storage
+    from app.core.schema_normalizer import apply_rules_to_triples
+
+    cur_path = temp_storage._get_file_path(request.kb_id, request.doc_id, "_triples.json")
+    raw_path = temp_storage._get_file_path(request.kb_id, request.doc_id, "_triples.raw.json")
+    if not _os.path.exists(raw_path):
+        if not _os.path.exists(cur_path):
+            raise HTTPException(status_code=404, detail=f"저장된 트리플이 없음: {request.doc_id}")
+        _shutil.copyfile(cur_path, raw_path)   # 최초 1회 불변 사본
+    with open(raw_path, encoding="utf-8") as f:
+        raw = _json.load(f)
+    triples, report = apply_rules_to_triples(raw, request.schema_rules)
+
+    if request.graph_store == "fuseki":
+        await fuseki_connector.delete_by_doc_id(request.kb_id, request.doc_id)
+        inserted = await fuseki_connector.insert_triples(
+            request.kb_id, request.doc_id, triples, generate_inverse=request.generate_inverse)
+    else:
+        await neo4j_connector.delete_by_doc_id(request.kb_id, request.doc_id)
+        inserted = await neo4j_connector.insert_triples(
+            request.kb_id, request.doc_id, triples, generate_inverse=request.generate_inverse)
+    await temp_storage.save_triples(request.kb_id, request.doc_id, triples)
+    print(f"[Replay] doc {request.doc_id}: {report}")
+    return {"doc_id": request.doc_id, "inserted": inserted, **report}
+
+
 @router.get("/jobs/{job_id}", response_model=JobStatusResponse)
 async def get_job_status(job_id: str):
     """Get job status"""

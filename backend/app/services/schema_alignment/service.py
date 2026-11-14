@@ -50,15 +50,46 @@ async def load_rules_for_retrieval(kb_id: str) -> Dict[str, Any]:
     return out
 
 
-async def rules_for_ingest(kb_id: str) -> List[Dict[str, Any]]:
+async def rules_for_ingest(kb_id: str, include_graph_rules: bool = False) -> List[Dict[str, Any]]:
+    """인제스트·리플레이용 규칙. include_graph_rules=True 면 entity/class 규칙도 (텍스트 리플레이)."""
+    kinds = ("key", "value", "entity", "class") if include_graph_rules else ("key", "value")
     return [
         {
             "id": str(r.id), "rule_type": r.rule_type, "source_path": r.source_path,
             "target_path": r.target_path, "source_value": r.source_value,
             "target_value": r.target_value, "scope_paths": r.scope_paths, "status": r.status,
         }
-        for r in await active_rules(kb_id) if r.rule_type in ("key", "value")
+        for r in await active_rules(kb_id) if r.rule_type in kinds
     ]
+
+
+def _is_structured_name(filename: str) -> bool:
+    return str(filename or "").lower().rsplit(".", 1)[-1] in ("json", "yaml", "yml")
+
+
+async def replay_documents(kb_id: str, doc_ids: List[str]) -> Dict[str, Any]:
+    """텍스트 문서: 저장된 추출 트리플에 현재 규칙을 적용해 그래프만 교체 (LLM 비용 0, 멱등)."""
+    from app.models.document import Document
+    from app.models.knowledge_base import KnowledgeBase
+    from app.services.ingestion.ingest_client import ingest_client
+    from app.services.retrieval.graph_backends.fuseki import FusekiBackend
+
+    kb = await KnowledgeBase.get(kb_id)
+    rules = await rules_for_ingest(kb_id, include_graph_rules=True)
+    results = []
+    for did in doc_ids:
+        try:
+            r = await ingest_client.replay_triples(
+                kb_id, did, "fuseki" if kb.graph_backend == "ontology" else "neo4j", rules or None)
+            results.append(r)
+            doc = await Document.get(did)
+            if doc:
+                doc.schema_rules_version = kb.schema_rules_version
+                await doc.save()
+        except Exception as e:
+            results.append({"doc_id": did, "error": str(e)[:200]})
+    FusekiBackend.invalidate_class_catalog(kb_id)
+    return {"replayed": results}
 
 
 async def build_schema_vocab(kb_id: str) -> Dict[str, Any]:
@@ -412,6 +443,12 @@ async def renormalize_documents(kb_id: str, doc_ids: Optional[List[str]] = None)
                 if (d.schema_rules_version or 0) < (kb.schema_rules_version or 0)]
     queued, needs_source = [], []
     runnable = []
+    text_docs = [d for d in docs if not _is_structured_name(d.filename)]
+    docs = [d for d in docs if _is_structured_name(d.filename)]
+    if text_docs:
+        # 텍스트 문서는 원본 없이 저장된 추출 트리플 리플레이로 재정규화
+        asyncio.create_task(replay_documents(kb_id, [str(d.id) for d in text_docs]))
+        queued.extend(str(d.id) for d in text_docs)
     for d in docs:
         if d.file_path and os.path.exists(d.file_path):
             runnable.append(d)
