@@ -205,6 +205,11 @@ async def revert(kb_id: str, doc_ids: Optional[List[str]]) -> Dict[str, Any]:
             r = await ingest_client.reextract_revert(kb_id, did, "fuseki" if kb.graph_backend == "ontology" else "neo4j",
                                                       rules or None)
             out.append({"doc_id": did, "output": r.get("output")})
+            from app.models.document import Document
+            doc = await Document.get(did)
+            if doc and r.get("output") is not None:
+                doc.triple_count = r["output"]   # 되돌린 그래프 기준으로 표시 갱신
+                await doc.save()
             await _save_status(kb_id, {}, {did: {"state": "reverted"}})
         except Exception as e:
             out.append({"doc_id": did, "error": str(e)[:200]})
