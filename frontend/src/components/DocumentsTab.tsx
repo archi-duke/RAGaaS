@@ -6,6 +6,7 @@ import EntityDictionaryModal from './EntityDictionaryModal';
 import ExtractionPreviewModal from './ExtractionPreviewModal';
 import AlignmentReviewModal from './AlignmentReviewModal';
 import SchemaAlignmentPanel from './SchemaAlignmentPanel';
+import ReextractModal from './ReextractModal';
 import { docApi } from '../services/api';
 import ConfirmDialog from './ConfirmDialog';
 
@@ -59,6 +60,8 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
 
     const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
     const [isSchemaPanelOpen, setIsSchemaPanelOpen] = useState(false);
+    const [isAdvancedOpen, setIsAdvancedOpen] = useState(false);
+    const [isReextractOpen, setIsReextractOpen] = useState(false);
 
     // Result Modals State
     const [showPreviewModal, setShowPreviewModal] = useState(false);
@@ -200,6 +203,22 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
                     borderBottom: '1px solid var(--border)'
                 }}>
                     <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 600 }}>Documents ({safeDocuments.length})</h3>
+                    <div style={{ position: 'relative', marginRight: '0.5rem' }}>
+                        <button className="btn btn-secondary" onClick={() => setIsAdvancedOpen(!isAdvancedOpen)}
+                            style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }} title="고급 작업">
+                            고급 ▾
+                        </button>
+                        {isAdvancedOpen && (
+                            <div className="card" style={{ position: 'absolute', right: 0, top: '110%', zIndex: 20, padding: '0.25rem', minWidth: '240px' }}
+                                onMouseLeave={() => setIsAdvancedOpen(false)}>
+                                <button className="btn btn-secondary" style={{ width: '100%', textAlign: 'left', border: 'none', fontSize: '0.85rem' }}
+                                    onClick={() => { setIsAdvancedOpen(false); setIsReextractOpen(true); }}
+                                    title="확정 스키마 기준으로 저장된 청크에서 정보를 다시 추출 (LLM 비용 발생)">
+                                    스키마 기준 재추출 (옵션)…
+                                </button>
+                            </div>
+                        )}
+                    </div>
                     <button
                         className="btn btn-secondary"
                         onClick={() => setIsSchemaPanelOpen(true)}
@@ -454,6 +473,9 @@ export default function DocumentsTab({ kbId, documents, onRefresh, onDeleteDocum
                     onRefresh();
                 }}
             />
+            {isReextractOpen && (
+                <ReextractModal kbId={kbId} onClose={() => setIsReextractOpen(false)} onChanged={onRefresh} />
+            )}
             {isSchemaPanelOpen && (
                 <SchemaAlignmentPanel kbId={kbId} onClose={() => setIsSchemaPanelOpen(false)} onChanged={onRefresh} />
             )}

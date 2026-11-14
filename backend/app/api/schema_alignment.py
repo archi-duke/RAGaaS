@@ -154,6 +154,42 @@ async def replay(kb_id: str, body: RenormalizeBody = RenormalizeBody()):
     return await replay_documents(kb_id, ids)
 
 
+class ReextractBody(BaseModel):
+    doc_ids: Optional[List[str]] = None
+    model: str = "ingest"      # ingest(KB 추출 모델) | graph(그래프 검색 모델)
+
+
+@router.get("/{kb_id}/schema/reextract/estimate")
+async def reextract_estimate(kb_id: str):
+    """스키마 기준 재추출(옵션) 실행 전 예상: 대상 문서·청크 수, 모델, 스키마 규모, 마지막 실행."""
+    from app.services.schema_alignment import reextract as rx
+    try:
+        return await rx.estimate(kb_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.post("/{kb_id}/schema/reextract")
+async def reextract_start(kb_id: str, body: ReextractBody = ReextractBody()):
+    from app.services.schema_alignment import reextract as rx
+    try:
+        return await rx.start(kb_id, body.doc_ids, body.model)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/{kb_id}/schema/reextract/status")
+async def reextract_status(kb_id: str):
+    from app.services.schema_alignment import reextract as rx
+    return await rx.status(kb_id)
+
+
+@router.post("/{kb_id}/schema/reextract/revert")
+async def reextract_revert(kb_id: str, body: RenormalizeBody = RenormalizeBody()):
+    from app.services.schema_alignment import reextract as rx
+    return await rx.revert(kb_id, body.doc_ids)
+
+
 @router.post("/{kb_id}/documents/{doc_id}/reingest")
 async def reingest(kb_id: str, doc_id: str, file: UploadFile = File(...)):
     """원본이 없는 기존 구조화 문서에 원본을 다시 올려 재정규화(재인제스트)."""

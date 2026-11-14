@@ -117,6 +117,30 @@ class IngestServiceClient:
             response.raise_for_status()
             return response.json()
 
+    async def reextract(self, kb_id: str, doc_id: str, graph_store: str, schema_spec: Dict[str, Any],
+                        llm: Dict[str, Any], schema_rules: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+        """스키마 기준 재추출 (승격 L2)."""
+        async with httpx.AsyncClient(timeout=1800.0) as client:
+            response = await client.post(
+                f"{self.base_url}/api/v2/reextract",
+                json={"kb_id": kb_id, "doc_id": doc_id, "graph_store": graph_store,
+                      "schema_spec": schema_spec, "llm": llm, "schema_rules": schema_rules},
+                headers=service_headers(),
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def reextract_revert(self, kb_id: str, doc_id: str, graph_store: str,
+                               schema_rules: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+        async with httpx.AsyncClient(timeout=600.0) as client:
+            response = await client.post(
+                f"{self.base_url}/api/v2/reextract/revert",
+                json={"kb_id": kb_id, "doc_id": doc_id, "graph_store": graph_store, "schema_rules": schema_rules},
+                headers=service_headers(),
+            )
+            response.raise_for_status()
+            return response.json()
+
     async def create_preview(
         self,
         kb_id: str,

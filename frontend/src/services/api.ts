@@ -168,6 +168,12 @@ export const schemaApi = {
     deleteRule: (kbId: string, id: string) => api.delete(`knowledge-bases/${kbId}/schema/rules/${id}`),
     detect: (kbId: string) => api.post(`knowledge-bases/${kbId}/schema/detect`),
     renormalize: (kbId: string, docIds?: string[]) => api.post(`knowledge-bases/${kbId}/schema/renormalize`, { doc_ids: docIds }),
+    // 스키마 기준 재추출 (승격 L2, 옵션)
+    reextractEstimate: (kbId: string) => api.get(`knowledge-bases/${kbId}/schema/reextract/estimate`),
+    reextract: (kbId: string, docIds?: string[], model = 'ingest') =>
+        api.post(`knowledge-bases/${kbId}/schema/reextract`, { doc_ids: docIds, model }),
+    reextractStatus: (kbId: string) => api.get(`knowledge-bases/${kbId}/schema/reextract/status`),
+    reextractRevert: (kbId: string, docIds?: string[]) => api.post(`knowledge-bases/${kbId}/schema/reextract/revert`, { doc_ids: docIds }),
     reingest: (kbId: string, docId: string, file: File) => {
         const formData = new FormData();
         formData.append('file', file);

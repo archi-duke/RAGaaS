@@ -555,6 +555,79 @@ async def replay_triples(request: ReplayRequest):
     return {"doc_id": request.doc_id, "inserted": inserted, **report}
 
 
+class ReextractRequest(BaseModel):
+    """스키마 기준 재추출 (승격 L2): 저장된 청크를 확정 스키마 프롬프트로 다시 추출해 그래프 교체.
+    직전 raw 트리플은 _triples.raw.prev.json 으로 백업 (되돌리기용)."""
+    kb_id: str
+    doc_id: str
+    graph_store: str = "fuseki"
+    schema_spec: Dict[str, Any]
+    llm: Dict[str, Any]
+    schema_rules: Optional[List[Dict[str, Any]]] = None
+
+
+@router.post("/reextract")
+async def reextract(request: ReextractRequest):
+    import json as _json
+    import os as _os
+    import shutil as _shutil
+    from app.utils.temp_storage import temp_storage
+    from app.core.schema_reextract import reextract_chunks
+    from app.core.schema_normalizer import apply_rules_to_triples
+
+    chunks_path = temp_storage._get_file_path(request.kb_id, request.doc_id, "_chunks.json")
+    if not _os.path.exists(chunks_path):
+        raise HTTPException(status_code=404, detail=f"저장된 청크가 없음: {request.doc_id}")
+    with open(chunks_path, encoding="utf-8") as f:
+        chunks = _json.load(f)
+    triples, stats = await reextract_chunks(chunks, request.schema_spec, request.llm)
+    if not triples:
+        raise HTTPException(status_code=422, detail=f"재추출 결과가 비어 있음 (기존 그래프 유지): {stats}")
+
+    cur = temp_storage._get_file_path(request.kb_id, request.doc_id, "_triples.json")
+    raw = temp_storage._get_file_path(request.kb_id, request.doc_id, "_triples.raw.json")
+    prev = temp_storage._get_file_path(request.kb_id, request.doc_id, "_triples.raw.prev.json")
+    if not _os.path.exists(raw) and _os.path.exists(cur):
+        _shutil.copyfile(cur, raw)
+    if _os.path.exists(raw):
+        _shutil.copyfile(raw, prev)          # 되돌리기용 직전 원본
+    with open(raw, "w", encoding="utf-8") as f:
+        _json.dump(triples, f, ensure_ascii=False)
+
+    applied, report = apply_rules_to_triples(triples, request.schema_rules)
+    if request.graph_store == "fuseki":
+        await fuseki_connector.delete_by_doc_id(request.kb_id, request.doc_id)
+        await fuseki_connector.insert_triples(request.kb_id, request.doc_id, applied, generate_inverse=False)
+    else:
+        await neo4j_connector.delete_by_doc_id(request.kb_id, request.doc_id)
+        await neo4j_connector.insert_triples(request.kb_id, request.doc_id, applied, generate_inverse=False)
+    await temp_storage.save_triples(request.kb_id, request.doc_id, applied)
+    print(f"[Reextract] doc {request.doc_id}: {stats} → {report}")
+    return {"doc_id": request.doc_id, **stats, "after_rules": report["output"]}
+
+
+class ReextractRevertRequest(BaseModel):
+    kb_id: str
+    doc_id: str
+    graph_store: str = "fuseki"
+    schema_rules: Optional[List[Dict[str, Any]]] = None
+
+
+@router.post("/reextract/revert")
+async def reextract_revert(request: ReextractRevertRequest):
+    """재추출 되돌리기: 직전 raw 를 복원하고 리플레이."""
+    import os as _os
+    import shutil as _shutil
+    from app.utils.temp_storage import temp_storage
+    raw = temp_storage._get_file_path(request.kb_id, request.doc_id, "_triples.raw.json")
+    prev = temp_storage._get_file_path(request.kb_id, request.doc_id, "_triples.raw.prev.json")
+    if not _os.path.exists(prev):
+        raise HTTPException(status_code=404, detail="되돌릴 이전 추출 결과가 없음")
+    _shutil.move(prev, raw)
+    return await replay_triples(ReplayRequest(kb_id=request.kb_id, doc_id=request.doc_id,
+                                              graph_store=request.graph_store, schema_rules=request.schema_rules))
+
+
 @router.get("/jobs/{job_id}", response_model=JobStatusResponse)
 async def get_job_status(job_id: str):
     """Get job status"""
