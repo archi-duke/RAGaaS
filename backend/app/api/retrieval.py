@@ -338,7 +338,11 @@ async def retrieve_chunks(
         
         reranked.sort(key=lambda x: x['score'], reverse=True)
         results = reranked[:request.brute_force_top_k]
-        
+
+    # Parent-Child(small-to-big): child 로 찾은 결과를 parent 로 치환 (해당 청크만)
+    from app.services.retrieval.parent_child import expand_to_parents
+    results = await expand_to_parents(kb_id, results)
+
     return results
 
 @router.post("/{kb_id}/chat", response_model=ChatResponse)
@@ -615,6 +619,11 @@ async def chat_with_kb(
         if not has_credentials(resolved):
             raise HTTPException(status_code=500, detail="LLM API key/헤더가 설정되지 않았습니다.")
         return resolved, resolved.get("model")
+
+    # Parent-Child(small-to-big): child 로 찾은 결과를 parent 로 치환 (해당 청크만).
+    # 파이프라인/레거시 경로 모두 여기를 지나므로 한 곳에서 처리한다.
+    from app.services.retrieval.parent_child import expand_to_parents
+    results = await expand_to_parents(kb_id, results, logs=execution_logs)
 
     # 4. Generate LLM response based on retrieved chunks
     if not results:

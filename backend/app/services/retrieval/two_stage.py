@@ -54,32 +54,38 @@ class TwoStageRetrievalStrategy(RetrievalStrategy):
         if not candidates:
             return []
 
-        # 2. Reranking
-        reranker = self._get_reranker()
-        pairs = [[query, doc["content"]] for doc in candidates]
-        cross_scores = reranker.predict(pairs)
-        
-        for i, doc in enumerate(candidates):
-            doc["cross_score"] = float(cross_scores[i])
-            
-        candidates.sort(key=lambda x: x["cross_score"], reverse=True)
-        
-        # 3. Final selection (Unified Scoring with Cosine)
-        filtered = []
+        # 2. 1단계 관련성 게이트: score_threshold 는 기존과 같이 cosine 유사도 기준으로 적용
+        #    (재랭크 점수는 범위가 달라 같은 임계값을 쓸 수 없다)
+        gated = []
         for doc in candidates:
-            chunk_vector = doc.get("vector")
-            doc["score"] = 0.0
-            if chunk_vector:
-                doc["score"] = self._cosine_similarity(query_vec, chunk_vector)
-            
-            doc.pop("vector", None)
-            doc.pop("cross_score", None)
-            
-            if doc["score"] >= score_threshold:
-                filtered.append(doc)
-                
-        return filtered[:top_k]
-        
+            chunk_vector = doc.pop("vector", None)
+            cosine = self._cosine_similarity(query_vec, chunk_vector) if chunk_vector else 0.0
+            if cosine >= score_threshold:
+                doc["metadata"]["vector_score"] = cosine
+                gated.append(doc)
+
+        if not gated:
+            return []
+
+        # 3. Reranking — 최종 score 는 Cross-Encoder 점수(sigmoid 로 0~1 변환)
+        #    이전엔 재랭크 점수로 정렬만 하고 score 를 cosine 으로 덮어써, 재랭크 결과와
+        #    표시/후속 단계가 보는 점수가 어긋났다.
+        reranker = self._get_reranker()
+        pairs = [[query, doc["content"]] for doc in gated]
+        cross_scores = reranker.predict(pairs)
+
+        for doc, raw in zip(gated, cross_scores):
+            raw = float(raw)
+            doc["score"] = float(1.0 / (1.0 + np.exp(-raw)))
+            doc["metadata"]["cross_encoder_raw_score"] = raw
+            doc["metadata"]["score_history"] = {
+                "ANN": doc["metadata"]["vector_score"],
+                "Rerank": doc["score"],
+            }
+
+        gated.sort(key=lambda x: x["score"], reverse=True)
+        return gated[:top_k]
+
     def _cosine_similarity(self, vec1, vec2) -> float:
         v1 = np.array(vec1)
         v2 = np.array(vec2)

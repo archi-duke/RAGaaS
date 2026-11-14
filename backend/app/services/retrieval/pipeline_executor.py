@@ -331,12 +331,18 @@ class PipelineExecutor:
         # Reranker completely replaces results and scores
         reranked_results = []
         if use_llm:
+            # 모델 설정: 스테이지 자체 설정(llm_model, PipelineBuilder 가 채움) 우선, 없으면
+            # 실행 컨텍스트(KB/요청 레벨). 이전엔 전달하지 않아 llm_rerank_results 가
+            # "LLM reranker model is not configured." 로 항상 실패했고, 실행기가 예외를
+            # 삼켜 이전 단계 결과가 재랭크된 것처럼 그대로 나갔다.
+            llm_model_config = params.get("llm_model") or ctx.metadata.get("llm_model_config") or {}
             reranked_results = await reranking_service.llm_rerank_results(
                 query=ctx.query,
                 results=ctx.results,
                 top_k=top_k,
                 threshold=threshold,
-                strategy=llm_strategy
+                strategy=llm_strategy,
+                llm_model_config=llm_model_config,
             )
         else:
             reranked_results = await reranking_service.rerank_results(
