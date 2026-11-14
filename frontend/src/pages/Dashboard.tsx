@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { kbApi } from '../services/api';
-import { Plus, Database, Trash2, ArrowRight, FileText, HardDrive, Layers } from 'lucide-react';
+import { Plus, Database, Trash2, ArrowRight, FileText, HardDrive, Layers, Settings as SettingsIcon } from 'lucide-react';
 import ConfirmDialog from '../components/ConfirmDialog';
 import CreateKnowledgeBaseModal from '../components/CreateKnowledgeBaseModal';
 
@@ -72,7 +72,16 @@ export default function Dashboard() {
 
     return (
         <div className="container">
-            <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginBottom: '2rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '0.5rem', marginBottom: '2rem' }}>
+                <Link
+                    to="/settings"
+                    className="btn"
+                    title="프로바이더 API Key·모델 설정"
+                    style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', textDecoration: 'none' }}
+                >
+                    <SettingsIcon size={18} />
+                    Settings
+                </Link>
                 <button className="btn btn-primary" onClick={() => setIsModalOpen(true)}>
                     <Plus size={20} />
                     Create Knowledge Base
