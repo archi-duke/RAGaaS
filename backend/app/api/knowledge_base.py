@@ -372,10 +372,12 @@ async def promote_knowledge_base(
         raise HTTPException(status_code=500, detail=f"Promotion failed: {_format_model_error_message(str(e))}")
 
 @router.post("/{kb_id}/promote/{run_id}/apply")
-async def apply_promotion(kb_id: str, run_id: str):
-    """스키마 유도 초안 일괄 적용: 제안 수락 → 규칙 → TBox → 텍스트 문서 리플레이."""
+async def apply_promotion(kb_id: str, run_id: str, payload: dict = Body(default={})):
+    """스키마 유도 초안 일괄 적용: 제안 수락 → 규칙 → TBox → 텍스트 문서 리플레이.
+    payload.reextract=True 면 이어서 스키마 기준 재추출(L2)을 백그라운드로 시작 (UI 기본 체크)."""
     from app.services.schema_alignment.induction import apply_induction
-    return await apply_induction(kb_id, run_id)
+    return await apply_induction(kb_id, run_id, bool(payload.get("reextract", False)),
+                                 payload.get("reextract_model") or "ingest")
 
 
 @router.delete("/{kb_id}")

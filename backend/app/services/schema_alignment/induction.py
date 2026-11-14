@@ -250,8 +250,9 @@ def build_tbox_turtle(classes: List[Dict[str, Any]], properties: List[Dict[str, 
     return "\n".join(lines) + "\n"
 
 
-async def apply_induction(kb_id: str, run_id: str) -> Dict[str, Any]:
-    """초안 일괄 수락 → 규칙 → TBox 업로드 → 텍스트 문서 리플레이."""
+async def apply_induction(kb_id: str, run_id: str, reextract: bool = False,
+                          reextract_model: str = "ingest") -> Dict[str, Any]:
+    """초안 일괄 수락 → 규칙 → TBox 업로드 → 텍스트 문서 리플레이 → (옵션) 스키마 기준 재추출 시작."""
     import requests
     from app.core.fuseki import fuseki_client
     from app.models.knowledge_base import KnowledgeBase
@@ -298,5 +299,12 @@ async def apply_induction(kb_id: str, run_id: str) -> Dict[str, Any]:
     text_ids = [str(d.id) for d in await Document.find(Document.kb_id == kb_id).to_list()
                 if not _is_structured_name(d.filename)]
     replay = await replay_documents(kb_id, text_ids)
-    return {"accepted": accepted, "tbox_uploaded": tbox_ok, "classes": len(classes),
-            "properties": len(properties), "replayed": len(replay["replayed"])}
+    result = {"accepted": accepted, "tbox_uploaded": tbox_ok, "classes": len(classes),
+              "properties": len(properties), "replayed": len(replay["replayed"])}
+    if reextract and text_ids:
+        from app.services.schema_alignment import reextract as rx
+        try:
+            result["reextract"] = await rx.start(kb_id, text_ids, reextract_model)
+        except ValueError as e:
+            result["reextract"] = {"error": str(e)}
+    return result

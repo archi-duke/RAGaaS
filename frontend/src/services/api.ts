@@ -47,7 +47,8 @@ export const kbApi = {
     delete: (id: string) => api.delete(`knowledge-bases/${id}`),
     promote: (id: string, payload: any = {}) => api.post(`knowledge-bases/${id}/promote`, payload),
     // 스키마 유도 초안 일괄 적용 (docs/design-graph-promotion.md)
-    applyPromotion: (id: string, runId: string) => api.post(`knowledge-bases/${id}/promote/${runId}/apply`),
+    applyPromotion: (id: string, runId: string, opts: { reextract?: boolean; reextract_model?: string } = {}) =>
+        api.post(`knowledge-bases/${id}/promote/${runId}/apply`, opts),
     getExtractionRules: () => api.get('knowledge-bases/extraction-rules/content'),
     validateExtractionRules: (content: string) => api.post('knowledge-bases/extraction-rules/validate', { content }),
     saveExtractionRules: (content: string) => api.post('knowledge-bases/extraction-rules/save', { content }),
