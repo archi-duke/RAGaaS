@@ -3,10 +3,14 @@ Subject Restoration Preprocessing Module
 
 Resolves omitted subjects in Korean text using LLM.
 Example: "이며 Duke의 제자이다" → "오일남은 Duke의 제자이다"
-"""
-from typing import Optional, Dict, Any
 
-from app.core.llm import chat, LLMError
+문서 전체를 한 번에 보내면 출력 토큰 한도(gpt-4o-mini 16,384 등)를 넘으므로,
+문단 경계로 나눈 조각을 병렬로 복원해 이어 붙인다.
+"""
+import asyncio
+from typing import Optional, Dict, Any, List
+
+from app.core.llm import achat, LLMError
 
 
 SYSTEM_PROMPT = """당신은 한국어 텍스트 전처리 전문가입니다.
@@ -25,6 +29,66 @@ SYSTEM_PROMPT = """당신은 한국어 텍스트 전처리 전문가입니다.
 출력: "오영수 - 001번 오일남 역: 오일남은 뇌종양을 앓고 있는 노인이다. 오일남은 '장풍'의 고수 이며 오일남은 Duke의 제자 이다."
 """
 
+# 조각 크기(문자). 한국어는 대략 1자 ≈ 1토큰 이상이라 출력 한도 안에 넉넉히 들어오도록 잡는다.
+CHUNK_CHARS = 3000
+# 출력 토큰 상한 — 대부분의 챗 모델 완성 토큰 한도(16,384) 이하.
+MAX_COMPLETION_TOKENS = 16000
+# 동시 호출 수 — 게이트웨이/요율 제한 보호.
+CONCURRENCY = 4
+
+_REFUSAL_MARKERS = ["죄송", "sorry", "i cannot", "unable to", "제공된 텍스트", "cannot fulfill"]
+
+
+def split_for_restoration(text: str, limit: int = CHUNK_CHARS) -> List[str]:
+    """문단(빈 줄) → 줄 → 문자 순으로 경계를 지켜 limit 이하 조각으로 나눈다.
+    조각을 순서대로 이어 붙이면 원문과 같다(구분자 보존)."""
+    if len(text) <= limit:
+        return [text]
+
+    def pieces(s: str, seps: List[str]) -> List[str]:
+        if len(s) <= limit:
+            return [s]
+        if not seps:
+            return [s[i:i + limit] for i in range(0, len(s), limit)]
+        sep, rest = seps[0], seps[1:]
+        parts = s.split(sep)
+        out: List[str] = []
+        for i, p in enumerate(parts):
+            unit = p + (sep if i < len(parts) - 1 else "")
+            out.extend(pieces(unit, rest) if len(unit) > limit else [unit])
+        return out
+
+    chunks: List[str] = []
+    buf = ""
+    for unit in pieces(text, ["\n\n", "\n"]):
+        if buf and len(buf) + len(unit) > limit:
+            chunks.append(buf)
+            buf = ""
+        buf += unit
+    if buf:
+        chunks.append(buf)
+    return chunks
+
+
+async def _restore_chunk(cfg: Dict[str, Any], model: str, chunk: str) -> str:
+    if not chunk.strip():
+        return chunk
+    restored = (await achat(
+        cfg,
+        [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": chunk},
+        ],
+        model=model, temperature=0.1,
+        max_tokens=min(max(len(chunk) * 2, 256), MAX_COMPLETION_TOKENS),
+    )).strip()
+    if not restored or any(x in restored[:20].lower() for x in _REFUSAL_MARKERS):
+        print("[SubjectRestoration] ⚠️ refusal/chat pattern in a chunk. Keeping original chunk.")
+        return chunk
+    # 조각 사이 구분(빈 줄/줄바꿈)은 원문 것을 유지한다.
+    tail = chunk[len(chunk.rstrip()):]
+    return restored + tail
+
 
 async def restore_subjects(
     text: str,
@@ -33,36 +97,31 @@ async def restore_subjects(
 ) -> str:
     """
     Restore omitted subjects in Korean text using LLM.
-    
+
     Args:
         text: Input text with potentially omitted subjects.
-        model: OpenAI model to use.
-        
+        model: Fallback model when llm_config has none.
+        llm_config: resolved LLM config (base_url, api_key, extra_headers, model).
+
     Returns:
-        Text with restored subjects.
+        Text with restored subjects. LLM 호출 실패(LLMError)는 그대로 올린다.
     """
     try:
-        print(f"[SubjectRestoration] Processing {len(text)} chars...")
-
         cfg = llm_config or {}
         active_model = cfg.get("model") or model
-        restored_text = chat(
-            cfg,
-            [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": text},
-            ],
-            model=active_model, temperature=0.1, max_tokens=len(text) * 2,
-        ).strip()
-        reduced_text = restored_text[:20].lower()
-        if any(x in reduced_text for x in ["죄송", "sorry", "i cannot", "unable to", "제공된 텍스트", "cannot fulfill"]):
-            print(f"[SubjectRestoration] ⚠️ Startup detected refusal/chat pattern. Reverting to original text.")
-            return text
+        chunks = split_for_restoration(text)
+        print(f"[SubjectRestoration] Processing {len(text)} chars in {len(chunks)} chunk(s)...")
 
-        print(f"[SubjectRestoration] Restored to {len(restored_text)} chars")
-        
-        return restored_text
-        
+        sem = asyncio.Semaphore(CONCURRENCY)
+
+        async def run(c: str) -> str:
+            async with sem:
+                return await _restore_chunk(cfg, active_model, c)
+
+        restored = "".join(await asyncio.gather(*(run(c) for c in chunks)))
+        print(f"[SubjectRestoration] Restored to {len(restored)} chars")
+        return restored
+
     except LLMError:
         raise
     except Exception as e:
