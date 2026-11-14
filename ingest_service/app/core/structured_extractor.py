@@ -138,6 +138,10 @@ class StructuredExtractor:
         self._entity_order: List[str] = []
         self._identity_cache: Dict[int, str] = {}  # id(python obj) -> identity (cycle guard)
         self._anon_counter = 0
+        # 익명 구조 노드 ID 의 문서 구분자. 없으면 서로 다른 문서의 'root_0_tradeoffs_22' 가
+        # 같은 inst: URI 로 합쳐져 레코드 간 값이 섞인다 (다중 YAML 문서 KB).
+        # 'root_<idx>_<doc8>_…' 형식 — 백엔드의 구조 노드 판별(/inst/root_[0-9]+_)과 호환.
+        self._doc_tag = re.sub(r"[^0-9a-zA-Z]", "", str(doc_id or ""))[:8] or "doc"
         self.id_index: Set[str] = set()
 
         # --- Step 1: id index (1-pass, for reference detection, design SS4.2) --
@@ -153,7 +157,7 @@ class StructuredExtractor:
         for idx, (record, container_key, is_collection) in enumerate(self._top_level_records(data)):
             self._process_object(
                 record,
-                path=f"root_{idx}",
+                path=f"root_{idx}_{self._doc_tag}",
                 container_key=container_key,
                 container_is_collection=is_collection,
                 depth=0,
