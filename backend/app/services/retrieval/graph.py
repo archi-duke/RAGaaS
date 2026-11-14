@@ -284,6 +284,11 @@ class GraphRetrievalStrategy(RetrievalStrategy):
 
         Extract:
         1. entities: key entities (subjects, objects, proper nouns) as objects with a grammatical "role".
+           - Entities include TOPICS and CONCEPTS, not only people/places: technical terms, products,
+             architectures, methods (e.g. "micro frontend", "Kubernetes", "event sourcing").
+             The thing the question is ABOUT is always an entity — never return an empty list when
+             the query names a topic. (e.g. "pros of micro frontend?" -> name "micro frontend")
+           - Only entities actually mentioned in the query. Never guess the answer entity.
            - role = "subject" if the entity is the actor/owner of the relationship being asked,
                     "object" if it is the target, "ambiguous" if unclear or symmetric.
            - Keep entity "name" in its ORIGINAL language as it appears in the query. Do NOT translate.
@@ -302,8 +307,8 @@ class GraphRetrievalStrategy(RetrievalStrategy):
 
         Output format:
         {{
-          "entities": [{{"name": "성기훈", "role": "subject"}}, {{"name": "오일남", "role": "object"}}],
-          "translated_entities": ["Seong Gi-hun", "Oh Il-nam"],
+          "entities": [{{"name": "홍길동", "role": "subject"}}, {{"name": "Acme Corp", "role": "object"}}],
+          "translated_entities": ["Hong Gil-dong"],
           "relationship_type": "master",
           "is_multi_hop": false,
           "hop_count": 1,
