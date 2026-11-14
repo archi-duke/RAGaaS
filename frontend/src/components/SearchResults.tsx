@@ -469,6 +469,11 @@ const MODE_LABELS: Record<string, string> = {
     overview: '개요 이웃 조회',
     pair: '두 엔티티 직접 관계',
     none: '일치 관계 없음',
+    P: 'P · 질의 계획 (유형 수준)',
+};
+const ROLE_LABELS: Record<string, string> = { filter: '필터', aggregate: '집계', return: '반환' };
+const ROLE_COLORS: Record<string, [string, string]> = {
+    filter: ['#dbeafe', '#1e40af'], aggregate: ['#fae8ff', '#86198f'], return: ['#dcfce7', '#166534'],
 };
 const TIER_LABELS: Record<number, string> = { 1: '완전일치', 2: '어간일치', 3: '토큰포함' };
 const shortChunk = (cid: string) => (cid && cid.includes('::') ? cid.split('::').pop() : cid);
@@ -501,20 +506,35 @@ function GraphReasoningCard({ reasoning }: { reasoning: any }) {
         <div className="card" style={{ padding: '1rem', width: '100%', boxSizing: 'border-box' }}>
             <div style={{ fontSize: '0.9rem', fontWeight: 600, marginBottom: '0.5rem' }}>Graph Reasoning</div>
             {step(1, '질문 분석', <>
-                <div>intent: <b>{an.intent || '-'}</b>{an.model ? <span style={{ opacity: 0.7 }}> · 모델 {an.model}</span> : null}</div>
+                <div>intent: <b>{an.intent || '-'}</b>{an.target_class ? <> · 대상 유형 <b>{an.target_class}</b></> : null}{an.model ? <span style={{ opacity: 0.7 }}> · 모델 {an.model}</span> : null}</div>
                 <div>엔티티: {(an.entities || []).map((e: string) => chip(roles[e] ? `${e} (${roles[e]})` : e))}</div>
                 <div>관계어: {(an.relation_aliases || []).length ? an.relation_aliases.map((a: string) => chip(a, '#fef3c7', '#92400e')) : '(없음)'}</div>
                 {an.llm_issue && <div style={{ color: 'tomato' }}>⚠ 질의 분석 LLM 호출 불가 — spaCy 토큰으로 대체: {an.llm_issue}</div>}
             </>)}
-            {step(2, '엔티티 링킹', (reasoning.linking || []).length
-                ? (reasoning.linking || []).map((l: any) => <div key={l.uri}>'{l.entity}' → <code>inst:{decodeURIComponent(String(l.uri).split('/').pop() || '')}</code></div>)
-                : '그래프 노드에 연결된 엔티티 없음')}
+            {step(2, '엔티티 링킹', <>
+                {(reasoning.linking || []).length
+                    ? (reasoning.linking || []).map((l: any) => <div key={l.uri}>'{l.entity}' → <code>inst:{decodeURIComponent(String(l.uri).split('/').pop() || '')}</code>{l.value_node && <span style={{ opacity: 0.7 }}> (값 노드 — 조건 값으로 사용)</span>}</div>)
+                    : <div>그래프 노드에 연결된 엔티티 없음</div>}
+                {(tg.kinds || []).map((k: any) => (
+                    <div key={k.name} style={{ opacity: 0.8 }}>유형 {k.name} ({k.typed ? 'rdf:type' : '경로 시그니처 추론'}, 멤버 {k.members}개: {(k.examples || []).join(', ')})</div>
+                ))}
+            </>)}
             {step(3, `관계 타게팅 — ${MODE_LABELS[tg.mode] || tg.mode || '-'}`, <>
                 {(tg.matches || []).map((m: any, i: number) => (
                     <div key={i}>'{m.alias}' = <code>{m.matched}</code>{m.expanded ? ' (하위 경로 전체)' : ''} · {TIER_LABELS[m.tier] || ''}{m.inverse ? ' · 역관계' : ''}</div>
                 ))}
                 {tg.catalog_size != null && <div style={{ opacity: 0.8 }}>후보 경로 {tg.catalog_size}개 중 {(tg.selected_paths || []).length}개 선택</div>}
                 {(tg.selected_paths || []).length > 0 && <div>{tg.selected_paths.map((sp: string) => chip(sp, '#dcfce7', '#166534'))}</div>}
+                {tg.plan && (
+                    <div style={{ margin: '0.25rem 0' }}>
+                        {(tg.plan.filters || []).map((f: string) => chip(`필터 ${f}`, ...ROLE_COLORS.filter))}
+                        {tg.plan.aggregate && chip(`집계 ${tg.plan.aggregate}`, ...ROLE_COLORS.aggregate)}
+                        {(tg.plan.returns || []).map((r: string) => chip(`반환 ${r}`, ...ROLE_COLORS.return))}
+                        {(tg.plan.value_matches || []).length > 0 && <div style={{ opacity: 0.7 }}>값 매칭: {tg.plan.value_matches.join('; ')}</div>}
+                    </div>
+                )}
+                {(tg.adjustments || []).map((a: string, i: number) => <div key={i} style={{ opacity: 0.7 }}>조정: {a}</div>)}
+                {tg.mode === 'P' && tg.result_entities && <div>결과 엔티티 {tg.result_entities.length}개{tg.truncated ? ' (상한 초과)' : ''}: <b>{tg.result_entities.join(', ')}</b></div>}
                 {tg.reason && <div style={{ opacity: 0.8 }}>근거: {tg.reason}</div>}
                 {reasoning.sparql && (
                     <div>
@@ -529,6 +549,8 @@ function GraphReasoningCard({ reasoning }: { reasoning: any }) {
                 <ol style={{ margin: 0, paddingLeft: '1.2rem' }}>
                     {triples.slice(0, 30).map((t: any, i: number) => (
                         <li key={i}>
+                            {t.entity && (i === 0 || triples[i - 1].entity !== t.entity) && <div style={{ fontWeight: 600, marginTop: '0.25rem' }}>▸ {t.entity}</div>}
+                            {t.role && chip(ROLE_LABELS[t.role] || t.role, ...(ROLE_COLORS[t.role] || ['#e0e7ff', '#3730a3']))}
                             {t.subject} <b>—{t.predicate}→</b> {String(t.object)}
                             {(t.chunk_ids || []).length > 0 && <span style={{ opacity: 0.6 }}> ⟵ {(t.chunk_ids || []).map(shortChunk).join(', ')}</span>}
                         </li>

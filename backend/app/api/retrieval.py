@@ -641,6 +641,9 @@ async def chat_with_kb(
     if results and results[0].get("graph_metadata"):
         metadata = results[0]["graph_metadata"]
         triples = metadata.get("triples", [])
+        # 유형 수준 질문: 조건을 만족하는 엔티티 전체 목록 (답변이 빠짐없이 나열하도록)
+        if metadata.get("result_summary"):
+            context_parts.append(f"### Query Plan Result:\n{metadata['result_summary']}\n")
         if triples:
             # Check type of triples
             # Graph logic might return strings like "(s) -[p]-> (o)" OR dicts

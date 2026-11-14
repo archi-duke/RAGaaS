@@ -200,25 +200,30 @@ class FusekiConnector:
         
         ntriples_data = "\n".join(rdf_lines)
         
-        async with httpx.AsyncClient() as client:
+        # 여러 문서를 동시에 인제스트하면 Fuseki 쓰기가 httpx 기본 타임아웃(5초)을 넘겨
+        # 메시지 없는 ReadTimeout 으로 실패했고, 예외를 삼켜 작업이 COMPLETED 로 끝나
+        # 그래프만 비는 문서가 생겼다. 넉넉한 타임아웃 + 재시도, 최종 실패는 예외로 올려
+        # 작업을 FAILED 로 표시한다.
+        import asyncio as _asyncio
+        last_err = ""
+        for attempt in range(1, 4):
             try:
-                response = await client.post(
-                    f"{self.base_url}/{dataset_name}/data",
-                    params={"graph": graph_uri},
-                    content=ntriples_data,
-                    headers={"Content-Type": "application/n-triples"},
-                    auth=("admin", "admin")
-                )
-                
+                async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=10.0)) as client:
+                    response = await client.post(
+                        f"{self.base_url}/{dataset_name}/data",
+                        params={"graph": graph_uri},
+                        content=ntriples_data,
+                        headers={"Content-Type": "application/n-triples"},
+                        auth=("admin", "admin")
+                    )
                 if response.status_code in [200, 201, 204]:
                     return len(all_triples)
-                else:
-                    print(f"Fuseki insert error: {response.status_code} - {response.text}")
-                    return 0
-                    
+                last_err = f"HTTP {response.status_code} - {response.text[:300]}"
             except Exception as e:
-                print(f"Error inserting to Fuseki: {e}")
-                return 0
+                last_err = repr(e)
+            print(f"Fuseki insert attempt {attempt}/3 for doc {doc_id} did not succeed: {last_err}")
+            await _asyncio.sleep(2 * attempt)
+        raise RuntimeError(f"Fuseki insert for doc {doc_id} did not succeed after 3 attempts: {last_err}")
     
     async def delete_by_doc_id(self, kb_id: str, doc_id: str) -> bool:
         """문서 ID로 Named Graph 삭제"""

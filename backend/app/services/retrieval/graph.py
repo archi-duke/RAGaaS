@@ -91,9 +91,12 @@ class GraphRetrievalStrategy(RetrievalStrategy):
         
         all_entities = list(set(entities + expanded_entities))
         
-        if not all_entities:
+        graph_backend_for_check = kwargs.get("graph_backend", "ontology")
+        if not all_entities and graph_backend_for_check != "ontology":
             log(f"No entities found in query: {query}")
             return []
+        # ontology 백엔드는 엔티티가 없어도 유형 수준 질문(질의 계획)으로 진행한다
+        # ("스타일은 모두 몇 개야?" — docs/design-graph-class-query.md)
 
         # 4. SPARQL Search with semantic relationship understanding
         graph_hops = kwargs.get("graph_hops", 1)
@@ -123,7 +126,9 @@ class GraphRetrievalStrategy(RetrievalStrategy):
             relation_aliases=query_analysis.get("relation_aliases", []),
             relationship_type=query_analysis.get("relationship_type"),
             primary_entities=query_analysis.get("primary_entities", []),
+            translated_entities=query_analysis.get("translated_entities", []),
             intent=query_analysis.get("intent"),
+            target_class=query_analysis.get("target_class"),
             hop_count=query_analysis.get("hop_count", 1),
             query_text=query,
             **kwargs
@@ -201,6 +206,7 @@ class GraphRetrievalStrategy(RetrievalStrategy):
             "total_chunks_found": len(results), # Use final results count (includes Entity-Guided chunks)
             "query_analysis": query_analysis,
             "reasoning": self._public_reasoning(reasoning),
+            "result_summary": graph_result.get("result_summary"),
             "trace_logs": trace_logs
         }
 
@@ -239,6 +245,7 @@ class GraphRetrievalStrategy(RetrievalStrategy):
             "relation_aliases": query_analysis.get("relation_aliases") or [],
             "model": llm_model_name,
             "llm_issue": query_analysis.get("llm_issue"),
+            "target_class": query_analysis.get("target_class"),
         }
         fetched = {r.get("chunk_id") for r in results}
         if ordered:
@@ -256,7 +263,7 @@ class GraphRetrievalStrategy(RetrievalStrategy):
                 {"chunk_id": r.get("chunk_id"), "triple_idx": [], "kind": "triple"}
                 for r in results if r.get("chunk_id") and r.get("chunk_id") != "GRAPH_METADATA_ONLY"
             ]
-            reasoning["chunk_order_label"] = "임베딩 유사도 순 (LLM SPARQL 결과는 트리플별 청크 매핑 없음)"
+            reasoning.setdefault("chunk_order_label", "임베딩 유사도 순 (LLM SPARQL 결과는 트리플별 청크 매핑 없음)")
         sq = reasoning.get("sparql") or ""
         if sq.startswith("--") or sq.startswith("No Results"):
             reasoning["sparql"] = ""
@@ -267,7 +274,7 @@ class GraphRetrievalStrategy(RetrievalStrategy):
         """UI 용 reasoning (내부 URI 필드 제거)."""
         out = {k: v for k, v in reasoning.items() if k != "triples"}
         out["triples"] = [
-            {k: t.get(k) for k in ("subject", "predicate", "object", "chunk_ids", "path") if k in t}
+            {k: t.get(k) for k in ("subject", "predicate", "object", "chunk_ids", "path", "role", "entity") if k in t}
             for t in (reasoning.get("triples") or [])
         ]
         return out
@@ -328,6 +335,7 @@ class GraphRetrievalStrategy(RetrievalStrategy):
             "entity_roles": {},
             "relation_aliases": [],
             "intent": None,
+            "target_class": None,
             "primary_entities": [],
         }
         entities = set()
@@ -382,6 +390,13 @@ class GraphRetrievalStrategy(RetrievalStrategy):
            "overview"         — asks about the entity in general ("X에 대해 알려줘", "tell me about X", "X란?")
            "relation_between" — asks how two named entities are related ("A와 B의 관계")
            "multi_hop"        — chains relations ("A의 스승의 제자")
+           "class_query"      — asks for the SET of entities satisfying a condition, a count, or the
+                                max/min — not an attribute of one named entity
+                                ("테스트 복잡도가 high인 스타일은?", "X와 잘 어울리는 스타일 모두",
+                                 "pros가 가장 많은 스타일은?", "스타일은 몇 개야?")
+        9. target_class: for class_query, the kind of entity being asked for as written
+           (e.g. "아키텍처 스타일", "스타일", "참가자"), else null. Values or names that appear as
+           CONDITIONS (e.g. "high", "microservices" in "microservices와 잘 어울리는 스타일") stay in entities.
 
         Query: {query}
 
@@ -394,7 +409,8 @@ class GraphRetrievalStrategy(RetrievalStrategy):
           "hop_count": 1,
           "alternatives": [],
           "relation_aliases": ["스승", "master", "teacher", "mentor"],
-          "intent": "attribute"
+          "intent": "attribute",
+          "target_class": null
         }}
         """
         try:
@@ -423,9 +439,11 @@ class GraphRetrievalStrategy(RetrievalStrategy):
                 elif isinstance(ent, str) and ent:
                     entities.add(ent)
             # 번역 동의어 (recall 보강, 역할 없음)
+            analysis["translated_entities"] = []
             for e in data.get("translated_entities", []):
                 if e:
                     entities.add(e)
+                    analysis["translated_entities"].append(e)
 
             # 구조 분석
             if data.get("relationship_type"):
@@ -437,8 +455,10 @@ class GraphRetrievalStrategy(RetrievalStrategy):
             ][:10]
             # 질의 의도 + LLM 엔티티(primary) — 그래프 백엔드의 앵커 우선순위·경로 선택에 사용
             intent = data.get("intent")
-            if intent in ("attribute", "overview", "relation_between", "multi_hop"):
+            if intent in ("attribute", "overview", "relation_between", "multi_hop", "class_query"):
                 analysis["intent"] = intent
+            if isinstance(data.get("target_class"), str) and data["target_class"].strip():
+                analysis["target_class"] = data["target_class"].strip()
             analysis["primary_entities"] = [
                 (e.get("name") if isinstance(e, dict) else e)
                 for e in data.get("entities", [])
