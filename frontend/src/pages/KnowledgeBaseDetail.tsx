@@ -301,9 +301,16 @@ export default function KnowledgeBaseDetail() {
         if (!id) return;
         setIsPromoting(true);
         try {
-            await kbApi.promote(id, { config: promoteConfig });
+            const res = await kbApi.promote(id, { config: promoteConfig });
             await loadKB(); // Refresh KB data
-            alert('Promotion updated successfully');
+            const d = res?.data || {};
+            if (d.run_id) {
+                // 스키마 유도 승격: 초안이 매핑 제안으로 생성됨 → 문서 탭 "스키마 정렬"에서 검토·적용
+                const n = d.proposals || {};
+                alert(`스키마 초안을 만들었습니다 (클래스 지정 ${n.class || 0}, 엔티티 병합 ${n.entity || 0}, 속성 묶음 ${n.key || 0}, 값 ${n.value || 0}).\n문서 탭의 "스키마 정렬"에서 검토한 뒤 "승격 초안 적용"을 누르세요.`);
+            } else {
+                alert('Promotion updated successfully');
+            }
         } catch (error) {
             console.error('Failed to promote KB:', error);
             alert('Failed to update promotion status');

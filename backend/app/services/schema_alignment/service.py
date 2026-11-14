@@ -364,6 +364,9 @@ async def accept_proposal(kb_id: str, proposal_id: str, swap: bool = False,
     if p.kind == "key":
         rule = SchemaMappingRule(kb_id=kb_id, rule_type="key", source_path=source, target_path=tgt,
                                  origin=f"proposal:{p.id}")
+    elif p.kind in ("entity", "class"):
+        rule = SchemaMappingRule(kb_id=kb_id, rule_type=p.kind, source_value=source, target_value=tgt,
+                                 origin=f"proposal:{p.id}")
     else:
         rule = SchemaMappingRule(kb_id=kb_id, rule_type="value", source_value=source, target_value=tgt,
                                  origin=f"proposal:{p.id}")

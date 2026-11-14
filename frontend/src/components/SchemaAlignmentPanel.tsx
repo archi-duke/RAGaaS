@@ -1,11 +1,11 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { X as XIcon, RefreshCw, Check, ArrowLeftRight, Ban, Trash2 } from 'lucide-react';
-import { schemaApi } from '../services/api';
+import { kbApi, schemaApi } from '../services/api';
 
 // KB 스키마 매핑 제안 검토 / 규칙 관리 (docs/design-schema-mismatch.md §5)
 interface Proposal {
     id: string;
-    kind: 'key' | 'value';
+    kind: 'key' | 'value' | 'class' | 'entity';
     source: string;
     target: string;
     basis: string;
@@ -15,7 +15,7 @@ interface Proposal {
 
 interface Rule {
     id: string;
-    rule_type: 'key' | 'value' | 'ignore';
+    rule_type: 'key' | 'value' | 'ignore' | 'entity' | 'class';
     source_path?: string;
     target_path?: string;
     source_value?: string;
@@ -75,6 +75,8 @@ export default function SchemaAlignmentPanel({ kbId, onClose, onChanged }: Props
     const ruleText = (r: Rule) => {
         if (r.rule_type === 'key') return `${r.source_path} → ${r.target_path}`;
         if (r.rule_type === 'value') return `'${r.source_value}' → '${r.target_value}'`;
+        if (r.rule_type === 'entity') return `엔티티 '${r.source_value}' → '${r.target_value}'`;
+        if (r.rule_type === 'class') return `'${r.source_value}' ∈ ${r.target_value}`;
         return `구별 유지: ${(r.pair || []).join(' ≠ ')}`;
     };
 
@@ -101,6 +103,19 @@ export default function SchemaAlignmentPanel({ kbId, onClose, onChanged }: Props
                 </p>
                 {message && <div style={{ fontSize: '0.85rem', margin: '0.5rem 0', color: '#1e40af' }}>{message}</div>}
 
+                {(() => {
+                    const runIds = Array.from(new Set(proposals.map((p) => p.evidence?.run_id).filter(Boolean))) as string[];
+                    return runIds.map((rid) => (
+                        <div key={rid} style={{ background: '#eef2ff', padding: '0.6rem', borderRadius: '6px', margin: '0.5rem 0', fontSize: '0.85rem' }}>
+                            승격 초안 <code>{rid}</code>: {proposals.filter((p) => p.evidence?.run_id === rid).length}건 — 잘못된 항목은 "구별 유지"로 거절한 뒤 적용하세요.{' '}
+                            <button className="btn btn-primary" style={btn} disabled={!!busy}
+                                onClick={() => run(`apply-${rid}`, () => kbApi.applyPromotion(kbId, rid),
+                                    (r) => `승격 적용: 규칙 ${r?.accepted ?? 0}건, 클래스 ${r?.classes ?? 0}, 속성 ${r?.properties ?? 0}, 리플레이 문서 ${r?.replayed ?? 0}`)}>
+                                <Check size={14} /> 승격 초안 적용
+                            </button>
+                        </div>
+                    ));
+                })()}
                 <h4 style={{ margin: '1rem 0 0.5rem' }}>제안 {proposals.length}건</h4>
                 {proposals.length === 0 ? (
                     <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>검토할 제안이 없습니다.</div>
@@ -114,7 +129,7 @@ export default function SchemaAlignmentPanel({ kbId, onClose, onChanged }: Props
                         <tbody>
                             {proposals.map((p) => (
                                 <tr key={p.id} style={{ borderBottom: '1px solid var(--border)' }}>
-                                    <td style={{ padding: '0.4rem' }}>{p.kind === 'key' ? '키' : '값'}</td>
+                                    <td style={{ padding: '0.4rem' }}>{({ key: '키', value: '값', class: '클래스', entity: '엔티티 병합' } as Record<string, string>)[p.kind] || p.kind}</td>
                                     <td><code>{p.source}</code> → <code>{p.target}</code>
                                         <div style={{ fontSize: '0.72rem', opacity: 0.7 }}>
                                             멤버 {p.evidence?.source_members ?? '-'} / {p.evidence?.target_members ?? '-'}{p.evidence?.path ? ` · 경로 ${p.evidence.path}` : ''}

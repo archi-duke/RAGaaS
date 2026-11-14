@@ -74,3 +74,25 @@ def test_validate_rule_and_text_triples():
     triples = [{"subject": "s", "predicate": "advantages", "object": "o"}]
     assert apply_to_triples(triples, [{"rule_type": "key", "source_path": "advantages", "target_path": "pros"}]) == 1
     assert triples[0]["predicate"] == "pros"
+
+
+def test_apply_rules_to_triples_replay():
+    from app.core.schema_normalizer import apply_rules_to_triples
+    raw = [
+        {"subject": "Hexagonal", "predicate": "장점은", "object": "중간이다", "source_node_id": "c1"},
+        {"subject": "Hexagonal 아키텍처", "predicate": "has_advantage", "object": "x", "source_node_id": "c1"},
+        {"subject": "Hexagonal", "predicate": "is", "object": "Hexagonal 아키텍처", "source_node_id": "c2"},
+    ]
+    rules = [
+        {"rule_type": "entity", "source_value": "Hexagonal", "target_value": "Hexagonal 아키텍처"},
+        {"rule_type": "key", "source_path": "장점은", "target_path": "장점"},
+        {"rule_type": "key", "source_path": "has_advantage", "target_path": "장점"},
+        {"rule_type": "value", "source_value": "중간이다", "target_value": "중간"},
+        {"rule_type": "class", "source_value": "Hexagonal 아키텍처", "target_value": "ArchitecturePattern"},
+    ]
+    out, rep = apply_rules_to_triples(raw, rules)
+    assert len(out) == 2                                     # 병합으로 생긴 자기 루프 제거
+    assert {t["predicate"] for t in out} == {"장점"}
+    assert out[0]["object"] == "중간" and out[0]["subject_type"] == "ArchitecturePattern"
+    assert raw[0]["subject"] == "Hexagonal"                  # 입력 불변 → 멱등
+    assert apply_rules_to_triples(raw, rules)[0] == out

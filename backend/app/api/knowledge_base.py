@@ -190,6 +190,23 @@ async def promote_knowledge_base(
         return {"id": kb.id, "is_promoted": kb.is_promoted, "promotion_metadata": kb.promotion_metadata}
     
     # ========================================
+    # 스키마 유도 승격 (기본, docs/design-graph-promotion.md) — 초안을 제안으로 반환.
+    # 기존 7단계 파이프라인은 {"mode": "legacy"} 로만 실행한다.
+    # ========================================
+    if payload.get("mode", "induce") != "legacy" and kb.graph_backend == "ontology":
+        from app.services.schema_alignment.induction import run_induction
+        llm_model_cfg = (payload.get("config") or {}).get("llm_model") or {}
+        if not llm_model_cfg:
+            for st in (kb.pipeline_config or {}).get("stages") or []:
+                if st.get("type") == "graph" and (st.get("params") or {}).get("llm_model"):
+                    llm_model_cfg = st["params"]["llm_model"]
+        llm_model_cfg = llm_model_cfg or (kb.llm_model_config or {})
+        try:
+            return await run_induction(kb_id, llm_model_cfg)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    # ========================================
     # STEP 1: Graph Store → TriG 변환
     # ========================================
     try:
@@ -353,6 +370,13 @@ async def promote_knowledge_base(
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Promotion failed: {_format_model_error_message(str(e))}")
+
+@router.post("/{kb_id}/promote/{run_id}/apply")
+async def apply_promotion(kb_id: str, run_id: str):
+    """스키마 유도 초안 일괄 적용: 제안 수락 → 규칙 → TBox → 텍스트 문서 리플레이."""
+    from app.services.schema_alignment.induction import apply_induction
+    return await apply_induction(kb_id, run_id)
+
 
 @router.delete("/{kb_id}")
 async def delete_knowledge_base(kb_id: str):
