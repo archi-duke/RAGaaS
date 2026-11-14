@@ -97,6 +97,8 @@ async def list_knowledge_bases(skip: int = 0, limit: int = 100):
             "graph_backend": kb.graph_backend,
             "is_promoted": kb.is_promoted,
             "promotion_metadata": kb.promotion_metadata,
+            "schema_source": getattr(kb, "schema_source", "none"),
+            "schema_status": getattr(kb, "schema_status", None),
             "pipeline_config": kb.pipeline_config or {"stages": []},
             "document_count": doc_count,
             "total_size": 0
@@ -186,9 +188,28 @@ async def promote_knowledge_base(
                 print(f"[Revert] ⚠️ Failed to drop ontology graph: {e}")
         kb.is_promoted = False
         kb.promotion_metadata = {}
+        kb.schema_source = "none"
+        kb.schema_status = None
         await kb.save()
         return {"id": kb.id, "is_promoted": kb.is_promoted, "promotion_metadata": kb.promotion_metadata}
     
+    # ========================================
+    # 스키마 유도 승격 (기본, docs/design-graph-promotion.md) — 초안을 제안으로 반환.
+    # 기존 7단계 파이프라인은 {"mode": "legacy"} 로만 실행한다.
+    # ========================================
+    if payload.get("mode", "induce") != "legacy" and kb.graph_backend == "ontology":
+        from app.services.schema_alignment.induction import run_induction
+        llm_model_cfg = (payload.get("config") or {}).get("llm_model") or {}
+        if not llm_model_cfg:
+            for st in (kb.pipeline_config or {}).get("stages") or []:
+                if st.get("type") == "graph" and (st.get("params") or {}).get("llm_model"):
+                    llm_model_cfg = st["params"]["llm_model"]
+        llm_model_cfg = llm_model_cfg or (kb.llm_model_config or {})
+        try:
+            return await run_induction(kb_id, llm_model_cfg)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
     # ========================================
     # STEP 1: Graph Store → TriG 변환
     # ========================================
@@ -241,7 +262,17 @@ async def promote_knowledge_base(
         
         config = payload.get("config", payload)
         
+        # 스키마 유도 모델: KB 그래프 단계 모델 → KB 기본 LLM (DB 등록 키 사용)
+        from app.core.models_resolver import resolve_model_config
+        llm_model_cfg = {}
+        for st in (kb.pipeline_config or {}).get("stages") or []:
+            if st.get("type") == "graph" and (st.get("params") or {}).get("llm_model"):
+                llm_model_cfg = st["params"]["llm_model"]
+        llm_model_cfg = config.get("llm_model") or llm_model_cfg or (kb.llm_model_config or {})
+        promoter_llm_cfg = await resolve_model_config(llm_model_cfg) if llm_model_cfg else None
+
         promoter = OntologyPromoter(
+            llm_cfg=promoter_llm_cfg,
             confidence_threshold=config.get("confidence_threshold", 0.6),
             min_evidence_count=config.get("min_evidence_count", 1),
             detect_cycles=config.get("detect_cycles", True),
@@ -343,6 +374,15 @@ async def promote_knowledge_base(
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Promotion failed: {_format_model_error_message(str(e))}")
+
+@router.post("/{kb_id}/promote/{run_id}/apply")
+async def apply_promotion(kb_id: str, run_id: str, payload: dict = Body(default={})):
+    """스키마 유도 초안 일괄 적용: 제안 수락 → 규칙 → TBox → 텍스트 문서 리플레이.
+    payload.reextract=True 면 이어서 스키마 기준 재추출(L2)을 백그라운드로 시작 (UI 기본 체크)."""
+    from app.services.schema_alignment.induction import apply_induction
+    return await apply_induction(kb_id, run_id, bool(payload.get("reextract", False)),
+                                 payload.get("reextract_model") or "ingest")
+
 
 @router.delete("/{kb_id}")
 async def delete_knowledge_base(kb_id: str):

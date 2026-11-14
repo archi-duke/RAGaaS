@@ -114,6 +114,8 @@ async def register_schema_tbox(kb: KBModel, schema: dict) -> dict:
 
     kb.promotion_metadata = promotion_metadata
     kb.is_promoted = True
+    kb.schema_source = "declared"      # JSON Schema 로 선언된 스키마
+    kb.schema_status = "active"
     await kb.save()
 
     return {"classes": summary["classes"], "properties": summary["properties"]}
@@ -761,7 +763,10 @@ async def upload_document(
             graph_store = "fuseki" if kb.graph_backend == "ontology" else "neo4j"
 
             # 구조화 문서(.json/.yaml/.yml) + 온톨로지 승격 KB → preview/confirm 정렬 검토 흐름 (C안 §6/§10/§11)
-            if _is_structured_filename(doc.filename) and kb.is_promoted and kb.graph_backend == "ontology":
+            # 선언(JSON Schema)·레거시 승격 KB 만 preview/HOLD 정렬 흐름. 구조화 문서로 전환된 KB(structured)와
+            # 유도 승격 KB(induced)는 스키마 정렬(제안·규칙) 흐름을 쓴다 (docs/design-schema-mismatch.md).
+            if (_is_structured_filename(doc.filename) and kb.is_promoted and kb.graph_backend == "ontology"
+                    and getattr(kb, "schema_source", "none") not in ("structured", "induced")):
                 preview = await ingest_client.create_preview(
                     kb_id=kb_id,
                     doc_id=str(doc.id),
@@ -936,6 +941,8 @@ async def delete_document(kb_id: str, doc_id: str):
                 # Reset Promotion state
                 kb.is_promoted = False
                 kb.promotion_metadata = {}
+                kb.schema_source = "none"
+                kb.schema_status = None
                 await kb.save()
                 logger.info(f"[DocumentDelete] Reset Promotion state for KB {kb_id}")
             except Exception as e:

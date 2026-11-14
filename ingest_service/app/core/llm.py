@@ -101,10 +101,17 @@ def _build_payload(
     if not messages:
         raise LLMError("LLM 호출 messages 가 비어 있습니다.")
     payload: dict = {"model": resolved_model, "messages": messages}
-    if temperature is not None:
-        payload["temperature"] = temperature
-    if max_tokens is not None:
-        payload["max_tokens"] = max_tokens
+    m = resolved_model.lower()
+    if (m.startswith("gpt-5") and "chat" not in m) or m.startswith(("o1", "o3", "o4")):
+        # OpenAI 추론 모델: temperature 기본값만 허용, max_completion_tokens 사용 (backend llm.py 와 동일)
+        if max_tokens is not None:
+            payload["max_completion_tokens"] = max(max_tokens * 4, 4000)
+        payload["reasoning_effort"] = "low"
+    else:
+        if temperature is not None:
+            payload["temperature"] = temperature
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
     if response_format is not None:
         payload["response_format"] = response_format
     if extra_body:

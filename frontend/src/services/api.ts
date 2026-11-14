@@ -46,6 +46,9 @@ export const kbApi = {
     get: (id: string) => api.get(`knowledge-bases/${id}`),
     delete: (id: string) => api.delete(`knowledge-bases/${id}`),
     promote: (id: string, payload: any = {}) => api.post(`knowledge-bases/${id}/promote`, payload),
+    // 스키마 유도 초안 일괄 적용 (docs/design-graph-promotion.md)
+    applyPromotion: (id: string, runId: string, opts: { reextract?: boolean; reextract_model?: string } = {}) =>
+        api.post(`knowledge-bases/${id}/promote/${runId}/apply`, opts),
     getExtractionRules: () => api.get('knowledge-bases/extraction-rules/content'),
     validateExtractionRules: (content: string) => api.post('knowledge-bases/extraction-rules/validate', { content }),
     saveExtractionRules: (content: string) => api.post('knowledge-bases/extraction-rules/save', { content }),
@@ -166,6 +169,12 @@ export const schemaApi = {
     deleteRule: (kbId: string, id: string) => api.delete(`knowledge-bases/${kbId}/schema/rules/${id}`),
     detect: (kbId: string) => api.post(`knowledge-bases/${kbId}/schema/detect`),
     renormalize: (kbId: string, docIds?: string[]) => api.post(`knowledge-bases/${kbId}/schema/renormalize`, { doc_ids: docIds }),
+    // 스키마 기준 재추출 (승격 L2, 옵션)
+    reextractEstimate: (kbId: string) => api.get(`knowledge-bases/${kbId}/schema/reextract/estimate`),
+    reextract: (kbId: string, docIds?: string[], model = 'ingest') =>
+        api.post(`knowledge-bases/${kbId}/schema/reextract`, { doc_ids: docIds, model }),
+    reextractStatus: (kbId: string) => api.get(`knowledge-bases/${kbId}/schema/reextract/status`),
+    reextractRevert: (kbId: string, docIds?: string[]) => api.post(`knowledge-bases/${kbId}/schema/reextract/revert`, { doc_ids: docIds }),
     reingest: (kbId: string, docId: string, file: File) => {
         const formData = new FormData();
         formData.append('file', file);

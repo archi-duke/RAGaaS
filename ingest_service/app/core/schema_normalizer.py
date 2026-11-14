@@ -310,3 +310,65 @@ def apply_to_triples(triples: List[Dict[str, Any]], rules: Optional[List[Dict[st
             t["predicate"] = tgt
             n += 1
     return n
+
+
+# ---------------------------------------------------------------------------
+# 트리플 리플레이 (텍스트/LLM 추출 그래프의 ABox 재구성 — docs/design-graph-promotion.md §3(c))
+# ---------------------------------------------------------------------------
+
+def apply_rules_to_triples(
+    triples: List[Dict[str, Any]], rules: Optional[List[Dict[str, Any]]]
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """평면 트리플(LLM 추출)에 KB 규칙을 결정적으로 적용한 새 목록과 보고서.
+
+    적용 순서: entity(엔티티 병합, 주어·목적어) → key(predicate, 마지막 세그먼트)
+              → value(목적어 전체 일치, scope) → class(엔티티 → 클래스, subject_type/object_type)
+    입력은 변경하지 않는다 (raw 사본에서 항상 다시 계산 → 멱등).
+    """
+    active = [r for r in (rules or []) if r.get("status", "active") == "active"]
+    entity_map = {compact(r["source_value"]): r["target_value"] for r in active
+                  if r.get("rule_type") == "entity" and r.get("source_value") and r.get("target_value")}
+    key_map = {}
+    for r in active:
+        if r.get("rule_type") == "key":
+            s, t = _segs(r.get("source_path")), _segs(r.get("target_path"))
+            if s and t:
+                key_map[compact(s[-1])] = t[-1]
+    value_rules = [r for r in active if r.get("rule_type") == "value" and r.get("source_value")]
+    class_map = {compact(r["source_value"]): r["target_value"] for r in active
+                 if r.get("rule_type") == "class" and r.get("source_value") and r.get("target_value")}
+
+    counts = {"entity": 0, "key": 0, "value": 0, "class": 0}
+    out: List[Dict[str, Any]] = []
+    seen = set()
+    for t in triples:
+        n = dict(t)
+        for side in ("subject", "object"):
+            tgt = entity_map.get(compact(n.get(side)))
+            if tgt and n.get(side) != tgt:
+                n[side] = tgt
+                counts["entity"] += 1
+        tgt = key_map.get(compact(n.get("predicate")))
+        if tgt and n.get("predicate") != tgt:
+            n["predicate"] = tgt
+            counts["key"] += 1
+        cv = compact(n.get("object"))
+        for r in value_rules:
+            scope = r.get("scope_paths") or ["*"]
+            if cv and cv == compact(r["source_value"]) and ("*" in scope or n.get("predicate") in scope):
+                n["object"] = r["target_value"]
+                counts["value"] += 1
+                break
+        for side, tkey in (("subject", "subject_type"), ("object", "object_type")):
+            cls = class_map.get(compact(n.get(side)))
+            if cls:
+                n[tkey] = cls
+                counts["class"] += 1
+        if compact(n.get("subject")) and compact(n.get("subject")) == compact(n.get("object")):
+            continue  # 병합으로 생긴 자기 루프 제거
+        key = (n.get("subject"), n.get("predicate"), n.get("object"), n.get("source_node_id"))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(n)
+    return out, {"counts": counts, "input": len(triples), "output": len(out)}

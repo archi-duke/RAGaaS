@@ -1,11 +1,11 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { X as XIcon, RefreshCw, Check, ArrowLeftRight, Ban, Trash2 } from 'lucide-react';
-import { schemaApi } from '../services/api';
+import { kbApi, schemaApi } from '../services/api';
 
 // KB 스키마 매핑 제안 검토 / 규칙 관리 (docs/design-schema-mismatch.md §5)
 interface Proposal {
     id: string;
-    kind: 'key' | 'value';
+    kind: 'key' | 'value' | 'class' | 'entity';
     source: string;
     target: string;
     basis: string;
@@ -15,7 +15,7 @@ interface Proposal {
 
 interface Rule {
     id: string;
-    rule_type: 'key' | 'value' | 'ignore';
+    rule_type: 'key' | 'value' | 'ignore' | 'entity' | 'class';
     source_path?: string;
     target_path?: string;
     source_value?: string;
@@ -43,6 +43,9 @@ export default function SchemaAlignmentPanel({ kbId, onClose, onChanged }: Props
     const [rules, setRules] = useState<Rule[]>([]);
     const [busy, setBusy] = useState<string | null>(null);
     const [message, setMessage] = useState<string>('');
+    // 승격 초안 적용 시 스키마 기준 재추출(L2)을 이어서 실행 — 기본 선택, 사용자가 끌 수 있음
+    const [withReextract, setWithReextract] = useState(true);
+    const [rxInfo, setRxInfo] = useState<{ chunks: number; docs: number; model?: string } | null>(null);
 
     const load = useCallback(async () => {
         const [p, r] = await Promise.all([schemaApi.proposals(kbId), schemaApi.rules(kbId)]);
@@ -51,6 +54,11 @@ export default function SchemaAlignmentPanel({ kbId, onClose, onChanged }: Props
     }, [kbId]);
 
     useEffect(() => { load().catch(() => setMessage('제안·규칙을 불러오지 못했습니다.')); }, [load]);
+    useEffect(() => {
+        schemaApi.reextractEstimate(kbId).then((r) => setRxInfo({
+            chunks: r.data.total_chunks || 0, docs: (r.data.documents || []).length, model: r.data.models?.ingest,
+        })).catch(() => setRxInfo(null));
+    }, [kbId]);
 
     const run = async (key: string, fn: () => Promise<any>, done: (res: any) => string) => {
         setBusy(key);
@@ -75,6 +83,8 @@ export default function SchemaAlignmentPanel({ kbId, onClose, onChanged }: Props
     const ruleText = (r: Rule) => {
         if (r.rule_type === 'key') return `${r.source_path} → ${r.target_path}`;
         if (r.rule_type === 'value') return `'${r.source_value}' → '${r.target_value}'`;
+        if (r.rule_type === 'entity') return `엔티티 '${r.source_value}' → '${r.target_value}'`;
+        if (r.rule_type === 'class') return `'${r.source_value}' ∈ ${r.target_value}`;
         return `구별 유지: ${(r.pair || []).join(' ≠ ')}`;
     };
 
@@ -101,6 +111,34 @@ export default function SchemaAlignmentPanel({ kbId, onClose, onChanged }: Props
                 </p>
                 {message && <div style={{ fontSize: '0.85rem', margin: '0.5rem 0', color: '#1e40af' }}>{message}</div>}
 
+                {(() => {
+                    const runIds = Array.from(new Set(proposals.map((p) => p.evidence?.run_id).filter(Boolean))) as string[];
+                    return runIds.map((rid) => (
+                        <div key={rid} style={{ background: '#eef2ff', padding: '0.6rem', borderRadius: '6px', margin: '0.5rem 0', fontSize: '0.85rem' }}>
+                            승격 초안 <code>{rid}</code>: {proposals.filter((p) => p.evidence?.run_id === rid).length}건 — 잘못된 항목은 "구별 유지"로 거절한 뒤 적용하세요.
+                            {rxInfo && rxInfo.docs > 0 && (
+                                <div style={{ margin: '0.5rem 0', padding: '0.5rem', background: '#fff', borderRadius: '4px' }}>
+                                    <label>
+                                        <input type="checkbox" checked={withReextract} onChange={(e) => setWithReextract(e.target.checked)} />{' '}
+                                        <b>적용 후 스키마 기준 재추출도 실행</b> (텍스트 문서 {rxInfo.docs}건, 청크 {rxInfo.chunks}개{rxInfo.model ? `, 모델 ${rxInfo.model}` : ''})
+                                    </label>
+                                    <ul style={{ margin: '0.3rem 0 0', paddingLeft: '1.2rem', fontSize: '0.78rem', opacity: 0.85 }}>
+                                        <li>확정 스키마로 저장된 청크에서 정보를 다시 뽑아, 묶인 조건을 나누고 관계 이름을 스키마에 맞춥니다.</li>
+                                        <li>청크마다 LLM 을 호출해 <b>비용이 듭니다</b>. 결과는 스키마 품질에 좌우됩니다.</li>
+                                        <li>스키마 밖 사실은 보존돼 새 제안으로 올라오고, 근거 청크는 유지되며, 문서 탭 "고급 → 스키마 기준 재추출"에서 진행 확인·되돌리기가 가능합니다.</li>
+                                    </ul>
+                                </div>
+                            )}
+                            <button className="btn btn-primary" style={btn} disabled={!!busy}
+                                onClick={() => run(`apply-${rid}`, () => kbApi.applyPromotion(kbId, rid, { reextract: withReextract && !!rxInfo?.docs }),
+                                    (r) => `승격 적용: 규칙 ${r?.accepted ?? 0}건, 클래스 ${r?.classes ?? 0}, 속성 ${r?.properties ?? 0}, 리플레이 문서 ${r?.replayed ?? 0}`
+                                        + (r?.reextract?.queued ? ` · 재추출 시작 (문서 ${r.reextract.queued.length}건, 진행은 고급 → 스키마 기준 재추출에서 확인)` : '')
+                                        + (r?.reextract?.error ? ` · 재추출 시작 안 됨: ${r.reextract.error}` : ''))}>
+                                <Check size={14} /> 승격 초안 적용
+                            </button>
+                        </div>
+                    ));
+                })()}
                 <h4 style={{ margin: '1rem 0 0.5rem' }}>제안 {proposals.length}건</h4>
                 {proposals.length === 0 ? (
                     <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>검토할 제안이 없습니다.</div>
@@ -114,7 +152,7 @@ export default function SchemaAlignmentPanel({ kbId, onClose, onChanged }: Props
                         <tbody>
                             {proposals.map((p) => (
                                 <tr key={p.id} style={{ borderBottom: '1px solid var(--border)' }}>
-                                    <td style={{ padding: '0.4rem' }}>{p.kind === 'key' ? '키' : '값'}</td>
+                                    <td style={{ padding: '0.4rem' }}>{({ key: '키', value: '값', class: '클래스', entity: '엔티티 병합' } as Record<string, string>)[p.kind] || p.kind}</td>
                                     <td><code>{p.source}</code> → <code>{p.target}</code>
                                         <div style={{ fontSize: '0.72rem', opacity: 0.7 }}>
                                             멤버 {p.evidence?.source_members ?? '-'} / {p.evidence?.target_members ?? '-'}{p.evidence?.path ? ` · 경로 ${p.evidence.path}` : ''}

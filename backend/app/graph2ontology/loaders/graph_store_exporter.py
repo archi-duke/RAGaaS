@@ -48,17 +48,21 @@ class GraphStoreExporter:
         logger.info(f"[GraphStoreExporter] Starting Fuseki export for KB: {kb_id}")
         
         try:
-            # UnionGraph에서 모든 트리플 조회
-            # UnionGraph는 모든 Named Graph의 합집합을 제공합니다
-            # Note: 온톨로지 그래프는 별도 그래프로 관리되므로 자동으로 제외됨
+            # 문서 그래프(urn:doc:*)의 지식 트리플만 내보낸다.
+            # - 이전에는 UnionGraph 전체라 urn:ontology(이전 승격 TBox)가 입력으로 되먹임됐다
+            # - reification statement(rag.local/stmt/), 메타(meta:), 자동 역관계(inverse_*)는
+            #   스키마 유도 입력이 아니다 (관계 상위를 차지해 실제 관계가 잘리던 문제)
             construct_query = """
             PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
             PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-            
+
             CONSTRUCT { ?s ?p ?o }
-            FROM <urn:x-arq:UnionGraph>
             WHERE {
-                ?s ?p ?o .
+                GRAPH ?g { ?s ?p ?o . }
+                FILTER(STRSTARTS(STR(?g), "urn:doc:"))
+                FILTER(!STRSTARTS(STR(?s), "http://rag.local/stmt/"))
+                FILTER(!STRSTARTS(STR(?p), "http://rag.local/meta/"))
+                FILTER(!CONTAINS(STR(?p), "/inverse_"))
             }
             """
             

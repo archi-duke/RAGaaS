@@ -31,6 +31,8 @@ class KnowledgeBase(KnowledgeBaseBase):
     total_size: Optional[int] = 0
     is_promoted: bool = False
     promotion_metadata: Optional[dict] = {}
+    schema_source: Optional[str] = "none"
+    schema_status: Optional[str] = None
     pipeline_config: Optional[dict] = {"stages": []}
 
     class Config:
