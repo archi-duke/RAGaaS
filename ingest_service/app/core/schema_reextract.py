@@ -21,11 +21,14 @@ def build_schema_text(spec: Dict[str, Any]) -> str:
     for c in spec.get("classes") or []:
         mem = ", ".join((c.get("members") or [])[:40])
         lines.append(f"- {c['name']}: {c.get('description') or ''}" + (f" (알려진 멤버: {mem})" if mem else ""))
-    lines.append("\n[속성] 이름 (domain) — 같은 뜻의 다른 표기 / 허용 값")
+    lines.append("\n[속성] 이름 (domain → range): 정의 — 같은 뜻의 다른 표기 / 허용 값")
     for p in spec.get("properties") or []:
         aliases = ", ".join(a for a in (p.get("aliases") or []) if a != p["name"])
         vals = ", ".join((p.get("values") or [])[:15])
-        line = f"- {p['name']}" + (f" ({p['domain']})" if p.get("domain") else "")
+        dom, rng = p.get("domain") or "", p.get("range") or ""
+        line = f"- {p['name']}" + (f" ({dom or '?'} → {rng or '?'})" if (dom or rng) else "")
+        if p.get("description"):
+            line += f": {p['description']}"
         if aliases:
             line += f" — 별칭: {aliases}"
         if vals:
@@ -42,6 +45,8 @@ def build_messages(schema_text: str, text: str) -> List[Dict[str, str]]:
 규칙:
 1. 사실 하나 = 트리플 하나. "A이거나 B이거나 C일 때" 같은 묶음은 조건마다 따로 트리플을 만든다.
 2. predicate 는 위 [속성] 이름만 쓴다 (별칭이 보이면 대표 이름으로). 개수 제한 없음.
+   정의가 있는 속성은 정의의 의미와 방향(subject=domain, object=range)을 지킨다. 예: 정의가 '스승 → 제자' 이면
+   "B는 A의 지도로 학위를 받았다" 는 subject=A, object=B. 일반 동사(소속·발표 등)로 뭉뚱그리지 말고 가장 구체적인 속성을 고른다.
 3. subject 는 알려진 멤버 이름 그대로 (같은 대상의 다른 표기도 대표 이름으로).
 4. object 는 허용 값이 있으면 그 표기로 (예: 높다 → 목록에 '높다'가 있으면 '높다'). 없으면 짧은 명사구로.
 5. 위 속성으로 표현할 수 없는 사실은 out_of_schema 에 넣는다 (predicate 는 짧은 명사구로 지어도 된다). 버리지 마라.

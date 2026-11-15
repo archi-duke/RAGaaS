@@ -47,7 +47,8 @@ async def build_schema_spec(kb) -> Dict[str, Any]:
                     vals.append(v)
         except Exception:
             pass
-        props.append({"name": p["name"], "domain": p.get("domain", ""), "aliases": p.get("members", []),
+        props.append({"name": p["name"], "domain": p.get("domain", ""), "range": p.get("range", ""),
+                      "description": p.get("description", ""), "aliases": p.get("members", []),
                       "values": vals[:15]})
     return {"classes": classes, "properties": props}
 

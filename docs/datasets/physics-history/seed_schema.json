@@ -1,0 +1,147 @@
+{
+  "_note": "물리학사 데이터셋의 시드 스키마 — 사람이 정한 핵심 관계 어휘 (facts.json relations 와 같은 어휘). POST /knowledge-bases/{kb}/promote {\"seed_schema\": <이 파일>}",
+  "classes": [
+    {
+      "name": "Person",
+      "description": "물리학자·수학자·철학자 등 인물"
+    },
+    {
+      "name": "TheoryOrConcept",
+      "description": "이론·법칙·방정식·원리·개념·가설·모형"
+    },
+    {
+      "name": "ExperimentOrObservation",
+      "description": "실험·관측·측정"
+    },
+    {
+      "name": "Phenomenon",
+      "description": "자연 현상·입자·천체 등 발견 대상"
+    },
+    {
+      "name": "Work",
+      "description": "책·논문 등 저작"
+    },
+    {
+      "name": "Institution",
+      "description": "대학·연구소·관청 등 기관"
+    },
+    {
+      "name": "Award",
+      "description": "상 (노벨 물리학상 등)"
+    },
+    {
+      "name": "Era",
+      "description": "시대 구분 (고대 자연철학 / 과학혁명 / 고전물리학 / 현대물리학)"
+    }
+  ],
+  "properties": [
+    {
+      "name": "제안함",
+      "description": "인물 → 이론/법칙/방정식/개념/가설. 인물이 해당 이론·개념을 처음 제시하거나 정식화함.",
+      "domain": "Person",
+      "range": "TheoryOrConcept"
+    },
+    {
+      "name": "발견함",
+      "description": "인물 → 현상/법칙/천체/입자. 인물이 자연의 현상·대상을 발견함.",
+      "domain": "Person",
+      "range": "Phenomenon"
+    },
+    {
+      "name": "수행함",
+      "description": "인물 → 실험/관측. 인물이 해당 실험 또는 관측을 수행함.",
+      "domain": "Person",
+      "range": "ExperimentOrObservation"
+    },
+    {
+      "name": "저술함",
+      "description": "인물 → 저작(책·논문). 인물이 저작을 집필·출간함.",
+      "domain": "Person",
+      "range": "Work"
+    },
+    {
+      "name": "소속",
+      "description": "인물 → 기관(대학·연구소·관청). 인물이 해당 기관에 재직·재학·소속됨. time은 소속 시작 연도.",
+      "domain": "Person",
+      "range": "Institution"
+    },
+    {
+      "name": "지도교수_of",
+      "description": "스승 → 제자 (방향 고정: '스승 | 지도교수_of | 제자'). 박사 지도 또는 조수·박사후 연구로 직접 사사한 관계.",
+      "domain": "Person",
+      "range": "Person"
+    },
+    {
+      "name": "수상함",
+      "description": "인물 → 상. time은 수상 연도(노벨상은 '해당 연도 상' 기준, 예: 아인슈타인 1921년도).",
+      "domain": "Person",
+      "range": "Award"
+    },
+    {
+      "name": "계승_발전",
+      "description": "이론/개념 A → 이론/개념 B ('A | 계승_발전 | B'): B가 A를 이어받아 발전시킴 (A가 선행).",
+      "domain": "TheoryOrConcept",
+      "range": "TheoryOrConcept"
+    },
+    {
+      "name": "일반화함",
+      "description": "이론 B → 이론 A ('B | 일반화함 | A'): B가 더 일반적이며 A를 특수한 경우로 포함함.",
+      "domain": "TheoryOrConcept",
+      "range": "TheoryOrConcept"
+    },
+    {
+      "name": "근사_극한",
+      "description": "이론 A → 이론 B ('A | 근사_극한 | B'): A는 B의 근사 또는 특정 극한(저속·약한 중력·장/단파장 등)에서 얻어짐.",
+      "domain": "TheoryOrConcept",
+      "range": "TheoryOrConcept"
+    },
+    {
+      "name": "반박함",
+      "description": "인물/실험/관측/이론/저작 → 이론/가설. 주어가 목적어를 논박하거나 반증 근거가 됨.",
+      "domain": "",
+      "range": ""
+    },
+    {
+      "name": "확인함",
+      "description": "실험/관측 → 이론/법칙. 실험·관측 결과가 이론의 예측을 확인함.",
+      "domain": "ExperimentOrObservation",
+      "range": "TheoryOrConcept"
+    },
+    {
+      "name": "통합함",
+      "description": "이론 → 이론/분야/법칙. 이전에 분리되어 있던 대상을 하나의 이론 안에 통합함.",
+      "domain": "TheoryOrConcept",
+      "range": "TheoryOrConcept"
+    },
+    {
+      "name": "기반함",
+      "description": "이론/모형/실험/보정법 → 개념/원리. 주어가 목적어를 토대·전제로 삼음.",
+      "domain": "",
+      "range": "TheoryOrConcept"
+    },
+    {
+      "name": "시대",
+      "description": "엔티티(인물/이론/기관) → 시대 (고대 자연철학 / 과학혁명 / 고전물리학 / 현대물리학).",
+      "domain": "",
+      "range": "Era"
+    },
+    {
+      "name": "영향_줌",
+      "description": "인물 → 인물 ('A | 영향_줌 | B'): A의 연구·사상이 B에게 직접적 영향을 줌.",
+      "domain": "Person",
+      "range": "Person"
+    },
+    {
+      "name": "완성함",
+      "description": "인물이 이미 제안된 이론을 이론적으로 완성(예: 재규격화된 QED)했다 — 최초 제안과 구분",
+      "domain": "Person",
+      "range": "TheoryOrConcept"
+    },
+    {
+      "name": "형성에_기여함",
+      "description": "인물이 후대에 하나의 이름으로 정리된 관점·해석의 형성에 기여했다 (예: 코펜하겐 해석, 명칭은 1950년대)",
+      "domain": "Person",
+      "range": "TheoryOrConcept"
+    }
+  ]
+}

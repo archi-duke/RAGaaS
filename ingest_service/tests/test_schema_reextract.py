@@ -23,3 +23,11 @@ def test_parse_marks_out_of_schema_and_keeps_evidence():
     assert all(t["source_node_id"] == "node-1" for t in out)
     assert [t["out_of_schema"] for t in out] == [False, True, True]
     assert parse_response(None, "n", set()) == []
+
+
+def test_schema_text_includes_definition_and_direction():
+    from app.core.schema_reextract import build_schema_text
+    t = build_schema_text({"classes": [{"name": "Person", "description": "인물"}],
+                           "properties": [{"name": "지도교수_of", "domain": "Person", "range": "Person",
+                                           "description": "스승 → 제자", "aliases": ["지도교수_of"]}]})
+    assert "- 지도교수_of (Person → Person): 스승 → 제자" in t

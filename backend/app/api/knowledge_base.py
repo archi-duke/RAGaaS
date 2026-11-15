@@ -206,7 +206,7 @@ async def promote_knowledge_base(
                     llm_model_cfg = st["params"]["llm_model"]
         llm_model_cfg = llm_model_cfg or (kb.llm_model_config or {})
         try:
-            return await run_induction(kb_id, llm_model_cfg)
+            return await run_induction(kb_id, llm_model_cfg, payload.get("seed_schema"))
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
 

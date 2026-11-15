@@ -63,7 +63,77 @@ def profile_graph(kb_id: str) -> Dict[str, Any]:
             "subj_preds": subj_preds, "obj_count": obj_count}
 
 
-def build_induction_messages(prof: Dict[str, Any]) -> List[Dict[str, str]]:
+def normalize_seed(seed: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """사람이 정한 시드 스키마 정규화.
+
+    형식: {"classes": [{"name", "description"}], "properties": [{"name", "description", "domain", "range"}]}
+    properties 는 dict({이름: 설명}) 도 허용. 이름은 URI 로 쓰이므로 공백을 '_' 로 바꾼다.
+    """
+    if not seed:
+        return None
+    import re as _re
+
+    def clean(x):
+        return _re.sub(r"\s+", "_", str(x or "").strip())
+
+    classes = []
+    for c in seed.get("classes") or []:
+        c = {"name": c} if isinstance(c, str) else c
+        name = "".join(w[:1].upper() + w[1:] for w in str(c.get("name") or "").replace("_", " ").split())
+        if name:
+            classes.append({"name": name, "description": str(c.get("description") or "")[:300]})
+    raw_props = seed.get("properties") or []
+    if isinstance(raw_props, dict):
+        raw_props = [{"name": k, "description": v} for k, v in raw_props.items()]
+    props = []
+    for p in raw_props:
+        p = {"name": p} if isinstance(p, str) else p
+        name = clean(p.get("name"))
+        if name:
+            props.append({"name": name, "description": str(p.get("description") or "")[:300],
+                          "domain": str(p.get("domain") or ""), "range": str(p.get("range") or "")})
+    if not classes and not props:
+        return None
+    return {"classes": classes, "properties": props}
+
+
+_VERB_ENDINGS = ("시켰다", "했다", "하다", "하는", "한다", "되다", "된", "함", "한")
+
+
+def _stem(x: str) -> str:
+    t = _compact(x)
+    for e in _VERB_ENDINGS:
+        if t.endswith(e) and len(t) - len(e) >= 2:
+            return t[: -len(e)]
+    return t
+
+
+def seed_target_for(rep: str, seed_props: List[Dict[str, Any]]) -> Optional[str]:
+    """LLM 이 기존 관계 이름으로 만든 묶음이 시드 속성과 어간이 같으면 그 시드 이름.
+
+    예: '지도' → '지도교수_of', '수상' → '수상함', '일반화한' → '일반화함'. 시드 이름의 첫 토큰 어간이
+    묶음 대표 어간으로 시작해야 한다 (2자 이상). 후보가 여럿이면 매핑하지 않는다 (모호).
+    """
+    r = _stem(rep)
+    if len(r) < 2:
+        return None
+    hits = [sp["name"] for sp in seed_props
+            if _stem(sp["name"].split("_")[0]).startswith(r) or r == _stem(sp["name"])]
+    return hits[0] if len(hits) == 1 else None
+
+
+def _seed_block(seed: Dict[str, Any]) -> str:
+    lines = ["[시드 스키마 — 사람이 정한 핵심 어휘. 이 이름을 그대로 쓴다]", "클래스:"]
+    for c in seed["classes"]:
+        lines.append(f"- {c['name']}: {c['description']}")
+    lines.append("속성 (이름: 정의 / domain → range):")
+    for p in seed["properties"]:
+        dr = f" / {p['domain'] or '?'} → {p['range'] or '?'}" if (p["domain"] or p["range"]) else ""
+        lines.append(f"- {p['name']}: {p['description']}{dr}")
+    return "\n".join(lines)
+
+
+def build_induction_messages(prof: Dict[str, Any], seed: Optional[Dict[str, Any]] = None) -> List[Dict[str, str]]:
     preds = prof["pred_count"].most_common(MAX_PREDICATES)
     pred_lines = [f"- {p} ({c}): {' / '.join(prof['pred_examples'][p])}" for p, c in preds]
     subs = sorted(prof["subj_preds"].items(), key=lambda kv: -sum(kv[1].values()))[:MAX_ENTITIES]
@@ -80,29 +150,44 @@ def build_induction_messages(prof: Dict[str, Any]) -> List[Dict[str, str]]:
 [짧은 목적어 값들]
 {', '.join(vals)}
 
-다음을 JSON 으로 출력하라.
+{{seed_text}}다음을 JSON 으로 출력하라.
 1. classes: 핵심 레코드 클래스. 이름은 영어 UpperCamelCase, members 는 위 주어 엔티티 이름 그대로.
    같은 종류의 주된 대상(예: 문서들이 각각 설명하는 대상)을 하나의 클래스로 묶고, 부수 개념(품질 속성 등)은
    필요할 때만 별도 클래스로. 한 엔티티는 한 클래스에만.
 2. entity_merges: 같은 대상을 다르게 적은 엔티티 이름 묶음 {{"canonical": 대표 이름, "aliases": [다른 표기]}}.
    대표와 별칭 모두 위 목록(주어 또는 값)에 있는 이름만.
 3. properties: 같은 의미의 관계 묶음 {{"name": 대표, "members": [같은 의미 관계들], "domain": 클래스명}}.
-   name 은 반드시 members 중 하나(가장 명확한 것) — 새 이름을 짓지 마라. 의미가 다르면 묶지 마라.
+   name 은 반드시 members 중 하나(가장 명확한 것) — 새 이름을 짓지 마라. 의미가 다르면 묶지 마라.{{seed_rules}}
 4. value_groups: 같은 뜻의 다른 표기 값 {{"canonical": 대표, "aliases": [...]}} (예: medium ↔ 중간 ↔ 보통).
    대표와 별칭 모두 위 값 목록에 있는 것만.
 JSON 만: {{"classes": [...], "entity_merges": [...], "properties": [...], "value_groups": [...]}}"""
+    if seed:
+        seed_text = _seed_block(seed) + "\n\n"
+        seed_rules = """
+   [시드가 있을 때] 시드 속성마다 의미가 같은 기존 관계를 members 로 모아 name 을 **반드시 시드 속성 이름**으로 한다
+   (시드 이름은 위 관계 목록에 없어도 된다. 예: name "지도교수_of", members ["지도", "지도하다"]). 기존 관계가 여러 의미로 쓰이면(예: '소속' 이 소속과 지도 관계를
+   섞어 담음) 그 관계는 members 에 넣지 마라 — 문맥별 구분은 재추출이 한다. 시드에 없는 관계 묶음도 기존처럼 만들어도 된다.
+   classes 는 시드 클래스 이름을 우선 쓰고, 시드로 담을 수 없는 종류만 새 클래스로. 멤버는 실제 대상(고유명)만 —
+   '결과', '이 실험' 같은 지시어·일반명사 조각은 어떤 클래스에도 넣지 마라."""
+    else:
+        seed_text, seed_rules = "", ""
+    user = user.replace("{seed_text}", seed_text).replace("{seed_rules}", seed_rules)
     return [
         {"role": "system", "content": "You induce an ontology schema from a noisy knowledge graph. Use only names that appear in the input. Output JSON only."},
         {"role": "user", "content": user},
     ]
 
 
-def validate_induction(data: Optional[Dict[str, Any]], prof: Dict[str, Any]) -> Dict[str, Any]:
-    """LLM 응답에서 프로파일에 실재하는 이름만 채택."""
+def validate_induction(data: Optional[Dict[str, Any]], prof: Dict[str, Any],
+                       seed: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """LLM 응답에서 프로파일에 실재하는 이름만 채택. 시드 속성 이름은 대표로 허용하고,
+    시드 클래스·속성은 응답에 없어도 스키마에 포함한다 (사람이 정한 어휘)."""
     if not data:
         return {"classes": [], "entity_merges": [], "properties": [], "value_groups": [], "dropped": ["응답 해석 불가"]}
     names = {_compact(x): x for x in list(prof["subj_preds"]) + list(prof["obj_count"])}
     preds = {_compact(p): p for p in prof["pred_count"]}
+    seed_props = {_compact(p["name"]): p for p in (seed or {}).get("properties", [])}
+    seed_classes = {_compact(c["name"]): c for c in (seed or {}).get("classes", [])}
     dropped: List[str] = []
 
     def ent(x):
@@ -122,8 +207,16 @@ def validate_induction(data: Optional[Dict[str, Any]], prof: Dict[str, Any]) -> 
             if e and e not in assigned:
                 members.append(e)
                 assigned.add(e)
+        sc = seed_classes.get(_compact(name))
+        if sc:
+            name = sc["name"]
         if members:
-            out_classes.append({"name": name, "description": str(c.get("description") or "")[:200], "members": members})
+            out_classes.append({"name": name, "description": (sc or {}).get("description") or str(c.get("description") or "")[:200],
+                                "members": members, "seed": bool(sc)})
+    have = {_compact(c["name"]) for c in out_classes}
+    for k, sc in seed_classes.items():
+        if k not in have:
+            out_classes.append({"name": sc["name"], "description": sc["description"], "members": [], "seed": True})
 
     merges = []
     for m in data.get("entity_merges") or []:
@@ -132,16 +225,39 @@ def validate_induction(data: Optional[Dict[str, Any]], prof: Dict[str, Any]) -> 
         if canon and aliases:
             merges.append({"canonical": canon, "aliases": aliases})
 
-    props = []
+    props, used = [], set()
     for p in data.get("properties") or []:
         members = [preds[_compact(x)] for x in p.get("members") or [] if _compact(x) in preds]
-        rep = preds.get(_compact(str(p.get("name"))))
+        sp = seed_props.get(_compact(str(p.get("name"))))
+        if not sp and seed_props:
+            # 기존 이름으로 만든 묶음이 시드 속성과 어간이 같으면 시드로 합친다
+            tgt = seed_target_for(str(p.get("name")), list(seed_props.values()))
+            if tgt:
+                sp = seed_props[_compact(tgt)]
+                members = [preds[_compact(str(p.get("name")))]] + members if _compact(str(p.get("name"))) in preds else members
+        rep = sp["name"] if sp else preds.get(_compact(str(p.get("name"))))
         if rep is None:
             dropped.append(f"속성 대표 '{p.get('name')}'(목록에 없음)")
             continue
-        if rep not in members:
+        # 한 기존 관계는 한 묶음에만 (먼저 나온 묶음 우선)
+        members = [m for m in members if m not in used and m != rep]
+        used.update(members)
+        if not sp:
             members.insert(0, rep)
-        props.append({"name": rep, "members": list(dict.fromkeys(members)), "domain": str(p.get("domain") or "")})
+        if _compact(rep) in {_compact(x["name"]) for x in props}:
+            for x in props:
+                if _compact(x["name"]) == _compact(rep):
+                    x["members"] = list(dict.fromkeys(x["members"] + members))
+            continue
+        props.append({"name": rep, "members": list(dict.fromkeys(([rep] if sp else []) + members)),
+                      "domain": (sp or {}).get("domain") or str(p.get("domain") or ""),
+                      "range": (sp or {}).get("range", ""), "description": (sp or {}).get("description", ""),
+                      "seed": bool(sp)})
+    have = {_compact(x["name"]) for x in props}
+    for k, sp in seed_props.items():
+        if k not in have:
+            props.append({"name": sp["name"], "members": [sp["name"]], "domain": sp["domain"], "range": sp["range"],
+                          "description": sp["description"], "seed": True})
 
     vgroups = []
     for v in data.get("value_groups") or []:
@@ -153,22 +269,26 @@ def validate_induction(data: Optional[Dict[str, Any]], prof: Dict[str, Any]) -> 
             "dropped": dropped[:30]}
 
 
-async def run_induction(kb_id: str, llm_model_config: Dict[str, Any]) -> Dict[str, Any]:
-    """유도 실행 → 제안 생성. 반환: {run_id, summary, proposals}"""
+async def run_induction(kb_id: str, llm_model_config: Dict[str, Any],
+                        seed: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """유도 실행 → 제안 생성. 반환: {run_id, summary, proposals}
+    seed(시드 스키마)가 있으면 그 어휘에 기존 관계를 매핑한다. 없으면 KB 에 저장된 시드를 쓴다."""
     from app.core.llm import achat, no_thinking_extra_body
     from app.core.models_resolver import resolve_model_config
     from app.models.knowledge_base import KnowledgeBase
     from app.models.schema_mapping import SchemaMappingProposal
     from app.services.retrieval.relation_targeting import parse_json_loose
 
+    kb0 = await KnowledgeBase.get(kb_id)
+    seed = normalize_seed(seed) or normalize_seed((kb0.promotion_metadata or {}).get("seed"))
     prof = profile_graph(kb_id)
     if not prof["triples"]:
         raise ValueError("문서 그래프에 관계 트리플이 없습니다.")
     cfg = await resolve_model_config(llm_model_config)
-    content = await achat(cfg, build_induction_messages(prof), model=cfg.get("model"),
+    content = await achat(cfg, build_induction_messages(prof, seed), model=cfg.get("model"),
                           response_format={"type": "json_object"},
                           extra_body=no_thinking_extra_body(cfg.get("model")), timeout=600)
-    result = validate_induction(parse_json_loose(content), prof)
+    result = validate_induction(parse_json_loose(content), prof, seed)
     run_id = uuid.uuid4().hex[:12]
 
     # 이전 유도 초안(대기 중) 정리
@@ -199,7 +319,7 @@ async def run_induction(kb_id: str, llm_model_config: Dict[str, Any]) -> Dict[st
     for p in result["properties"]:
         for mbr in p["members"]:
             if mbr != p["name"]:
-                await add("key", mbr, p["name"], {"domain": p["domain"]})
+                await add("key", mbr, p["name"], {"domain": p["domain"], "seed": p.get("seed", False)})
                 n["key"] += 1
     for v in result["value_groups"]:
         for a in v["aliases"]:
@@ -208,11 +328,15 @@ async def run_induction(kb_id: str, llm_model_config: Dict[str, Any]) -> Dict[st
 
     kb = await KnowledgeBase.get(kb_id)
     meta = dict(kb.promotion_metadata or {})
+    if seed:
+        meta["seed"] = seed
     meta["induction"] = {"run_id": run_id, "at": datetime.utcnow().isoformat(), "model": cfg.get("model"),
-                         "classes": [{"name": c["name"], "description": c["description"], "members": len(c["members"])}
-                                     for c in result["classes"]],
-                         "properties": [{"name": p["name"], "members": p["members"], "domain": p["domain"]}
-                                        for p in result["properties"]],
+                         "classes": [{"name": c["name"], "description": c["description"], "members": len(c["members"]),
+                                      "seed": c.get("seed", False)} for c in result["classes"]],
+                         "properties": [{"name": p["name"], "members": p["members"], "domain": p["domain"],
+                                         "range": p.get("range", ""), "description": p.get("description", ""),
+                                         "seed": p.get("seed", False)} for p in result["properties"]],
+                         "seeded": bool(seed),
                          "dropped": result["dropped"],
                          "profile": {"triples": len(prof["triples"]), "predicates": len(prof["pred_count"]),
                                      "subjects": len(prof["subj_preds"])}}
@@ -243,6 +367,10 @@ def build_tbox_turtle(classes: List[Dict[str, Any]], properties: List[Dict[str, 
         parts = [f"<{REL_NS}{uri_part(p['name'])}> a owl:ObjectProperty", f"rdfs:label {lit(p['name'])}"]
         if p.get("domain"):
             parts.append(f"rdfs:domain <{CLASS_NS}{uri_part(p['domain'])}>")
+        if p.get("range") and uri_part(p["range"]) in {uri_part(c["name"]) for c in classes}:
+            parts.append(f"rdfs:range <{CLASS_NS}{uri_part(p['range'])}>")
+        if p.get("description"):
+            parts.append(f"rdfs:comment {lit(p['description'])}")
         for a in p.get("members") or []:
             if a != p["name"]:
                 parts.append(f"skos:altLabel {lit(a)}")
