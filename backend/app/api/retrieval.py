@@ -3,6 +3,7 @@ from app.schemas import RetrievalRequest, RetrievalResult
 from app.services.retrieval import retrieval_factory, reranking_service
 from typing import List, Optional, Dict
 from pydantic import BaseModel, Field
+import asyncio
 import openai
 import os
 import time
@@ -432,7 +433,8 @@ async def chat_with_kb(
                 # 추론 모델(z.ai GLM 등)이 사고과정을 content 로 흘리지 않도록 thinking 비활성
                 if "glm" in str(st_resolved.get("model", "")).lower():
                     gate_kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
-                gate_resp = st_client.chat.completions.create(**gate_kwargs)
+                # 동기 클라이언트 — 스레드로 넘겨 이벤트 루프를 막지 않는다
+                gate_resp = await asyncio.to_thread(st_client.chat.completions.create, **gate_kwargs)
                 raw = (gate_resp.choices[0].message.content or "").strip()
                 # JSON 추출 (코드펜스/여분 텍스트 방어)
                 verdict = None

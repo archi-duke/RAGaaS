@@ -175,7 +175,22 @@ class GraphRetrievalStrategy(RetrievalStrategy):
             # Remove duplicates
             all_entities = list(set(all_entities))
             
-        if not results or (len(results) == 1 and results[0].get("chunk_id") == "GRAPH_METADATA_ONLY"):
+        no_graph_evidence = not results or (len(results) == 1 and results[0].get("chunk_id") == "GRAPH_METADATA_ONLY")
+        if (kwargs.get("graph_fallback") or "vector") == "vector" and (
+                graph_result.get("fallback") == "vector" or no_graph_evidence):
+            # 어느 그래프 경로로도 근거 청크가 없음 → 문서 검색(V). 그래프 근거가 아님을 리포트에 표시한다.
+            rs = graph_result.setdefault("reasoning", {}) or {}
+            graph_result["reasoning"] = rs
+            tg = rs.setdefault("targeting", {})
+            if tg.get("mode") != "V":
+                prev_mode, prev_reason = tg.get("mode"), tg.get("reason")
+                tg["mode"] = "V"
+                tg["reason"] = (f"그래프 경로({prev_mode or '-'})에서 근거 없음"
+                                + (f" ({prev_reason})" if prev_reason else "") + " → 문서 검색으로 답함")
+            results = await self._fallback_search(kb_id, query, entities, top_k, emb_service=emb_service)
+            ordered = False
+            log(f"DEBUG: 📄 그래프로 답할 수 없음 → 문서 검색 {len(results)}건")
+        elif not results or (len(results) == 1 and results[0].get("chunk_id") == "GRAPH_METADATA_ONLY"):
              # [MODIFIED] Fallback Removed as per user request
              # log(f"DEBUG: 🔄 Fallback triggered. Reason: No direct graph-to-chunk matches found.")
              # log(f"DEBUG: Executing Entity-Guided Hybrid Search with entities: {all_entities}")
@@ -257,6 +272,8 @@ class GraphRetrievalStrategy(RetrievalStrategy):
             # LLM SPARQL 생성 경로: 트리플↔청크 매핑이 없어 임베딩 유사도 순
             tg = reasoning.setdefault("targeting", {})
             tg.setdefault("mode", "C" if graph_result.get("sparql_query") else "none")
+            if tg.get("mode") == "V":
+                reasoning["chunk_order_label"] = "문서 검색 (벡터 유사도) — 그래프 근거 아님"
             reasoning.setdefault("sparql", graph_result.get("sparql_query") or "")
             reasoning.setdefault("triples", graph_result.get("triples") or [])
             reasoning["chunks"] = [
@@ -605,25 +622,23 @@ class GraphRetrievalStrategy(RetrievalStrategy):
         log_debug(f"Final Expanded Entities: {res}")
         return res
 
-    async def _fallback_search(self, kb_id: str, query: str, entities: List[str], top_k: int) -> List[Dict[str, Any]]:
-        """Fallback to hybrid vector+keyword search when graph doesn't have complete data."""
+    async def _fallback_search(self, kb_id: str, query: str, entities: List[str], top_k: int,
+                               emb_service=None) -> List[Dict[str, Any]]:
+        """그래프로 답할 수 없을 때 문서(벡터) 검색 — KB 의 임베딩 설정(emb_service)을 써야 한다."""
         from .vector import VectorRetrievalStrategy
-        from .hybrid import HybridRetrievalStrategy
-        
-        # Construct enhanced query with entities
+
         enhanced_query = query + " " + " ".join(entities)
-        
         print(f"DEBUG: Fallback search with query: {enhanced_query}")
-        
+
         try:
-            # Use hybrid search for best results
-            hybrid_strategy = HybridRetrievalStrategy()
-            results = await hybrid_strategy.search(
+            kw = {"embedding_service": emb_service} if emb_service is not None else {}
+            results = await VectorRetrievalStrategy().search(
                 kb_id=kb_id,
                 query=enhanced_query,
                 top_k=top_k,
                 score_threshold=0.0,
-                metric_type="COSINE"
+                metric_type="COSINE",
+                **kw,
             )
             
             # Mark these as fallback results

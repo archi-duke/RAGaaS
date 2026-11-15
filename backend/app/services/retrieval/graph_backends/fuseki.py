@@ -1,4 +1,5 @@
 import asyncio
+import os
 import re
 import urllib.parse
 import logging
@@ -1221,6 +1222,37 @@ class FusekiBackend(GraphBackend):
         return True  # 판별 불가 시 기존 동작(앵커 경로) 유지
 
     _EQUIV_LLM_CACHE: Dict[str, Tuple[List[Tuple[str, str]], List[List[str]]]] = {}
+    # 재시작해도 남도록 파일에 보관 — 빈 캐시에서 유형 카탈로그를 만들면 LLM 5회로 약 35초 걸린다
+    _EQUIV_LLM_CACHE_PATH = os.getenv("EQUIV_LLM_CACHE_PATH", "data/cache/equiv_llm_cache.json")
+    _EQUIV_LLM_CACHE_LOADED = False
+
+    @classmethod
+    def _equiv_cache_load(cls) -> None:
+        if cls._EQUIV_LLM_CACHE_LOADED:
+            return
+        cls._EQUIV_LLM_CACHE_LOADED = True
+        try:
+            import json as _json
+            with open(cls._EQUIV_LLM_CACHE_PATH, encoding="utf-8") as f:
+                for k, (pairs, groups) in _json.load(f).items():
+                    cls._EQUIV_LLM_CACHE.setdefault(k, ([tuple(x) for x in pairs], groups))
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            logger.warning(f"equivalence LLM cache load failed: {e}")
+
+    @classmethod
+    def _equiv_cache_save(cls) -> None:
+        try:
+            import json as _json
+            os.makedirs(os.path.dirname(cls._EQUIV_LLM_CACHE_PATH) or ".", exist_ok=True)
+            tmp = cls._EQUIV_LLM_CACHE_PATH + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                _json.dump({k: [list(map(list, v[0])), v[1]] for k, v in cls._EQUIV_LLM_CACHE.items()},
+                           f, ensure_ascii=False)
+            os.replace(tmp, cls._EQUIV_LLM_CACHE_PATH)
+        except Exception as e:
+            logger.warning(f"equivalence LLM cache save failed: {e}")
 
     @classmethod
     def invalidate_class_catalog(cls, kb_id: str) -> None:
@@ -1231,6 +1263,7 @@ class FusekiBackend(GraphBackend):
         """LLM 동치 패스 — 스키마 시그니처당 1회 (캐시). 실패 시 빈 결과."""
         from app.services.schema_alignment import equivalence as eq
         sig = f"{kb_id}:{kind_name}:{eq.catalog_signature(paths)}"
+        self._equiv_cache_load()
         if sig in self._EQUIV_LLM_CACHE:
             return self._EQUIV_LLM_CACHE[sig]
         if not any(len(p.get("member_ids") or ()) < total_members for p in paths):
@@ -1251,6 +1284,7 @@ class FusekiBackend(GraphBackend):
             log_trace(f"[Fuseki] Equivalence LLM pass skipped: {e}")
             return [], []
         self._EQUIV_LLM_CACHE[sig] = result
+        self._equiv_cache_save()
         return result
 
     async def _class_catalog(self, kb_id: str, log_trace, kwargs: Optional[Dict[str, Any]] = None):
@@ -1640,6 +1674,19 @@ class FusekiBackend(GraphBackend):
                 # 생성 실패/0건 시 최대 2회까지 에러 되먹임 재시도한다.
                 loop_result: Optional[Dict[str, Any]] = None
                 emb_service = kwargs.get("embedding_service", default_embedding_service)
+                # 결정적 경로(A/B/P/H/E)가 모두 근거를 못 찾았다. 기본 정책은 LLM SPARQL 생성(C) 대신
+                # 문서 검색(V)으로 넘기는 것 — C 는 문항당 40초 이상 걸리고 정답률이 낮았다
+                # (docs/design-graph-multihop-chain.md §7.9). graph_fallback="llm_sparql" 이면 기존 C.
+                if not skip_llm_generation and (kwargs.get("graph_fallback") or "vector") == "vector":
+                    rs = kwargs.setdefault("_reasoning", {})
+                    prev = (rs.get("targeting") or {}).get("reason") or chain_reason
+                    why = "그래프의 결정적 경로로 표현할 수 없거나 근거 없음"
+                    rs["targeting"] = {**(rs.get("targeting") or {}), "mode": "V",
+                                       "reason": f"{why}" + (f" ({prev})" if prev else "") + " → 문서 검색으로 답함"}
+                    rs.setdefault("warnings", [])
+                    log_trace("[Fuseki] 결정적 경로 근거 없음 → LLM SPARQL 생성(C) 대신 문서 검색(V)")
+                    return {"chunk_ids": [], "sparql_query": "", "triples": [], "found_entities": [],
+                            "fallback": "vector", "reasoning": rs, "trace_logs": trace_logs}
                 if not skip_llm_generation:
                     log_trace(f"[Fuseki] Calling LLM SPARQL Generator (skip_llm_generation={skip_llm_generation})")
 
