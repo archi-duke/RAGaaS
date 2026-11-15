@@ -107,6 +107,8 @@ class FusekiClient:
                 
         return True
 
+    QUERY_TIMEOUT = 60  # 초
+
     def query_sparql(self, kb_id: str, query: str) -> dict:
         """Execute a SPARQL SELECT query."""
         dataset_url = self._get_dataset_url(kb_id)
@@ -117,6 +119,9 @@ class FusekiClient:
             sparql.setCredentials("admin", "admin")
             sparql.setQuery(query)
             sparql.setReturnFormat(JSON)
+            # 타임아웃 필수: 이 호출은 async 경로에서도 동기로 쓰인다. Fuseki 가 응답하지 않으면
+            # 이벤트 루프 전체가 멈춘다 (2026-11-15 .115 장애 때 재추출 요청 하나로 백엔드 전체가 멈춤).
+            sparql.setTimeout(self.QUERY_TIMEOUT)
             results = sparql.query().convert()
             return results
         except Exception as e:
