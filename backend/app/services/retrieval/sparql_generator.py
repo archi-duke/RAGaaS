@@ -373,7 +373,7 @@ STRONGLY PREFER using these predicates over inventing new ones or relying on gen
             few_shot_examples=few_shot_examples,
         )
 
-        from app.core.llm import chat
+        from app.core.llm import chat, no_thinking_extra_body
         cfg = {
             "base_url": self.llm_endpoint,
             "api_key": self.api_key,
@@ -389,6 +389,8 @@ STRONGLY PREFER using these predicates over inventing new ones or relying on gen
                     {"role": "user", "content": user_content},
                 ],
                 temperature=0.0,
+                # GLM 은 기본이 사고 모드 — 끄지 않으면 생성 1회에 80초 가까이 걸린다
+                extra_body=no_thinking_extra_body(self.llm_model),
             )
 
             # Extract JSON from response

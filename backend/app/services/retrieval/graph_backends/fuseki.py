@@ -1,3 +1,4 @@
+import asyncio
 import re
 import urllib.parse
 import logging
@@ -633,7 +634,9 @@ class FusekiBackend(GraphBackend):
 
             log_trace(f"[Fuseki] Calling LLM SPARQL Generator (retry={'yes' if retry_context else 'no'})")
             print(f"[DEBUG] Calling SPARQLGenerator.generate() with inv_mode={inv_mode}", flush=True)
-            gen_result = active_generator.generate(
+            # generate() 는 동기 HTTP 호출 — 스레드로 넘겨 이벤트 루프(다른 요청)를 막지 않는다
+            gen_result = await asyncio.to_thread(
+                active_generator.generate,
                 question=question,
                 context=f"Entities: {', '.join(entities)}",
                 mode="ontology",

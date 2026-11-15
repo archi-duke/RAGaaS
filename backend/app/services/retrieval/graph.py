@@ -416,7 +416,7 @@ class GraphRetrievalStrategy(RetrievalStrategy):
         try:
             if not llm_cfg:
                 raise ValueError("Graph search model is not configured.")
-            from app.core.llm import achat
+            from app.core.llm import achat, no_thinking_extra_body
             content = await achat(
                 llm_cfg,
                 [
@@ -424,6 +424,8 @@ class GraphRetrievalStrategy(RetrievalStrategy):
                     {"role": "user", "content": prompt},
                 ],
                 model=llm_model, temperature=0, response_format={"type": "json_object"},
+                # GLM 은 기본이 사고 모드 — 끄지 않으면 다단계 질문 분석에 30초 이상 걸린다
+                extra_body=no_thinking_extra_body(llm_model),
             )
             data = json.loads(content)
 

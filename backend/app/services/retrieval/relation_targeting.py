@@ -738,7 +738,7 @@ def render_reasoning_report(reasoning: Dict[str, Any], max_triples: int = 15) ->
     for i, c in enumerate(chunks, 1):
         idx = ",".join(str(x) for x in c.get("triple_idx") or [])
         kind = " (구조 간선)" if c.get("kind") == "edge" else ""
-        missing = " — 벡터 저장소에 본문 없음" if c.get("missing") else ""
+        missing = " — top_k 밖 (답변에 미사용)" if c.get("missing") else ""
         lines.append(f"  #{i} {_short_chunk(c['chunk_id'])} ⟵ 트리플 {idx}{kind}{missing}")
     if reasoning.get("note"):
         lines.append(f"[Graph] 참고: {reasoning['note']}")
