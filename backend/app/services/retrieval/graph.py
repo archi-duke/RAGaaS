@@ -187,6 +187,9 @@ class GraphRetrievalStrategy(RetrievalStrategy):
                 tg["mode"] = "V"
                 tg["reason"] = (f"그래프 경로({prev_mode or '-'})에서 근거 없음"
                                 + (f" ({prev_reason})" if prev_reason else "") + " → 문서 검색으로 답함")
+            # 실패한 질의 계획의 "만족하는 엔티티 0개" 요약이 답변 컨텍스트에 들어가면
+            # 답변 LLM 이 문서 근거가 있어도 "답할 수 없음" 으로 거절한다 → 제거
+            graph_result.pop("result_summary", None)
             results = await self._fallback_search(kb_id, query, entities, top_k, emb_service=emb_service)
             ordered = False
             log(f"DEBUG: 📄 그래프로 답할 수 없음 → 문서 검색 {len(results)}건")
