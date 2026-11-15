@@ -252,7 +252,7 @@ class GraphRetrievalStrategy(RetrievalStrategy):
             chunks = reasoning.get("chunks") or []
             for c in chunks:
                 c["missing"] = c["chunk_id"] not in fetched
-            reasoning["chunk_order_label"] = "트리플 연결 순"
+            reasoning.setdefault("chunk_order_label", "트리플 연결 순")
         else:
             # LLM SPARQL 생성 경로: 트리플↔청크 매핑이 없어 임베딩 유사도 순
             tg = reasoning.setdefault("targeting", {})

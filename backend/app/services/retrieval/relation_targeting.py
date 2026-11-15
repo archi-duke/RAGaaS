@@ -608,6 +608,7 @@ MODE_LABELS = {
     "pair": "pair(두 엔티티 직접 관계)",
     "none": "none(일치 관계 없음)",
     "P": "P(질의 계획 — 유형 수준)",
+    "H": "H(다단계 체인 — 홉별 관계 고정 조회)",
 }
 ROLE_LABELS = {"filter": "필터", "aggregate": "집계", "return": "반환"}
 TIER_LABELS = {1: "완전일치", 2: "어간일치", 3: "토큰포함"}

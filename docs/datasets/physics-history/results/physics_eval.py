@@ -22,6 +22,11 @@ def norm(s):
     return re.sub(r"[\s\-_·.,()\[\]'\"]", "", str(s)).lower()
 
 
+def strip_note(a):
+    """정답 항목의 괄호 주석 제거: '플랑크 복사 법칙(확인)' → '플랑크 복사 법칙'."""
+    return re.sub(r"\s*\([^)]*\)\s*$", "", str(a))
+
+
 def get(url):
     return json.load(urllib.request.urlopen(url, timeout=120))
 
@@ -52,7 +57,7 @@ def main(kb_id, label, only=None):
             answer_hit = bool(NEG_PAT.search(ans))
             partial = answer_hit
         else:
-            hits = [a for a in q["answer"] if norm(a) and norm(a) in norm(ans)]
+            hits = [a for a in q["answer"] if norm(strip_note(a)) and norm(strip_note(a)) in norm(ans)]
             answer_hit = len(hits) == len(q["answer"])
             partial = len(hits) > 0
         want_docs = {id_by_name.get(n) for fid in q.get("fact_ids", []) for n in facts.get(fid, {}).get("docs", [])}
