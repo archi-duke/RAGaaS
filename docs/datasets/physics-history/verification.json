@@ -1,0 +1,512 @@
+[
+ {
+  "file": "era_ancient.md",
+  "quote": "프톨레마이오스는 이를 설명하려고 큰 원 위를 돌아가는 작은 원, 곧 주전원을 도입했다.",
+  "issue": "imprecise",
+  "explanation": "주전원은 아폴로니오스·히파르코스 이래의 장치, 프톨레마이오스의 고안은 이퀀트",
+  "correction": "프톨레마이오스는 이를 설명하려고 아폴로니오스와 히파르코스 이래 쓰여 온 장치, 곧 큰 원 위를 돌아가는 작은 원인 주전원을 활용했다.",
+  "source": "https://en.wikipedia.org/wiki/Deferent_and_epicycle",
+  "group": "A",
+  "status": "applied"
+ },
+ {
+  "file": "era_modern.md",
+  "fact_id": "F137",
+  "quote": "1927년의 불확정성 원리와 상보성 원리, 그리고 파동함수의 확률 해석을 거치며",
+  "issue": "imprecise",
+  "explanation": "보른의 확률 해석은 1926년",
+  "correction": "1926년 파동함수의 확률 해석과 1927년의 불확정성 원리 및 상보성 원리를 거치며",
+  "source": "https://en.wikipedia.org/wiki/Born_rule",
+  "group": "A",
+  "status": "applied"
+ },
+ {
+  "file": "debate_heliocentrism.md",
+  "fact_id": "F009",
+  "quote": "관측과 맞지 않는 부분이 생길 때마다 주전원을 덧붙이는 방식으로 체계가 유지되었다",
+  "issue": "contested",
+  "explanation": "'주전원 위의 주전원' 누적은 근거 없는 통념 (Gingerich)",
+  "correction": "주전원에 이심원과 이퀀트를 조합해 관측과 맞추는 방식으로 체계가 정교하게 다듬어졌다",
+  "source": "Gingerich 1975; https://en.wikipedia.org/wiki/Deferent_and_epicycle",
+  "group": "A",
+  "status": "applied"
+ },
+ {
+  "file": "debate_light.md",
+  "fact_id": "F044",
+  "quote": "토머스 영(Thomas Young)은 1801년 무렵 이중 슬릿 실험을 수행했다.",
+  "issue": "imprecise",
+  "explanation": "간섭 실험 1801~1803, 이중 슬릿 배치 기술은 1807년 강의록",
+  "correction": "토머스 영(Thomas Young)은 1801년부터 1803년 무렵에 걸쳐 빛의 간섭 실험을 수행했고, 오늘날 이중 슬릿 실험으로 알려진 배치는 1807년 그의 강의록에 기술되었다.",
+  "source": "https://en.wikipedia.org/wiki/Young%27s_interference_experiment",
+  "group": "A",
+  "status": "applied"
+ },
+ {
+  "file": "debate_light.md",
+  "fact_id": "F045",
+  "quote": "이중 슬릿 실험은 빛의 파동설을 확인한 결정적 실험으로 평가되며",
+  "issue": "imprecise",
+  "explanation": "당대엔 수용 안 됨 — 프레넬 이후 수용",
+  "correction": "이중 슬릿 실험은 오늘날 빛의 파동설을 뒷받침한 대표적 실험으로 평가되며(당대에는 곧바로 받아들여지지 않았고 프레넬의 연구 이후에야 파동설이 널리 수용되었다)",
+  "source": "https://en.wikipedia.org/wiki/Young%27s_interference_experiment",
+  "group": "A",
+  "status": "applied"
+ },
+ {
+  "file": "debate_bohr_einstein.md",
+  "fact_id": "F174",
+  "quote": "코펜하겐의 닐스 보어와 그의 젊은 동료 베르너 하이젠베르크는 양자역학을 이해하는 하나의 관점을 정립했다. 이른바 코펜하겐 해석이다.",
+  "issue": "contested",
+  "explanation": "'코펜하겐 해석' 명칭·단일 교의는 1950년대에 형성",
+  "correction": "코펜하겐의 닐스 보어와 그의 젊은 동료 베르너 하이젠베르크를 중심으로 양자역학을 이해하는 하나의 관점이 형성되었다. 훗날(1950년대) '코펜하겐 해석'이라는 이름으로 불리게 된 관점으로, 두 사람의 견해가 모든 점에서 일치했던 것은 아니다.",
+  "source": "https://plato.stanford.edu/entries/qm-copenhagen/",
+  "group": "A",
+  "status": "applied"
+ },
+ {
+  "file": "debate_bohr_einstein.md",
+  "fact_id": "F179",
+  "quote": "아인슈타인이 바랐던 국소적 실재론은 이렇게 실험으로 배제되었다.",
+  "issue": "imprecise",
+  "explanation": "아스페 실험엔 허점 남음, 2015 허점 없는 실험, 2022 노벨상",
+  "correction": "아인슈타인이 바랐던 국소적 실재론은 이렇게 실험으로 강하게 반박되었고, 남아 있던 허점들은 2015년의 '허점 없는' 벨 실험들로 닫혔다. 아스페는 이 공로로 2022년 존 클라우저, 안톤 차일링거와 함께 노벨 물리학상을 받았다.",
+  "source": "https://www.nobelprize.org/prizes/physics/2022/summary/",
+  "group": "A",
+  "status": "applied"
+ },
+ {
+  "file": "bio_galileo.md",
+  "quote": "1642년 그가 세상을 떠난 해에 잉글랜드에서는 뉴턴이 태어났다.",
+  "issue": "imprecise",
+  "explanation": "율리우스력/그레고리력 혼용 — bio_newton(1643)과 불일치",
+  "correction": "그가 세상을 떠난 1642년, 잉글랜드에서는 당시 쓰던 율리우스력으로 같은 해 성탄절에(오늘날의 그레고리력으로는 1643년 1월) 뉴턴이 태어났다.",
+  "source": "https://en.wikipedia.org/wiki/Isaac_Newton",
+  "group": "A",
+  "status": "applied"
+ },
+ {
+  "file": "bio_kepler.md",
+  "fact_id": "F028",
+  "quote": "1600년 프라하에서 덴마크 출신의",
+  "issue": "imprecise",
+  "explanation": "첫 만남은 프라하 근교 베나트키 성",
+  "correction": "1600년 프라하 인근 베나트키 성에서 덴마크 출신의",
+  "source": "https://en.wikipedia.org/wiki/Johannes_Kepler",
+  "group": "A",
+  "status": "applied"
+ },
+ {
+  "file": "bio_kepler.md",
+  "fact_id": "F041",
+  "quote": "그가 찾아낸 세 법칙은 반세기 뒤",
+  "issue": "imprecise",
+  "explanation": "1609/1619 → 1687, 약 70~80년",
+  "correction": "그가 찾아낸 세 법칙은 약 70년 뒤",
+  "source": "https://en.wikipedia.org/wiki/Philosophi%C3%A6_Naturalis_Principia_Mathematica",
+  "group": "A",
+  "status": "applied"
+ },
+ {
+  "file": "bio_newton.md",
+  "quote": "혜성 궤도에 관한 에드먼드 핼리의 질문을 계기로",
+  "issue": "wrong",
+  "explanation": "핼리의 1684년 질문은 역제곱 인력 하 행성 궤도",
+  "correction": "역제곱 인력 아래에서 행성이 어떤 궤도를 그리는지를 물은 에드먼드 핼리의 1684년 질문을 계기로",
+  "source": "https://en.wikipedia.org/wiki/De_motu_corporum_in_gyrum",
+  "group": "A",
+  "status": "applied"
+ },
+ {
+  "file": "bio_newton.md",
+  "quote": "고 쓴 묘비명은",
+  "issue": "imprecise",
+  "explanation": "포프의 시는 실제 묘비에 새겨지지 않음 (라틴어 비문)",
+  "correction": "고 뉴턴을 위해 지은 묘비명 시(실제 웨스트민스터 사원의 묘에는 라틴어 비문이 새겨졌다)는",
+  "source": "https://www.westminster-abbey.org/abbey-commemorations/commemorations/sir-isaac-newton",
+  "group": "A",
+  "status": "applied"
+ },
+ {
+  "file": "bio_newton.md",
+  "quote": "이 책에서 Newton은",
+  "issue": "imprecise",
+  "explanation": "표기 혼용",
+  "correction": "이 책에서 뉴턴은",
+  "source": "n/a",
+  "group": "A",
+  "status": "applied"
+ },
+ {
+  "file": "facts.json",
+  "fact_id": "F018",
+  "issue": "imprecise",
+  "explanation": "낙하 법칙 발견 1604년경, 1638은 출간",
+  "fact_patch": {
+   "time": "1604"
+  },
+  "source": "https://en.wikipedia.org/wiki/Two_New_Sciences",
+  "group": "A",
+  "status": "applied"
+ },
+ {
+  "file": "facts.json",
+  "fact_id": "F044",
+  "issue": "imprecise",
+  "explanation": "1801~1803 간섭 실험",
+  "fact_patch": {
+   "time": "1801-1803"
+  },
+  "source": "https://en.wikipedia.org/wiki/Young%27s_interference_experiment",
+  "group": "A",
+  "status": "applied"
+ },
+ {
+  "file": "facts.json",
+  "fact_id": "F159",
+  "issue": "imprecise",
+  "explanation": "슈윙거는 QED 제안자 아닌 재규격화 완성",
+  "fact_patch": {
+   "relation": "완성함",
+   "time": "1947-1949"
+  },
+  "source": "https://www.nobelprize.org/prizes/physics/1965/summary/",
+  "group": "A",
+  "status": "applied"
+ },
+ {
+  "file": "facts.json",
+  "fact_id": "F160",
+  "issue": "imprecise",
+  "explanation": "도모나가도 완성 기여",
+  "fact_patch": {
+   "relation": "완성함",
+   "time": "1943-1948"
+  },
+  "source": "https://www.nobelprize.org/prizes/physics/1965/summary/",
+  "group": "A",
+  "status": "applied"
+ },
+ {
+  "file": "facts.json",
+  "fact_id": "F174",
+  "issue": "contested",
+  "explanation": "코펜하겐 해석 명칭은 1950년대",
+  "fact_patch": {
+   "relation": "형성에_기여함"
+  },
+  "source": "https://plato.stanford.edu/entries/qm-copenhagen/",
+  "group": "A",
+  "status": "applied"
+ },
+ {
+  "file": "facts.json",
+  "fact_id": "F175",
+  "issue": "contested",
+  "explanation": "동일",
+  "fact_patch": {
+   "relation": "형성에_기여함"
+  },
+  "source": "https://plato.stanford.edu/entries/qm-copenhagen/",
+  "group": "A",
+  "status": "applied"
+ },
+ {
+  "file": "bio_maxwell.md",
+  "quote": "열네 살에 타원 곡선을 그리는 방법에 관한 논문을 써서",
+  "issue": "imprecise",
+  "explanation": "1846년 논문은 핀과 실로 '난형선(oval curve, 데카르트 난형선)'을 그리는 방법이다 — 타원·타원 곡선이 아님",
+  "correction": "열네 살에 난형선(oval curve)을 그리는 방법에 관한 논문을 써서",
+  "source": "https://mathshistory.st-andrews.ac.uk/Biographies/Maxwell/",
+  "group": "B",
+  "status": "applied"
+ },
+ {
+  "file": "bio_maxwell.md",
+  "quote": "그는 연구소가 문을 열자 전기 단위 표준의 정밀 측정 같은 사업을 이끌었고,",
+  "issue": "imprecise",
+  "explanation": "BA 전기저항 표준 측정은 1860년대 킹스 칼리지 시절, 캐번디시 옴 재측정은 후임 레일리(1880년대). 맥스웰 재임 중엔 옴의 법칙 검증 등",
+  "correction": "그는 연구소가 문을 열자 옴의 법칙 검증 같은 정밀 측정 연구를 이끌었고,",
+  "source": "https://en.wikipedia.org/wiki/Cavendish_Laboratory",
+  "group": "B",
+  "status": "applied"
+ },
+ {
+  "file": "bio_planck.md",
+  "quote": "1947년 그가 세상을 떠난 뒤 카이저 빌헬름 협회는 그의 이름을 따 막스 플랑크 협회로 새롭게 출범했다.",
+  "issue": "imprecise",
+  "explanation": "막스 플랑크 협회는 생전인 1946년 영국 점령지구에서 창립, 사후 1948년 정식 출범",
+  "correction": "카이저 빌헬름 협회는 1946년 영국 점령지구에서 그의 이름을 딴 막스 플랑크 협회로 재편되었고, 그가 1947년 세상을 떠난 뒤인 1948년 막스 플랑크 협회로 정식 출범했다.",
+  "source": "https://www.mpg.de/195481/history-of-the-max-planck-society",
+  "group": "B",
+  "status": "applied"
+ },
+ {
+  "file": "exp_hertz.md",
+  "quote": "1887년 무렵 헤르츠는 송신기에서 수 미터 떨어진 곳에서도 수신기에 불꽃이 튀는 것을 확인했다. 그는 금속판으로 파동을 반사시켜 정상파를 만들고,",
+  "issue": "imprecise",
+  "explanation": "정상파·반사·굴절·편광 실험은 1888년 논문",
+  "correction": "1887년 무렵 헤르츠는 송신기에서 수 미터 떨어진 곳에서도 수신기에 불꽃이 튀는 것을 확인했다. 1888년에는 금속판으로 파동을 반사시켜 정상파를 만들고,",
+  "source": "https://en.wikipedia.org/wiki/Heinrich_Hertz",
+  "group": "B",
+  "status": "applied"
+ },
+ {
+  "file": "exp_hertz.md",
+  "quote": "이후 할바흐스, 레나르트 등의 연구를 거쳐",
+  "issue": "imprecise",
+  "explanation": "Wilhelm Hallwachs 의 한국어 표기는 '할박스'",
+  "correction": "이후 할박스, 레나르트 등의 연구를 거쳐",
+  "source": "https://en.wikipedia.org/wiki/Wilhelm_Hallwachs",
+  "group": "B",
+  "status": "applied"
+ },
+ {
+  "file": "bio_einstein.md",
+  "quote": "프라하와 취리히를 거쳐 1914년 베를린으로 옮겼고",
+  "issue": "imprecise",
+  "explanation": "취리히 대학(1909)→프라하(1911)→ETH(1912)→베를린(1914)",
+  "correction": "취리히 대학(1909), 프라하(1911), 취리히 연방공과대학(1912)을 거쳐 1914년 베를린으로 옮겼고",
+  "source": "https://en.wikipedia.org/wiki/Albert_Einstein",
+  "group": "C",
+  "status": "applied"
+ },
+ {
+  "file": "bio_einstein.md",
+  "quote": "나치가 권력을 잡은 1933년, 유대인이던 아인슈타인은 독일을 떠나 미국으로 건너갔다.",
+  "issue": "imprecise",
+  "explanation": "1932년 12월 미국 방문 중 → 귀국하지 않고 벨기에·영국 거쳐 1933년 10월 미국 정착",
+  "correction": "나치가 권력을 잡은 1933년, 미국 방문 중이던 유대인 아인슈타인은 독일로 돌아가지 않고 벨기에와 영국을 거쳐 미국에 정착했다.",
+  "source": "https://en.wikipedia.org/wiki/Albert_Einstein",
+  "group": "C",
+  "status": "applied"
+ },
+ {
+  "file": "bio_heisenberg.md",
+  "fact_id": "F132",
+  "quote": "스물네 살에 양자역학의 첫 완성된 형식을 내놓아",
+  "issue": "wrong",
+  "explanation": "1901년 12월생 — 1925년 7월 만 23세",
+  "correction": "스물세 살에 양자역학의 첫 완성된 형식을 내놓아",
+  "source": "https://en.wikipedia.org/wiki/Werner_Heisenberg",
+  "group": "C",
+  "status": "applied"
+ },
+ {
+  "file": "bio_heisenberg.md",
+  "fact_id": "F135",
+  "quote": "하이젠베르크보다 한 해 먼저 들어온",
+  "issue": "wrong",
+  "explanation": "파울리 1918 입학, 하이젠베르크 1920 — 두 해 먼저",
+  "correction": "하이젠베르크보다 두 해 먼저(1918년) 들어온",
+  "source": "https://mathshistory.st-andrews.ac.uk/Biographies/Pauli/",
+  "group": "C",
+  "status": "applied"
+ },
+ {
+  "file": "bio_heisenberg.md",
+  "quote": "독일의 핵분열 연구 계획을 이끌었고",
+  "issue": "imprecise",
+  "explanation": "행정 책임자는 디브너·에자우·게를라흐 — 하이젠베르크는 핵심 과학자",
+  "correction": "독일의 핵분열 연구 계획(이른바 우라늄 클럽)에서 핵심적인 과학자 역할을 맡았고",
+  "source": "https://en.wikipedia.org/wiki/German_nuclear_program_during_World_War_II",
+  "group": "C",
+  "status": "applied"
+ },
+ {
+  "file": "bio_feynman.md",
+  "quote": "학위를 받은 파인만은 곧바로 전시 원자폭탄 개발 계획에 참여해 뉴멕시코주의 로스앨러모스에서 계산 부서를 이끌었다.",
+  "issue": "imprecise",
+  "explanation": "학위 전부터 맨해튼 계획 참여, 로스앨러모스는 1943년",
+  "correction": "학위 과정 막바지부터 전시 원자폭탄 개발 계획에 참여한 파인만은 1943년 뉴멕시코주의 로스앨러모스로 가서 계산 부서를 이끌었다.",
+  "source": "https://en.wikipedia.org/wiki/Richard_Feynman",
+  "group": "C",
+  "status": "applied"
+ },
+ {
+  "file": "theory_relativity.md",
+  "fact_id": "F083",
+  "quote": "이 결과는 에테르 가설을 반박하는 것으로 받아들여졌다",
+  "issue": "imprecise",
+  "explanation": "당대엔 곧바로 반박으로 수용되지 않음 — 정지 에테르 가설, 후대 평가",
+  "correction": "이 결과는 훗날 정지 에테르 가설을 반박하는 결과로 평가되었다",
+  "source": "https://en.wikipedia.org/wiki/Michelson%E2%80%93Morley_experiment",
+  "group": "C",
+  "status": "applied"
+ },
+ {
+  "file": "theory_qed.md",
+  "fact_id": "F153",
+  "quote": "디랙은 1932년 케임브리지 대학의 루카스 석좌교수가 되어 케임브리지 대학에 소속되었다.",
+  "issue": "imprecise",
+  "explanation": "1923년부터 케임브리지 소속, 1932년은 루카스 석좌교수 취임",
+  "correction": "1923년 대학원생으로 케임브리지 대학에 온 이래 그곳에 소속되어 있던 디랙은 1932년 케임브리지 대학의 루카스 석좌교수가 되었다.",
+  "source": "https://en.wikipedia.org/wiki/Paul_Dirac",
+  "group": "C",
+  "status": "applied"
+ },
+ {
+  "file": "theory_qed.md",
+  "fact_id": "F150",
+  "quote": "즉 디랙 방정식은 양자역학과 특수상대성이론을 처음으로 성공적으로 통합한 방정식이다.",
+  "issue": "imprecise",
+  "explanation": "클라인-고든 방정식(1926)이 먼저 — 전자(스핀 1/2)에 대해 처음",
+  "correction": "즉 디랙 방정식은 전자에 대해 양자역학과 특수상대성이론을 처음으로 성공적으로 통합한 방정식이다.",
+  "source": "https://en.wikipedia.org/wiki/Klein%E2%80%93Gordon_equation",
+  "group": "C",
+  "status": "applied"
+ },
+ {
+  "file": "theory_qed.md",
+  "quote": "1930년대에 하이젠베르크, 파울리 등이 그 기초를 놓았지만",
+  "issue": "imprecise",
+  "explanation": "디랙 1927, 하이젠베르크-파울리 1929~30, 페르미 1932",
+  "correction": "1920년대 말부터 1930년대에 걸쳐 디랙, 하이젠베르크, 파울리, 페르미 등이 그 기초를 놓았지만",
+  "source": "https://en.wikipedia.org/wiki/Quantum_electrodynamics#History",
+  "group": "C",
+  "status": "applied"
+ },
+ {
+  "file": "exp_blackbody_photoelectric.md",
+  "fact_id": "F111",
+  "quote": "반면 고전 전자기학과 에너지 등분배 정리에서 출발한 레일리-진스 법칙은",
+  "issue": "imprecise",
+  "explanation": "레일리 1900, 진스 1905 보완, '자외선 파탄' 용어 1911",
+  "correction": "반면 고전 전자기학과 에너지 등분배 정리에서 출발한 레일리-진스 법칙(레일리 1900년, 진스 1905년 보완)은",
+  "source": "https://en.wikipedia.org/wiki/Ultraviolet_catastrophe",
+  "group": "C",
+  "status": "applied"
+ },
+ {
+  "file": "exp_blackbody_photoelectric.md",
+  "fact_id": "F118",
+  "quote": "밀리컨의 실험은 광양자 가설을 확인했다.",
+  "issue": "imprecise",
+  "explanation": "밀리컨이 확인한 것은 광전 방정식, 밀리컨 자신은 광양자 실재를 수용하지 않음",
+  "correction": "밀리컨의 실험은 광양자 가설에서 유도된 아인슈타인의 광전 방정식을 확인했다. 다만 밀리컨 자신은 그 뒤에도 한동안 광양자의 물리적 실재를 받아들이지 않았다.",
+  "source": "https://en.wikipedia.org/wiki/Robert_Andrews_Millikan",
+  "group": "C",
+  "status": "applied"
+ },
+ {
+  "file": "exp_eclipse_1919.md",
+  "quote": "관측자들은 몇 달 전 밤하늘에서 같은 별들을 찍어 둔 비교 사진과 일식 사진을 대조해",
+  "issue": "imprecise",
+  "explanation": "프린시페 팀은 출발 전 옥스퍼드, 소브랄 팀은 일식 뒤 7월 현지 촬영",
+  "correction": "관측자들은 태양이 없는 밤하늘에서 같은 별들을 찍은 비교 사진(프린시페 팀은 출발 전 옥스퍼드에서, 소브랄 팀은 일식 뒤 7월에 현지에서 촬영)과 일식 사진을 대조해",
+  "source": "https://arxiv.org/pdf/2010.13744",
+  "group": "C",
+  "status": "applied"
+ },
+ {
+  "file": "exp_eclipse_1919.md",
+  "quote": "이튿날 런던 신문들은",
+  "issue": "imprecise",
+  "explanation": "해당 제목은 1919-11-07 『타임스』",
+  "correction": "이튿날 런던의 『타임스』는",
+  "source": "https://en.wikipedia.org/wiki/Eddington_experiment",
+  "group": "C",
+  "status": "applied"
+ },
+ {
+  "file": "exp_eclipse_1919.md",
+  "quote": "에딩턴이 일부 사진을 결과에서 제외한 판단이 적절했는지에 대해 의문을 제기했다.",
+  "issue": "contested",
+  "explanation": "제외 판단은 관측팀(다이슨 포함), 1979 재분석·후속 연구는 결론 지지",
+  "correction": "관측팀이 소브랄의 일부 사진(천체사진기 건판)을 결과에서 제외한 판단이 적절했는지에 대해 의문을 제기했다. 다만 1979년의 건판 재분석과 이후 연구는 당시의 결론을 대체로 지지한다.",
+  "source": "https://arxiv.org/pdf/2010.13744",
+  "group": "C",
+  "status": "applied"
+ },
+ {
+  "file": "facts.json",
+  "fact_id": "F153",
+  "fact_patch": {
+   "time": "1923"
+  },
+  "issue": "imprecise",
+  "explanation": "케임브리지 소속 시작 1923 (1932는 루카스 석좌교수)",
+  "source": "https://en.wikipedia.org/wiki/Paul_Dirac",
+  "group": "C",
+  "status": "applied"
+ },
+ {
+  "file": "facts.json",
+  "fact_id": "F118",
+  "fact_patch": {
+   "object": "광전 방정식"
+  },
+  "issue": "imprecise",
+  "explanation": "밀리컨이 확인한 것은 광전 방정식",
+  "source": "https://en.wikipedia.org/wiki/Robert_Andrews_Millikan",
+  "group": "C",
+  "status": "applied"
+ },
+ {
+  "file": "facts.json",
+  "fact_id": "F158",
+  "fact_patch": {
+   "relation": "완성함"
+  },
+  "issue": "imprecise",
+  "explanation": "F159/F160 과 일관 — 재규격화된 QED 완성",
+  "source": "https://www.nobelprize.org/prizes/physics/1965/summary/",
+  "group": "C",
+  "status": "applied"
+ },
+ {
+  "file": "questions.json",
+  "fact_id": "Q14",
+  "q_patch": {
+   "question": "슈뢰딩거와 같은 해에 노벨 물리학상을 받은 물리학자가 1932년 루카스 석좌교수가 된 대학에, 과학혁명기에 소속되어 있던 인물은 누구인가?",
+   "fact_ids": [
+    "F145",
+    "F152",
+    "F153",
+    "F036",
+    "F038"
+   ]
+  },
+  "issue": "imprecise",
+  "explanation": "디랙 소속 1923, F038 누락",
+  "source": "https://en.wikipedia.org/wiki/Paul_Dirac",
+  "group": "C",
+  "status": "applied"
+ },
+ {
+  "file": "questions.json",
+  "fact_id": "Q29",
+  "q_patch": {
+   "question": "아르놀트 조머펠트가 박사 과정을 지도한 제자로 문서에 언급된 인물을 모두 나열하라."
+  },
+  "issue": "imprecise",
+  "explanation": "실제 제자는 더 많음 — 문서 범위로 한정",
+  "source": "https://en.wikipedia.org/wiki/Arnold_Sommerfeld",
+  "group": "C",
+  "status": "applied"
+ },
+ {
+  "file": "questions.json",
+  "fact_id": "Q31",
+  "q_patch": {
+   "question": "문서에 수상 사실이 기록된 인물 가운데 1930년대(1930~1939년)에 노벨 물리학상을 받은 인물을 모두 나열하고 그 수를 말하라."
+  },
+  "issue": "wrong",
+  "explanation": "실제 1930년대 수상자는 11명 — 문서 범위로 한정",
+  "source": "https://www.nobelprize.org/prizes/lists/all-nobel-prizes-in-physics/",
+  "group": "C",
+  "status": "applied"
+ },
+ {
+  "file": "questions.json",
+  "fact_id": "Q32",
+  "q_patch": {
+   "question": "문서에서 플랑크가 제안한 '에너지 양자' 개념에 기반한다고 서술된 이론·가설·모형을 모두 나열하라."
+  },
+  "issue": "imprecise",
+  "explanation": "실제로는 더 있음 — 문서 범위로 한정",
+  "source": "https://en.wikipedia.org/wiki/Einstein_solid",
+  "group": "C",
+  "status": "applied"
+ }
+]
