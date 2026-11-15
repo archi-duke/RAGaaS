@@ -1,7 +1,7 @@
 import json, re, urllib.parse
 from collections import Counter
 from app.core.fuseki import fuseki_client as F
-KB="921358f2-81ab-4b4c-98f8-19f7678564fd"
+KB="4ec88353-f9fb-4142-93bb-9f08bbfa77b9"  # 2026-11-15 재구축 (이전 921358f2 삭제)
 rows=F.query_sparql(KB,'''SELECT ?s ?p ?o ?sl ?ol WHERE { GRAPH ?g { ?s ?p ?o
  OPTIONAL { ?s <http://www.w3.org/2000/01/rdf-schema#label> ?sl } OPTIONAL { ?o <http://www.w3.org/2000/01/rdf-schema#label> ?ol } }
  FILTER(STRSTARTS(STR(?g),"urn:doc:")) FILTER(STRSTARTS(STR(?p),"http://rag.local/rel/")) FILTER(!CONTAINS(STR(?p),"/inverse_")) } LIMIT 50000''')["results"]["bindings"]

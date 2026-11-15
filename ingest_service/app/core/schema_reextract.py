@@ -114,13 +114,45 @@ def check_domain(t: Dict[str, Any], cls: Dict[str, str], dr: Dict[str, Tuple[str
     if dom and rng and dom != rng and sc == rng and oc == dom:
         return {**t, "subject": t["object"], "object": t["subject"], "direction_fixed": True}
     if dom and sc and sc != dom:
-        return {**t, "out_of_schema": True, "confidence": 0.7, "domain_violation": f"{sc} ≠ {dom}"}
+        # 저장 단계는 out_of_schema 도 같은 관계 이름으로 넣으므로, 표시만 하면 그래프가 오염된다 → 제외
+        return {**t, "drop": "domain", "domain_violation": f"{sc} ≠ {dom}"}
     return t
 
 
+_YEAR_RE = re.compile(r"^\d{2,4}(?:년|년도|년대)?$")
+
+
+def is_grounded(obj: str, text: str, allowed_values: Optional[set] = None) -> bool:
+    """목적어의 핵심 토큰이 원문에 있는가 — 스키마 맞춤 환각 차단.
+
+    예) 원문 "1931년 세상을 떠났다" → '1931년도_노벨_물리학상' 은 '노벨'·'물리학상' 이 원문에 없어 거부.
+    - 허용 값 어휘(스키마 값 목록)에 있는 표기는 정규화 결과이므로 검사하지 않는다.
+    - 연도 토큰은 숫자만 원문에 있으면 된다.
+    - 핵심 토큰의 절반 이상이 원문(공백 무시)에 있어야 한다.
+    """
+    if allowed_values and _ck(obj) in allowed_values:
+        return True
+    compact_text = _ck(text)
+    toks = [x for x in re.split(r"[\s_\-·,()『』「」]+", obj) if x]
+    if not toks:
+        return True
+    hit = 0
+    for tok in toks:
+        if _YEAR_RE.match(tok):
+            hit += re.sub(r"\D", "", tok) in compact_text
+        elif len(tok) < 2:
+            hit += 1
+        else:
+            # 조사·어미 차이 허용: 앞 2글자 이상이 원문에 있으면 인정 ('측정한' ↔ '측정')
+            hit += any(_ck(tok[:k]) in compact_text for k in range(len(tok), 1, -1))
+    return hit * 2 >= len(toks)
+
+
 def parse_response(data: Optional[Dict[str, Any]], node_id: str, allowed: set,
-                   type_index: Optional[Tuple[Dict[str, str], Dict[str, Tuple[str, str]]]] = None
+                   type_index: Optional[Tuple[Dict[str, str], Dict[str, Tuple[str, str]]]] = None,
+                   text: Optional[str] = None, allowed_values: Optional[set] = None
                    ) -> List[Dict[str, Any]]:
+    """drop 표시(domain 위반·원문 근거 없음)가 붙은 트리플도 반환한다 — 호출부가 걸러 내고 집계한다."""
     out = []
     if not data:
         return out
@@ -136,7 +168,10 @@ def parse_response(data: Optional[Dict[str, Any]], node_id: str, allowed: set,
             t = {"subject": s, "predicate": p, "object": o, "source_node_id": node_id,
                  "confidence": 0.9 if not is_oos else 0.7, "out_of_schema": is_oos,
                  "extraction": "schema_reextract"}
-            out.append(check_domain(t, *type_index) if type_index else t)
+            t = check_domain(t, *type_index) if type_index else t
+            if text is not None and not t.get("drop") and not is_grounded(o, text, allowed_values):
+                t = {**t, "drop": "ungrounded"}
+            out.append(t)
     return out
 
 
@@ -148,6 +183,7 @@ async def reextract_chunks(
     schema_text = build_schema_text(spec)
     allowed = {p["name"] for p in spec.get("properties") or []}
     type_index = build_type_index(spec)
+    allowed_values = {_ck(v) for p in spec.get("properties") or [] for v in (p.get("values") or [])}
     sem = asyncio.Semaphore(CONCURRENCY)
     failures = []
 
@@ -160,16 +196,19 @@ async def reextract_chunks(
                 extra = {"thinking": {"type": "disabled"}} if "glm" in str(llm_cfg.get("model", "")).lower() else None
                 content = await achat(llm_cfg, build_messages(schema_text, text), model=llm_cfg.get("model"),
                                       temperature=0, response_format={"type": "json_object"}, extra_body=extra)
-                return parse_response(_parse_json(content), ch.get("node_id"), allowed, type_index)
+                return parse_response(_parse_json(content), ch.get("node_id"), allowed, type_index,
+                                      text[:MAX_CHUNK_CHARS], allowed_values)
             except Exception as e:
                 failures.append({"node_id": ch.get("node_id"), "reason": str(e)[:200]})
                 return []
 
     results = await asyncio.gather(*(one(c) for c in chunks))
-    triples = [t for r in results for t in r]
+    raw = [t for r in results for t in r]
+    triples = [t for t in raw if not t.get("drop")]
     stats = {"chunks": len(chunks), "triples": len(triples),
+             "dropped_domain": sum(1 for t in raw if t.get("drop") == "domain"),
+             "dropped_ungrounded": sum(1 for t in raw if t.get("drop") == "ungrounded"),
              "out_of_schema": sum(1 for t in triples if t["out_of_schema"]),
              "direction_fixed": sum(1 for t in triples if t.get("direction_fixed")),
-             "domain_violations": sum(1 for t in triples if t.get("domain_violation")),
              "chunk_failures": failures}
     return triples, stats
