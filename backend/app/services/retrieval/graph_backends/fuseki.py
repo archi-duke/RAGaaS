@@ -1429,9 +1429,28 @@ class FusekiBackend(GraphBackend):
         plan = checked["plan"]
         member_sparql = cq.compile_member_query(plan)
         entities = [cq._val(b, "e") for b in self._bindings(kb_id, member_sparql) if cq._val(b, "e")]
+        sparql_parts = [f"# 1) 조건을 만족하는 엔티티\n{member_sparql}"]
+        # 조건 완화: 계획 LLM 은 한 개념을 여러 신호로 풀어 AND 로 거는 경우가 있다
+        # ("서비스를 빠르게 추가" → release_frequency=high AND modifiability=high). 둘 다 만족하는
+        # 엔티티가 없으면 조건별 합집합(OR)으로 다시 조회하고 리포트에 남긴다. 부정 조건이 있으면 하지 않는다.
+        relaxed_note = None
+        if (not entities and len(plan["filters"]) >= 2 and not plan.get("aggregate")
+                and all(f["op"] not in ("ne", "not_exists") for f in plan["filters"])):
+            union: List[str] = []
+            for f in plan["filters"]:
+                q1 = cq.compile_member_query({**plan, "filters": [f]})
+                for b in self._bindings(kb_id, q1):
+                    e = cq._val(b, "e")
+                    if e and e not in union:
+                        union.append(e)
+            if union:
+                entities = union
+                plan = {**plan, "match": "any"}
+                relaxed_note = f"조건 완화: 모든 조건(AND)을 만족하는 엔티티 0개 → 조건 중 하나 이상(OR) {len(union)}개"
+                sparql_parts.append("# 1-b) AND 결과 0건 → 조건별로 다시 조회해 합집합(OR)")
+                log_trace(f"[Fuseki] {relaxed_note}")
         truncated = len(entities) > cq.MAX_RESULT_ENTITIES
         entities = entities[: cq.MAX_RESULT_ENTITIES]
-        sparql_parts = [f"# 1) 조건을 만족하는 엔티티\n{member_sparql}"]
 
         agg_values = None
         agg = plan.get("aggregate")
@@ -1478,7 +1497,7 @@ class FusekiBackend(GraphBackend):
                               + ([f"집계: {summary['aggregate']}"] if summary["aggregate"] else [])
                               + [f"반환: {r}" for r in summary["returns"]],
             "reason": plan.get("reason") or "",
-            "adjustments": checked.get("adjustments") or [],
+            "adjustments": (checked.get("adjustments") or []) + ([relaxed_note] if relaxed_note else []),
             "equivalences": summary.get("equivalences") or [],
             "warnings": warnings,
             "result_entities": [cq.local_name(e) for e in entities],

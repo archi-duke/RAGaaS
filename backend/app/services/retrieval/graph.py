@@ -175,7 +175,9 @@ class GraphRetrievalStrategy(RetrievalStrategy):
             # Remove duplicates
             all_entities = list(set(all_entities))
             
-        no_graph_evidence = not results or (len(results) == 1 and results[0].get("chunk_id") == "GRAPH_METADATA_ONLY")
+        # 트리플이 있으면 그래프 근거가 있는 것이다 (청크 본문이 없어도 트리플로 답한다 — 구조화 KB 등)
+        no_graph_evidence = not found_triples and (
+            not results or (len(results) == 1 and results[0].get("chunk_id") == "GRAPH_METADATA_ONLY"))
         if (kwargs.get("graph_fallback") or "vector") == "vector" and (
                 graph_result.get("fallback") == "vector" or no_graph_evidence):
             # 어느 그래프 경로로도 근거 청크가 없음 → 문서 검색(V). 그래프 근거가 아님을 리포트에 표시한다.

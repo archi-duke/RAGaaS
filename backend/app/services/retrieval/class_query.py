@@ -930,7 +930,7 @@ def result_summary(entities: Sequence[str], plan: Dict[str, Any], agg_values: Op
                    truncated: bool = False) -> str:
     names = [local_name(e) for e in entities]
     s = plan_summary(plan)
-    cond = " AND ".join(s["filters"]) or "(조건 없음)"
+    cond = (" OR " if plan.get("match") == "any" else " AND ").join(s["filters"]) or "(조건 없음)"
     head = f"질의 계획 결과 — 유형 {s['kind']}(전체 {s['kind_members']}개) 중 조건 [{cond}]"
     if plan.get("aggregate") and plan["aggregate"]["fn"] == "count_members":
         return f"{head} 을 만족하는 엔티티 수: {len(names)}{'+' if truncated else ''}개 — {', '.join(names)}"
