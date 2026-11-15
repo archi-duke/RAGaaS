@@ -31,6 +31,16 @@ def get(url):
     return json.load(urllib.request.urlopen(url, timeout=120))
 
 
+def _trace(rs):
+    """추론 과정 요약 (링킹·라우팅·홉) — 실패 원인 분석용."""
+    tg = rs.get("targeting") or {}
+    return {"linking": [{k: l.get(k) for k in ("entity", "uri", "equivalents") if l.get(k)}
+                        for l in rs.get("linking") or []],
+            "reason": tg.get("reason"), "paths": tg.get("selected_paths"),
+            "warnings": tg.get("warnings"), "adjustments": tg.get("adjustments"),
+            "n_triples": len(rs.get("triples") or [])}
+
+
 def main(kb_id, label, only=None):
     facts = {f["id"]: f for f in json.load(open(D + "facts.json"))["facts"]}
     qs = json.load(open(D + "questions.json"))
@@ -67,7 +77,7 @@ def main(kb_id, label, only=None):
         rows.append({"id": q["id"], "type": q["type"], "hops": q.get("hops"), "mode": mode,
                      "answer_hit": answer_hit, "partial": partial, "evidence_hit": evidence_hit,
                      "sec": round(time.time() - t, 1), "q": q["question"], "expected": q["answer"],
-                     "answer": ans[:300]})
+                     "answer": ans[:300], "trace": _trace(g.get("reasoning") or {})})
         r = rows[-1]
         print(f"{r['id']:4} {r['type']:10} mode={str(r['mode']):9} ans={'O' if r['answer_hit'] else ('△' if r['partial'] else 'X')} "
               f"evid={'O' if r['evidence_hit'] else ('-' if r['evidence_hit'] is None else 'X')} {r['sec']}s | {q['question'][:50]}",

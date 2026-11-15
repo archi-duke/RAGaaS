@@ -31,3 +31,21 @@ def test_schema_text_includes_definition_and_direction():
                            "properties": [{"name": "지도교수_of", "domain": "Person", "range": "Person",
                                            "description": "스승 → 제자", "aliases": ["지도교수_of"]}]})
     assert "- 지도교수_of (Person → Person): 스승 → 제자" in t
+
+
+def test_domain_check_flips_or_moves_out_of_schema():
+    from app.core.schema_reextract import build_type_index, parse_response
+    spec = {"classes": [{"name": "Person", "members": ["드브로이", "막스 플랑크"]},
+                        {"name": "TheoryOrConcept", "members": ["광양자_가설", "에너지 양자"]}],
+            "properties": [{"name": "계승_발전", "domain": "TheoryOrConcept", "range": "TheoryOrConcept"},
+                           {"name": "제안함", "domain": "Person", "range": "TheoryOrConcept"}]}
+    ti = build_type_index(spec)
+    allowed = {"계승_발전", "제안함"}
+    out = parse_response({"triples": [
+        {"subject": "드브로이", "predicate": "계승_발전", "object": "광양자_가설"},     # 인물 주어 → 스키마 밖
+        {"subject": "에너지_양자", "predicate": "제안함", "object": "막스_플랑크"},       # 뒤집힘 → 바로잡음
+        {"subject": "모르는_이름", "predicate": "제안함", "object": "광양자_가설"},       # 클래스 모름 → 그대로
+    ]}, "n1", allowed, ti)
+    assert out[0]["out_of_schema"] and out[0]["domain_violation"] == "Person ≠ TheoryOrConcept"
+    assert (out[1]["subject"], out[1]["object"], out[1]["direction_fixed"]) == ("막스_플랑크", "에너지_양자", True)
+    assert not out[2]["out_of_schema"] and "direction_fixed" not in out[2]

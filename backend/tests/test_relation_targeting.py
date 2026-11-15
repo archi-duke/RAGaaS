@@ -160,3 +160,17 @@ def test_report_avoids_flag_words():
     assert "1/5" in text and "5/5" in text
     for w in ("error", "failed", "fallback"):
         assert w not in text
+
+
+def test_builders_accept_equivalent_anchor_set():
+    from app.services.retrieval import relation_targeting as rt
+    a = ["http://rag.local/inst/볼츠만", "http://rag.local/inst/루트비히_볼츠만"]
+    cat = rt.build_catalog_query(a)
+    assert cat.count("VALUES ?anchor { <http://rag.local/inst/볼츠만> <http://rag.local/inst/루트비히_볼츠만> }") == 4
+    assert "?anchor ?p0 ?o" in cat
+    q = rt.build_targeted_query(a, [{"uris": ["http://rag.local/rel/소속"], "key": "out:소속", "dir": "out"}])
+    assert "VALUES ?anchor" in q and "BIND(?anchor AS ?s)" in q
+    # 단일 앵커는 기존과 같은 형태
+    assert "VALUES" not in rt.build_catalog_query(a[0])
+    pq = rt.build_pair_query(a, "http://rag.local/inst/빈_대학")
+    assert "VALUES ?anchorA" in pq and "BIND(?anchorA AS ?s) BIND(<http://rag.local/inst/빈_대학> AS ?o)" in pq

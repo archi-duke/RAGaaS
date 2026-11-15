@@ -108,12 +108,27 @@ JSON 만: {{"chainable": true, "start": "...", "hops": [{{"relations": [...], "d
     ]
 
 
+def is_lineage_relation(v: Optional[Dict[str, Any]]) -> bool:
+    """domain 과 range 가 같은 비인물 관계 (계승_발전, 일반화함, 근사_극한 …).
+
+    이런 관계는 이름의 자연스러운 읽기와 정의 방향이 엇갈려 추출 그래프에 양방향이 섞여 있다
+    (예: '민코프스키_시공간 —계승_발전→ 특수_상대론'). 처음부터 양방향을 조회하고, 어느 쪽이
+    맞는지는 근거 청크로 답변 LLM 이 판단한다. 인물→인물(지도교수_of)은 방향이 뜻을 가르므로 제외.
+    """
+    if not v:
+        return False
+    from app.services.retrieval.entity_linking import _is_person_type
+    dom, rng = (v.get("domain") or "").strip(), (v.get("range") or "").strip()
+    return bool(dom) and dom == rng and not _is_person_type([dom])
+
+
 def validate_plan(data: Optional[Dict[str, Any]], vocab: List[Dict[str, Any]]) -> Tuple[Optional[Dict[str, Any]], List[str]]:
     """어휘에 없는 관계는 버린다. 쓸 관계가 없는 홉이 있으면 계획 무효."""
     notes: List[str] = []
     if not data or data.get("chainable") is False:
         return None, ["체인으로 분해할 수 없는 질문"]
     names = {_compact(v["name"]): v["name"] for v in vocab}
+    by_name = {v["name"]: v for v in vocab}
     start = str(data.get("start") or "").strip()
     if not start:
         return None, ["출발 엔티티 없음"]
@@ -129,8 +144,9 @@ def validate_plan(data: Optional[Dict[str, Any]], vocab: List[Dict[str, Any]]) -
         if not rels:
             return None, notes + [f"홉{i} 에 쓸 수 있는 관계 없음"]
         d = h.get("direction") if h.get("direction") in ("out", "in") else "out"
-        hops.append({"relations": list(dict.fromkeys(rels))[:3], "direction": d,
-                     "expect": str(h.get("expect") or "")[:80]})
+        rels = list(dict.fromkeys(rels))[:3]
+        hops.append({"relations": rels, "direction": d, "expect": str(h.get("expect") or "")[:80],
+                     "both": all(is_lineage_relation(by_name.get(r)) for r in rels)})
     if not hops:
         return None, notes + ["홉 없음"]
     finals = []
@@ -165,12 +181,27 @@ WHERE {{
 LIMIT {MAX_HOP_TRIPLES}"""
 
 
-def next_frontier(triples: List[Dict[str, Any]], direction: str) -> List[str]:
-    """홉 결과에서 다음 노드 (리소스만, 등장 순, 상한)."""
+def next_frontier(triples: List[Dict[str, Any]], direction: str,
+                  frontier: Optional[Sequence[str]] = None, visited: Optional[set] = None) -> List[str]:
+    """홉 결과에서 다음 노드 (리소스만, 등장 순, 상한).
+
+    frontier 가 주어지면 트리플에서 프론티어가 아닌 쪽 끝을 다음 노드로 삼는다 (양방향 홉 대응).
+    visited(이미 거친 노드)는 제외 — 홉2 에서 출발점으로 되돌아오는 순환 방지.
+    """
     out: List[str] = []
+    fset = set(frontier or [])
+    seen = set(visited or ())
     for t in triples:
-        u = t["o_uri"] if direction == "out" else t["s_uri"]
-        if u.startswith("http://rag.local/inst/") and u not in out:
+        if fset:
+            if t["s_uri"] in fset and t["o_uri"] not in fset:
+                u = t["o_uri"]
+            elif t["o_uri"] in fset and t["s_uri"] not in fset:
+                u = t["s_uri"]
+            else:
+                continue
+        else:
+            u = t["o_uri"] if direction == "out" else t["s_uri"]
+        if u.startswith("http://rag.local/inst/") and u not in out and u not in seen:
             out.append(u)
         if len(out) >= MAX_FRONTIER:
             break
@@ -210,7 +241,7 @@ def order_chunks_by_hop(triples: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 
 def hop_label(h: Dict[str, Any], n_from: int, n_triples: int, n_next: int, flipped: bool) -> str:
-    arrow = "→" if h["direction"] == "out" else "←"
+    arrow = "↔" if h.get("both") else ("→" if h["direction"] == "out" else "←")
     kind = "추가 속성" if h.get("final") else f"홉{h['no']}"
     flip = " (반대 방향으로 재시도해 찾음)" if flipped else ""
     exp = f" — 기대: {h['expect']}" if h.get("expect") else ""
@@ -221,3 +252,65 @@ def hop_label(h: Dict[str, Any], n_from: int, n_triples: int, n_next: int, flipp
 def frontier_names(uris: Sequence[str], limit: int = 8) -> str:
     names = [local_name(u).replace("_", " ") for u in uris[:limit]]
     return ", ".join(names) + (f" 외 {len(uris) - limit}" if len(uris) > limit else "")
+
+
+# ---------------------------------------------------------------------------
+# 4. 끊긴 홉 재선택 — 프론티어 노드에 실제로 달린 관계 중에서 LLM 이 고른다 (1회)
+# ---------------------------------------------------------------------------
+
+def build_frontier_relations_query(frontier: Sequence[str]) -> str:
+    nodes = " ".join(_iri(u) for u in frontier)
+    return f"""SELECT ?p ?dir (COUNT(*) AS ?n) (SAMPLE(?x) AS ?ex) WHERE {{
+  VALUES ?node {{ {nodes} }}
+  {{ GRAPH ?g {{ ?node ?p ?x }} BIND("out" AS ?dir) }}
+  UNION
+  {{ GRAPH ?g {{ ?x ?p ?node }} BIND("in" AS ?dir) }}
+  FILTER(STRSTARTS(STR(?g), "urn:doc:"))
+  FILTER(STRSTARTS(STR(?p), "{REL_NS}"))
+  FILTER(!CONTAINS(STR(?p), "/inverse_"))
+}} GROUP BY ?p ?dir ORDER BY DESC(?n) LIMIT 40"""
+
+
+def parse_frontier_relations(bindings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    out = []
+    for b in bindings:
+        name = urllib.parse.unquote(b["p"]["value"].rsplit("/", 1)[-1])
+        if re.search(r"[<>\"\s{}|^`\\]", name):
+            continue
+        ex = b.get("ex", {}).get("value", "")
+        out.append({"relation": name, "direction": b["dir"]["value"], "count": int(b["n"]["value"]),
+                    "example": local_name(ex) if ex.startswith("http") else ex[:40]})
+    return out
+
+
+def build_repick_messages(question: str, hop: Dict[str, Any], frontier_label: str,
+                          options: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+    lines = [f"{i}. {o['relation']} ({'현재 노드가 주어' if o['direction'] == 'out' else '현재 노드가 목적어'}, "
+             f"{o['count']}건, 예: {o['example']})" for i, o in enumerate(options, 1)]
+    user = f"""다단계 질문의 체인이 한 홉에서 끊겼다. 현재 노드에 실제로 달린 관계 중에서 이 홉을 대신할 것을 골라라.
+
+질문: {question}
+현재 노드: {frontier_label}
+계획했던 관계: {', '.join(hop['relations'])} — 기대: {hop.get('expect') or '-'}
+
+현재 노드의 실제 관계:
+{chr(10).join(lines)}
+
+같은 사실을 다른 이름·방향으로 담은 관계만 고른다 (최대 3개). 맞는 것이 없으면 빈 목록.
+JSON 만: {{"picks": [번호, ...], "reason": "..."}}"""
+    return [
+        {"role": "system", "content": "You repair a broken hop in a knowledge-graph relation chain. Output JSON only."},
+        {"role": "user", "content": user},
+    ]
+
+
+def validate_repick(data: Optional[Dict[str, Any]], options: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    picks = []
+    for x in (data or {}).get("picks") or []:
+        try:
+            i = int(x)
+        except (TypeError, ValueError):
+            continue
+        if 1 <= i <= len(options) and options[i - 1] not in picks:
+            picks.append(options[i - 1])
+    return picks[:3]

@@ -47,6 +47,8 @@ def build_messages(schema_text: str, text: str) -> List[Dict[str, str]]:
 2. predicate 는 위 [속성] 이름만 쓴다 (별칭이 보이면 대표 이름으로). 개수 제한 없음.
    정의가 있는 속성은 정의의 의미와 방향(subject=domain, object=range)을 지킨다. 예: 정의가 '스승 → 제자' 이면
    "B는 A의 지도로 학위를 받았다" 는 subject=A, object=B. 일반 동사(소속·발표 등)로 뭉뚱그리지 말고 가장 구체적인 속성을 고른다.
+   정의에 'A | 속성 | B' 형태가 있으면 그 자리 그대로 쓴다. 예: '계승_발전' 이 'A | 계승_발전 | B (A가 선행)' 이면
+   "B는 A를 이어받아 발전시켰다" 는 subject=A, object=B — 문장의 주어(B)를 subject 로 쓰지 않는다.
 3. subject 는 알려진 멤버 이름 그대로 (같은 대상의 다른 표기도 대표 이름으로).
 4. object 는 허용 값이 있으면 그 표기로 (예: 높다 → 목록에 '높다'가 있으면 '높다'). 없으면 짧은 명사구로.
 5. 위 속성으로 표현할 수 없는 사실은 out_of_schema 에 넣는다 (predicate 는 짧은 명사구로 지어도 된다). 버리지 마라.
@@ -83,7 +85,42 @@ def _parse_json(text: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def parse_response(data: Optional[Dict[str, Any]], node_id: str, allowed: set) -> List[Dict[str, Any]]:
+def _ck(x: str) -> str:
+    return re.sub(r"[\s_\-]", "", str(x or "")).lower()
+
+
+def build_type_index(spec: Dict[str, Any]) -> Tuple[Dict[str, str], Dict[str, Tuple[str, str]]]:
+    """(멤버 이름 → 클래스, 속성 → (domain, range)) — 도메인·방향 검사용."""
+    cls: Dict[str, str] = {}
+    for c in spec.get("classes") or []:
+        for m in c.get("members") or []:
+            cls.setdefault(_ck(m), c["name"])
+    dr = {p["name"]: (p.get("domain") or "", p.get("range") or "") for p in spec.get("properties") or []}
+    return cls, dr
+
+
+def check_domain(t: Dict[str, Any], cls: Dict[str, str], dr: Dict[str, Tuple[str, str]]) -> Dict[str, Any]:
+    """알려진 멤버의 클래스로 domain·range 를 검사한다.
+
+    - 주어·목적어 클래스가 정확히 (range, domain) 이면 방향이 뒤집힌 것 → 바꾼다.
+    - 주어 클래스가 domain 과 다르면 그 속성의 사실이 아니다 → out_of_schema
+      (예: '드브로이(인물) —계승_발전→ 광양자_가설' — 계승_발전 은 이론 → 이론).
+    클래스를 모르는 이름은 검사하지 않는다.
+    """
+    if t["out_of_schema"] or t["predicate"] not in dr:
+        return t
+    dom, rng = dr[t["predicate"]]
+    sc, oc = cls.get(_ck(t["subject"])), cls.get(_ck(t["object"]))
+    if dom and rng and dom != rng and sc == rng and oc == dom:
+        return {**t, "subject": t["object"], "object": t["subject"], "direction_fixed": True}
+    if dom and sc and sc != dom:
+        return {**t, "out_of_schema": True, "confidence": 0.7, "domain_violation": f"{sc} ≠ {dom}"}
+    return t
+
+
+def parse_response(data: Optional[Dict[str, Any]], node_id: str, allowed: set,
+                   type_index: Optional[Tuple[Dict[str, str], Dict[str, Tuple[str, str]]]] = None
+                   ) -> List[Dict[str, Any]]:
     out = []
     if not data:
         return out
@@ -96,9 +133,10 @@ def parse_response(data: Optional[Dict[str, Any]], node_id: str, allowed: set) -
                 continue
             # 스키마 속성이라고 했는데 목록에 없으면 스키마 밖으로 분류
             is_oos = oos or p not in allowed
-            out.append({"subject": s, "predicate": p, "object": o, "source_node_id": node_id,
-                        "confidence": 0.9 if not is_oos else 0.7, "out_of_schema": is_oos,
-                        "extraction": "schema_reextract"})
+            t = {"subject": s, "predicate": p, "object": o, "source_node_id": node_id,
+                 "confidence": 0.9 if not is_oos else 0.7, "out_of_schema": is_oos,
+                 "extraction": "schema_reextract"}
+            out.append(check_domain(t, *type_index) if type_index else t)
     return out
 
 
@@ -109,6 +147,7 @@ async def reextract_chunks(
 
     schema_text = build_schema_text(spec)
     allowed = {p["name"] for p in spec.get("properties") or []}
+    type_index = build_type_index(spec)
     sem = asyncio.Semaphore(CONCURRENCY)
     failures = []
 
@@ -121,7 +160,7 @@ async def reextract_chunks(
                 extra = {"thinking": {"type": "disabled"}} if "glm" in str(llm_cfg.get("model", "")).lower() else None
                 content = await achat(llm_cfg, build_messages(schema_text, text), model=llm_cfg.get("model"),
                                       temperature=0, response_format={"type": "json_object"}, extra_body=extra)
-                return parse_response(_parse_json(content), ch.get("node_id"), allowed)
+                return parse_response(_parse_json(content), ch.get("node_id"), allowed, type_index)
             except Exception as e:
                 failures.append({"node_id": ch.get("node_id"), "reason": str(e)[:200]})
                 return []
@@ -130,5 +169,7 @@ async def reextract_chunks(
     triples = [t for r in results for t in r]
     stats = {"chunks": len(chunks), "triples": len(triples),
              "out_of_schema": sum(1 for t in triples if t["out_of_schema"]),
+             "direction_fixed": sum(1 for t in triples if t.get("direction_fixed")),
+             "domain_violations": sum(1 for t in triples if t.get("domain_violation")),
              "chunk_failures": failures}
     return triples, stats
