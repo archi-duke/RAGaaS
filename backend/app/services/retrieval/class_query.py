@@ -604,6 +604,26 @@ def validate_plan(
             nf["text"] = str(f.get("value") or "").strip()
             if not nf["text"]:
                 return {"status": "reject", "message": f"{p['key']} contains 값 없음"}
+        elif strict and op == "in" and isinstance(f.get("value"), list) and len(f["value"]) > 1:
+            # 외부 계획의 in: 목록 밖 값은 빼고 나머지로 평가 (하나라도 맞으면). GoJIRA style-score 보고(2026-11-16):
+            # ["small", "medium_or_lower"] 에서 목록 밖 값 하나 때문에 small 매칭까지 사라지던 문제
+            ok_vals, missing = [], []
+            for item in f["value"]:
+                r1, _n1 = resolve_value(item, p, value_hints_uris, strict=True)
+                if r1:
+                    ok_vals.extend(x for x in r1 if x not in ok_vals)
+                else:
+                    missing.append(str(item))
+            if not ok_vals:
+                return {"status": "zero", "message": f"{', '.join(missing)} 는 {p['key']} 값 목록에 없음", "kind": kind}
+            resolved, added = expand_values(p, ok_vals)
+            note = f"in {', '.join(v['label'] for v in ok_vals)}"
+            if missing:
+                adjustments.append(f"{p['key']}: 값 목록에 없는 {', '.join(missing)} 는 빼고 조회")
+            if added:
+                note += f" +{', '.join(added)}(동치 값)"
+            nf["values"] = resolved
+            nf["note"] = note
         else:
             resolved, note = resolve_value(f.get("value"), p, value_hints_uris, strict=strict)
             if resolved is None:

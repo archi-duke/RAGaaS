@@ -22,8 +22,8 @@ import itertools
 import time
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-MAX_LEAVES = 12
-MAX_CONJUNCTIONS = 16
+MAX_LEAVES = 64           # GoJIRA style-score: 정규화 속성 × 신호 표기로 15개 이상이 흔함 (2026-11-16 상향)
+MAX_CONJUNCTIONS = 64
 MAX_LIMIT = 200
 
 
@@ -94,8 +94,13 @@ async def run_plan(kb_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
     _kb, kinds, catalogs, version = await load_catalog(kb_id)
     fb = FusekiBackend()
 
+    _qcache: Dict[str, Any] = {}
+
     async def q(sparql: str):
-        return await asyncio.to_thread(fb._bindings, kb_id, sparql)
+        # 같은 계획 안의 같은 질의는 한 번만 (any 의 단일 조건 묶음 = 조건별 충족 조회와 같은 SPARQL)
+        if sparql not in _qcache:
+            _qcache[sparql] = await asyncio.to_thread(fb._bindings, kb_id, sparql)
+        return _qcache[sparql]
 
     def fail(status: str, message: str, **extra) -> Dict[str, Any]:
         return {"status": status, "message": message, "schema_version": version,
