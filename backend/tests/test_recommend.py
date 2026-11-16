@@ -5,7 +5,9 @@ CTX = {"spec": {"classes": [{"name": "ArchitectureStyle"}, {"name": "QualityAttr
                 "properties": [{"name": "is_suitable_for", "domain": "ArchitectureStyle", "range": "Requirement", "description": "x"},
                                {"name": "관련_패턴", "domain": "ArchitectureStyle", "range": "ArchitectureStyle", "description": "y"}]},
        "problems": [{"subject": "Clean Architecture", "predicate": "is_suitable_for", "object": "Microservices",
-                     "source": "c1", "doc_id": "d1", "doc": "clean.md"}]}
+                     "source": "c1", "doc_id": "d1", "doc": "clean.md"}],
+       # 그래프에 실재하는 엔티티 (정규화 키)
+       "entity_keys": {"단일책임", "개방폐쇄", "확장성", "확장성요구", "운영복잡도", "operationalcomplexity", "단순성"}}
 
 
 def test_validate_actions_filters_unknown_names_and_resolves_refs():
@@ -42,3 +44,12 @@ def test_simulated_rules_and_schema_actions():
     rules = rc._simulated_rules(acts)
     assert {r["rule_type"] for r in rules} == {"triple", "entity"}
     assert next(r for r in rules if r["rule_type"] == "triple")["target_path"] == "관련_패턴"
+
+
+def test_unknown_entities_dropped():
+    ctx = {**CTX, "entity_keys": {"단순성"}, "spec": {**CTX["spec"], "member_gaps": {}, "range_violations": []}}
+    out = rc.validate_actions({"actions": [
+        {"type": "assign_members", "class": "QualityAttribute", "entities": ["단순성", "지어낸이름"]},
+        {"type": "merge_entities", "canonical": "없는대표", "aliases": ["단순성"]}]}, ctx)
+    assert out[0]["entities"] == ["단순성"] and len(out) == 1
+    assert any("지어낸이름" in d for d in ctx["dropped"])

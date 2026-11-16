@@ -387,6 +387,8 @@ export default function SchemaEditor({ kbId }: { kbId: string }) {
 
             {recFor && (
                 <RecommendPanel kbId={kbId} triples={recFor.triples} onClose={() => setRecFor(null)}
+                    classes={classes.map((c) => orig.c[c.key] || c.name).filter(Boolean)}
+                    properties={props.map((p) => orig.p[p.key] || p.name).filter(Boolean)}
                     onApplied={(m) => { setMessage(m); setTriplesFor(null); load(); }} />
             )}
 

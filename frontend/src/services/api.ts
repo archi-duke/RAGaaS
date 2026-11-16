@@ -197,8 +197,9 @@ export const schemaApi = {
         api.post(`knowledge-bases/${kbId}/schema/recommend`, triples ? { triples } : {}, { timeout: 900000 }),
     recommendPreview: (kbId: string, actions: any[], problems: any[]) =>
         api.post(`knowledge-bases/${kbId}/schema/recommend/preview`, { actions, problems }, { timeout: 900000 }),
-    recommendApply: (kbId: string, actions: any[], baseVersion?: number) =>
-        api.post(`knowledge-bases/${kbId}/schema/recommend/apply`, { actions, base_version: baseVersion }, { timeout: 900000 }),
+    recommendApply: (kbId: string, actions: any[], baseVersion?: number, recId?: string, outcome?: any) =>
+        api.post(`knowledge-bases/${kbId}/schema/recommend/apply`, { actions, base_version: baseVersion, rec_id: recId, outcome }, { timeout: 900000 }),
+    recommendLog: (kbId: string) => api.get(`knowledge-bases/${kbId}/schema/recommend/log`),
     mergeEntities: (kbId: string, canonical: string, aliases: string[]) =>
         api.post(`knowledge-bases/${kbId}/schema/spec/merge`, { canonical, aliases }),
     reingest: (kbId: string, docId: string, file: File) => {
