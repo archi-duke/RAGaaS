@@ -330,6 +330,22 @@ def apply_rules_to_triples(
     active = [r for r in (rules or []) if r.get("status", "active") == "active"]
     entity_map = {compact(r["source_value"]): r["target_value"] for r in active
                   if r.get("rule_type") == "entity" and r.get("source_value") and r.get("target_value")}
+    # 이름 규칙은 끝까지 따라간다 ('아르놀트 조머펠트 → 조머펠트' 뒤에 병합 '조머펠트 → 아르놀드 조머펠트' 가 생기면
+    # 한 번만 적용해서는 '조머펠트' 에 멈춘다 — 2026-11-16 데이터 품질 D2). 순환은 끊는다.
+    def _resolve(name: Any) -> Any:
+        cur, seen = name, set()
+        for _ in range(10):
+            k = compact(cur)
+            if k in seen:
+                break
+            seen.add(k)
+            nxt = entity_map.get(k)
+            if not nxt or nxt == cur:
+                break
+            cur = nxt               # 표기 바꾸기는 항상 적용 ('맥스웰' → 'J. C. 맥스웰' 은 정규화 키가 같아도)
+            if compact(nxt) == k:   # 같은 키 안의 표기 변경이면 여기서 끝 (순환 방지)
+                break
+        return cur
     key_map = {}
     for r in active:
         if r.get("rule_type") == "key":
@@ -345,7 +361,11 @@ def apply_rules_to_triples(
     triple_map = {}
     for r in active:
         if r.get("rule_type") == "triple" and r.get("pair") and len(r["pair"]) == 3:
-            triple_map[tuple(compact(x) for x in r["pair"])] = r.get("target_path") or None
+            s_, p_, o_ = r["pair"]
+            # 트리플 규칙의 주어·목적어도 이름 규칙을 거친 표기로 맞춘다 — 나중에 병합이 생겨도
+            # 앞서 한 뒤집기·이동·삭제가 조용히 풀리지 않게 (예: 뒤집기 규칙 '파울리|지도교수_of|조머펠트' 뒤에
+            # '조머펠트 → 아르놀드 조머펠트' 병합)
+            triple_map[(compact(_resolve(s_)), compact(p_), compact(_resolve(o_)))] = r.get("target_path") or None
 
     counts = {"entity": 0, "key": 0, "value": 0, "class": 0, "triple_moved": 0, "triple_deleted": 0, "triple_flipped": 0}
     out: List[Dict[str, Any]] = []
@@ -353,7 +373,7 @@ def apply_rules_to_triples(
     for t in triples:
         n = dict(t)
         for side in ("subject", "object"):
-            tgt = entity_map.get(compact(n.get(side)))
+            tgt = _resolve(n.get(side)) if compact(n.get(side)) in entity_map else None
             if tgt and n.get(side) != tgt:
                 n[side] = tgt
                 counts["entity"] += 1

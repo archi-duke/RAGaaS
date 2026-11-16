@@ -211,6 +211,32 @@ async def lexicon_review(kb_id: str):
     return {"groups": await lx.review_queue(kb_id)}
 
 
+_DUP_STATE: dict = {}
+
+
+@router.post("/{kb_id}/lexicon/duplicates/review")
+async def lexicon_duplicates_review(kb_id: str):
+    """중복 후보 판정 제안 (백그라운드, LLM) — 같은 대상이면 병합안, 다른 대상이면 지울 공유 별칭. 저장만."""
+    from app.services.agent_query import lexicon as lx
+    if _DUP_STATE.get(kb_id, {}).get("state") == "running":
+        return _DUP_STATE[kb_id]
+
+    async def _run():
+        try:
+            _DUP_STATE[kb_id] = {"state": "done", **(await lx.review_duplicates(kb_id))}
+        except Exception as e:      # noqa: BLE001
+            _DUP_STATE[kb_id] = {"state": "error", "error": str(e)[:300]}
+    _DUP_STATE[kb_id] = {"state": "running"}
+    asyncio.create_task(_run())
+    return _DUP_STATE[kb_id]
+
+
+@router.get("/{kb_id}/lexicon/duplicates/review")
+async def lexicon_duplicates_review_get(kb_id: str):
+    from app.services.agent_query import lexicon as lx
+    return {**(await lx.get_duplicate_review(kb_id)), "run": _DUP_STATE.get(kb_id, {"state": "idle"})}
+
+
 @router.get("/{kb_id}/lexicon/duplicates")
 async def lexicon_duplicates(kb_id: str):
     from app.services.agent_query import lexicon as lx

@@ -666,3 +666,89 @@ async def expand_query_entities(kb_id: str, entities: Sequence[str], translated:
                 added.append(m["label"])
                 log.append(f"{t} → {m['label']} (영어 유사도 {m.get('similarity')})")
     return {"added": added, "log": log}
+
+
+# ---------------------------------------------------------------------------
+# 데이터 품질 D2 — 중복 후보 판정 제안 (같은 대상이면 병합, 다른 대상이면 공유 별칭만 삭제)
+# 결과는 저장만 한다. 적용은 사람이 승인 후 (병합 = schema_editor.merge_entities, 별칭 삭제 = remove_alias)
+# ---------------------------------------------------------------------------
+
+DUP_PROMPT = """아래는 지식 그래프({domain})에서 같은 별칭을 공유하는 라벨 묶음이다.
+묶음마다 판정하라:
+- merge: 모두 같은 대상(같은 사람·같은 이론·같은 장소)의 다른 표기다. canonical 은 가장 완전한 이름
+  (사람이면 전체 이름, 예: '조머펠트' 와 '아르놀드 조머펠트' → '아르놀드 조머펠트'). 묶음 일부만 같으면 same 에 그 라벨들만.
+- distinct: 서로 다른 대상인데 일반적인 별칭(예: '대학', 'institution of higher education')이나 잘못 붙은 별칭을 공유한다.
+  remove_aliases 에 지울 공유 별칭을 적는다.
+- unsure: 주어진 정보로 판단 불가.
+관계 정보(각 라벨이 그래프에서 무엇과 연결되는지)를 근거로 삼아라. reason 은 한 줄.
+
+{groups}
+
+JSON 만: {{"results": [{{"id": 번호, "decision": "merge|distinct|unsure", "canonical": "...", "same": ["..."], "remove_aliases": ["..."], "reason": "..."}}]}}"""
+
+
+async def review_duplicates(kb_id: str) -> Dict[str, Any]:
+    from app.core.llm import achat, no_thinking_extra_body
+    from app.models.knowledge_base import KnowledgeBase
+    from app.services.agent_query.catalog import _kb, describe_entity
+    from app.services.retrieval.relation_targeting import parse_json_loose
+    t0 = time.time()
+    kb = await _kb(kb_id)
+    cfg = await _llm_cfg(kb)
+    groups = await duplicates(kb_id)
+    ctx_lines = []
+    for n, g in enumerate(groups):
+        parts = []
+        for lab in g["labels"]:
+            try:
+                d = await describe_entity(kb_id, lab)
+                rels = [f"{x['p']}→{x['o']}" for x in (d.get("out") or [])[:5]] + [f"{x['s']}→{x['p']}" for x in (d.get("in") or [])[:3]]
+                parts.append(f"  · {lab} ({(d.get('entity') or {}).get('kind', '?')}): {'; '.join(rels) or '관계 없음'}")
+            except Exception:
+                parts.append(f"  · {lab}: (조회 실패)")
+        ctx_lines.append(f"{n}. 라벨 {g['labels']} / 공유 별칭 {g['shared']}\n" + "\n".join(parts))
+    domain = f"{kb.name} — {(kb.description or '')[:120]}"
+    out: Dict[int, Dict[str, Any]] = {}
+
+    async def judge(k: int):
+        chunk = ctx_lines[k:k + 15]
+        for _ in range(2):
+            raw = await achat(cfg, [{"role": "user", "content": DUP_PROMPT.format(domain=domain, groups="\n".join(chunk))}],
+                              model=cfg.get("model"), temperature=0, max_tokens=6000,
+                              response_format={"type": "json_object"}, extra_body=no_thinking_extra_body(cfg.get("model")))
+            data = parse_json_loose(raw)
+            if isinstance(data, dict) and data.get("results"):
+                for r in data["results"]:
+                    try:
+                        out[int(r.get("id"))] = r
+                    except (TypeError, ValueError):
+                        pass
+                return
+
+    await asyncio.gather(*(judge(k) for k in range(0, len(ctx_lines), 15)))
+    items = []
+    for n, g in enumerate(groups):
+        r = out.get(n) or {}
+        dec = str(r.get("decision") or "unsure").lower()
+        same = [x for x in (r.get("same") or g["labels"]) if x in g["labels"]] or g["labels"]
+        canon = r.get("canonical") if r.get("canonical") in g["labels"] else (same[0] if same else g["labels"][0])
+        items.append({"labels": g["labels"], "shared": g["shared"],
+                      "decision": dec if dec in ("merge", "distinct", "unsure") else "unsure",
+                      "canonical": canon, "same": same,
+                      "remove_aliases": [a for a in (r.get("remove_aliases") or []) if isinstance(a, str)][:10],
+                      "reason": str(r.get("reason") or "")[:300]})
+    from collections import Counter
+    result = {"at": datetime.utcnow().isoformat(), "model": cfg.get("model"), "items": items,
+              "summary": dict(Counter(i["decision"] for i in items)), "elapsed_s": round(time.time() - t0, 1)}
+    kb2 = await KnowledgeBase.get(kb_id)
+    meta = dict(kb2.promotion_metadata or {})
+    meta["duplicate_review"] = result
+    kb2.promotion_metadata = meta
+    await kb2.save()
+    return {k: v for k, v in result.items() if k != "items"} | {"total": len(items)}
+
+
+async def get_duplicate_review(kb_id: str) -> Dict[str, Any]:
+    from app.models.knowledge_base import KnowledgeBase
+    kb = await KnowledgeBase.get(kb_id)
+    return ((kb.promotion_metadata or {}).get("duplicate_review")) or {"items": []}

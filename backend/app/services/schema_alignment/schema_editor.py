@@ -864,8 +864,9 @@ JSON: {{"groups": [["대표로 쓸 이름", "같은 개념 이름", ...]]}}"""}]
     return {"class": class_name, "groups": groups}
 
 
-async def merge_entities(kb_id: str, canonical: str, aliases: List[str]) -> Dict[str, Any]:
-    """표기 병합 (entity 규칙, origin=schema_editor:merge) + 리플레이."""
+async def merge_entities(kb_id: str, canonical: str, aliases: List[str], replay: bool = True,
+                         origin: str = "schema_editor:merge") -> Dict[str, Any]:
+    """표기 병합 (entity 규칙) + 리플레이. replay=False 면 규칙만 (여러 병합을 묶어 리플레이 한 번 — merge_entities_batch)."""
     from app.models.knowledge_base import KnowledgeBase
     from app.models.schema_mapping import SchemaMappingRule
     from app.services.retrieval.entity_linking import _compact
@@ -889,13 +890,27 @@ async def merge_entities(kb_id: str, canonical: str, aliases: List[str]) -> Dict
             await r.save()
         else:
             await SchemaMappingRule(kb_id=kb_id, rule_type="entity", source_value=a, target_value=canonical,
-                                    origin="schema_editor:merge").insert()
+                                    origin=origin).insert()
         n += 1
     if n or conflicts:
         kb.schema_rules_version = (kb.schema_rules_version or 0) + 1
         await kb.save()
-    rp = await _replay_text_docs(kb_id) if (n or conflicts) else {"replayed": 0, "errors": []}
+    rp = await _replay_text_docs(kb_id) if (replay and (n or conflicts)) else {"replayed": 0, "errors": []}
     return {"canonical": canonical, "merged": n, "conflicts_disabled": conflicts, **rp}
+
+
+async def merge_entities_batch(kb_id: str, merges: List[Dict[str, Any]], origin: str = "schema_editor:merge") -> Dict[str, Any]:
+    """여러 병합 [{canonical, aliases}] 을 규칙으로 넣고 리플레이는 한 번 (데이터 품질 D2: 중복 30여 묶음)."""
+    done = []
+    for m in merges:
+        c = (m.get("canonical") or "").strip()
+        al = [a for a in (m.get("aliases") or []) if a and a.strip() and a.strip() != c]
+        if not c or not al:
+            continue
+        r = await merge_entities(kb_id, c, al, replay=False, origin=origin)
+        done.append({"canonical": c, "merged": r["merged"], "conflicts_disabled": r["conflicts_disabled"]})
+    rp = await _replay_text_docs(kb_id) if done else {"replayed": 0, "errors": []}
+    return {"groups": len(done), "rules": sum(d["merged"] for d in done), "details": done, **rp}
 
 
 # ---------------------------------------------------------------------------

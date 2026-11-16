@@ -299,6 +299,21 @@ async def schema_merge_candidates(kb_id: str, class_name: str):
         _edit_error(e)
 
 
+class MergeBatchBody(BaseModel):
+    merges: List[dict]          # [{canonical, aliases: [...]}]
+    origin: Optional[str] = None
+
+
+@router.post("/{kb_id}/schema/spec/merge/batch")
+async def merge_schema_entities_batch(kb_id: str, body: MergeBatchBody):
+    """여러 표기 병합을 규칙으로 넣고 리플레이 한 번."""
+    from app.services.schema_alignment import schema_editor as se
+    try:
+        return await se.merge_entities_batch(kb_id, body.merges, body.origin or "schema_editor:merge")
+    except se.SchemaEditError as e:
+        _edit_error(e)
+
+
 @router.post("/{kb_id}/schema/spec/merge")
 async def merge_schema_entities(kb_id: str, body: MergeBody):
     """표기 병합 (entity 규칙 + 리플레이)."""
