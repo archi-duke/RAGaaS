@@ -588,3 +588,75 @@ async def review_queue(kb_id: str, limit: int = 300) -> List[Dict[str, Any]]:
     rows = [{"broader": k, "labels": sorted(v)} for k, v in groups.items()]
     rows.sort(key=lambda r: (-len(r["labels"]), r["broader"]))
     return rows[:limit]
+
+
+# ---------------------------------------------------------------------------
+# L4 — 자동 갱신 + 내부 검색 연결
+# ---------------------------------------------------------------------------
+
+AUTO_REFRESH_MIN_INTERVAL_S = 600
+_LAST_FP: Dict[str, Tuple[str, float]] = {}
+
+
+async def ensure_fresh(kb_id: str) -> None:
+    """그래프가 바뀌었으면(카탈로그 지문 변경) 사전에 새 라벨을 증분 반영 — 백그라운드, 10분에 한 번까지.
+
+    사전을 한 번이라도 만든 KB 에만 (원치 않는 LLM 비용 방지). 새 라벨이 없으면 LLM 호출 0.
+    적재·재추출·리플레이 어느 경로로 그래프가 바뀌어도 잡히도록 지문 기준으로 한다.
+    """
+    try:
+        from app.models.lexicon import KbLexiconEntry
+        from app.services.retrieval.graph_backends.fuseki import FusekiBackend
+        cached = FusekiBackend._CLASS_CATALOG_CACHE.get(kb_id)
+        if not cached:
+            return
+        fp = cached[0]
+        prev = _LAST_FP.get(kb_id)
+        if prev is None:
+            _LAST_FP[kb_id] = (fp, time.time())      # 서버 시작 후 첫 확인 — 기준만 잡는다
+            return
+        if prev[0] == fp or time.time() - prev[1] < AUTO_REFRESH_MIN_INTERVAL_S:
+            return
+        if build_status(kb_id).get("state") == "running":
+            return
+        if await KbLexiconEntry.find_one({"kb_id": kb_id}) is None:
+            return
+        _LAST_FP[kb_id] = (fp, time.time())
+        logger.info("lexicon auto-refresh %s (fingerprint %s → %s)", kb_id, prev[0], fp)
+        asyncio.create_task(build_lexicon(kb_id))
+    except Exception as e:     # 검색을 막지 않는다
+        logger.warning("lexicon ensure_fresh failed: %s", e)
+
+
+async def expand_query_entities(kb_id: str, entities: Sequence[str], translated: Sequence[str]) -> Dict[str, Any]:
+    """내부 검색(/chat)용: 질문 분석이 뽑은 엔티티를 사전으로 그래프 표기에 맞춘다.
+
+    ① 원문 엔티티 → 사전 일치 ② 질문 분석의 영어 번역(translated_entities) → 사전 일치 → 없으면 영어 표기 임베딩.
+    반환: {"added": [그래프 라벨], "log": [사람이 읽을 근거]}. 사전이 없는 KB 면 빈 결과.
+    """
+    await ensure_fresh(kb_id)
+    idx = await get_index(kb_id)
+    if not idx["entries"]:
+        return {"added": [], "log": []}
+    added: List[str] = []
+    log: List[str] = []
+
+    def take(src: str, ms: List[Dict[str, Any]], how: str):
+        top = [m for m in ms if m["score"] >= SCORE_STRIPPED][:2]
+        for m in top:
+            if m["label"] not in added and _compact(m["label"]) != _compact(src):
+                added.append(m["label"])
+                log.append(f"{src} → {m['label']} ({how}:{m['via']})")
+        return bool(top)
+
+    for e in entities or []:
+        take(e, match_term(idx, e), "사전")
+    for t in translated or []:
+        if take(t, match_term(idx, t), "사전·영어"):
+            continue
+        tr = await match_translated(kb_id, idx, t)
+        for m in tr["matches"]:
+            if m["label"] not in added:
+                added.append(m["label"])
+                log.append(f"{t} → {m['label']} (영어 유사도 {m.get('similarity')})")
+    return {"added": added, "log": log}

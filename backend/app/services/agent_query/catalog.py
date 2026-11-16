@@ -225,6 +225,7 @@ async def lookup_values(kb_id: str, terms: Sequence[str], kind: Optional[str] = 
     """terms_en: 클라이언트가 보낸 영어 표기 (오탈자 교정 포함). 사전에 없을 때만 쓴다 (§5.1)."""
     from app.services.agent_query import lexicon as lx
     _kb_, kinds, catalogs, version = await load_catalog(kb_id)
+    await lx.ensure_fresh(kb_id)
     idx = await lx.get_index(kb_id)
     # 값 라벨 → 등장 위치 (유형·경로)
     where: Dict[str, List[Dict[str, Any]]] = {}

@@ -114,6 +114,18 @@ class GraphRetrievalStrategy(RetrievalStrategy):
             log(f"DEBUG: 🔗 Entity expansion disabled")
         
         all_entities = list(set(entities + expanded_entities))
+
+        # KB 용어 사전 (docs/design-kb-lexicon.md L4): 한영·음역·동의어·오탈자를 그래프 표기로.
+        # 질문 분석의 영어 번역(translated_entities)을 사전 대체 단계에 쓴다 — 추가 LLM 호출 없음.
+        if graph_backend_type == "ontology":
+            try:
+                from app.services.agent_query import lexicon as _lx
+                lexr = await _lx.expand_query_entities(kb_id, entities, query_analysis.get("translated_entities", []))
+                if lexr["added"]:
+                    all_entities = list(dict.fromkeys(lexr["added"] + all_entities))
+                    log(f"[Lexicon] 용어 사전으로 맞춤: {'; '.join(lexr['log'])}")
+            except Exception as _e:
+                log(f"[Lexicon] 사용 안 함: {_e}")
         
         graph_backend_for_check = kwargs.get("graph_backend", "ontology")
         if not all_entities and graph_backend_for_check != "ontology":
