@@ -17,7 +17,14 @@ import urllib.request
 BASE = os.getenv("RAGAAS_BASE", "http://localhost:44300/ragaas/api/v2/knowledge-bases/")
 HERE = os.path.dirname(os.path.abspath(__file__)) + "/"
 D = os.path.dirname(HERE.rstrip("/")) + "/"   # 데이터셋 폴더 (facts.json, questions.json)
-NEG_PAT = re.compile(r"(없습니다|없다|포함되어 있지 않|찾을 수 없|언급되어 있지 않|알 수 없|정보가 없|couldn't find|not)", re.I)
+# 없는 사실(negative) 문항: '찾지 못했다', '받은 적이 없다' 도 부정 답변 (2026-11-17 채점 수정)
+NEG_PAT = re.compile(r"(없습니다|없다|포함되어 있지 않|찾을 수 없|찾지 못|언급되어 있지 않|알 수 없|정보가 없|"
+                     r"받은 적이 없|받지 못|기록이 없|couldn't find|not)", re.I)
+# 정답 별칭 (인물의 성·짧은 이름) — answer_aliases.json
+try:
+    ALIASES = {k: v for k, v in json.load(open(D + "answer_aliases.json", encoding="utf-8")).items() if not k.startswith("_")}
+except FileNotFoundError:
+    ALIASES = {}
 
 
 def norm(s):
@@ -27,6 +34,13 @@ def norm(s):
 def strip_note(a):
     """정답 항목의 괄호 주석 제거: '플랑크 복사 법칙(확인)' → '플랑크 복사 법칙'."""
     return re.sub(r"\s*\([^)]*\)\s*$", "", str(a))
+
+
+def item_hit(expected, ans):
+    """정답 항목 하나가 답변에 있는가: 정규화 문자열 포함, 또는 별칭(인물의 성) 포함."""
+    e = strip_note(expected)
+    na = norm(ans)
+    return any(norm(x) and norm(x) in na for x in [e] + ALIASES.get(e, []))
 
 
 def get(url):
@@ -75,7 +89,7 @@ def main(kb_id, label, only=None):
             answer_hit = bool(NEG_PAT.search(ans))
             partial = answer_hit
         else:
-            hits = [a for a in q["answer"] if norm(strip_note(a)) and norm(strip_note(a)) in norm(ans)]
+            hits = [a for a in q["answer"] if item_hit(a, ans)]
             answer_hit = len(hits) == len(q["answer"])
             partial = len(hits) > 0
         want_docs = {id_by_name.get(n) for fid in q.get("fact_ids", []) for n in facts.get(fid, {}).get("docs", [])}
@@ -85,7 +99,7 @@ def main(kb_id, label, only=None):
         rows.append({"id": q["id"], "type": q["type"], "hops": q.get("hops"), "mode": mode,
                      "answer_hit": answer_hit, "partial": partial, "evidence_hit": evidence_hit,
                      "sec": round(time.time() - t, 1), "q": q["question"], "expected": q["answer"],
-                     "answer": ans[:300], "trace": _trace(g.get("reasoning") or {})})
+                     "answer": ans, "trace": _trace(g.get("reasoning") or {})})
         r = rows[-1]
         print(f"{r['id']:4} {r['type']:10} mode={str(r['mode']):9} ans={'O' if r['answer_hit'] else ('△' if r['partial'] else 'X')} "
               f"evid={'O' if r['evidence_hit'] else ('-' if r['evidence_hit'] is None else 'X')} {r['sec']}s | {q['question'][:50]}",
