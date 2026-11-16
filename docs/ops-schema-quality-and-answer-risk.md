@@ -79,6 +79,23 @@
 
 ---
 
+## 3. 실제 사례 (2026-11-16, "배포 용이성과 수정 용이성이 좋은 스타일은?")
+
+**test-ontology (YAML, Agentic + Graph)** — 답변이 Modular Monolith 를 "deployability positive", Layered 를 "modifiability positive" 로 **반대로** 말했다.
+원본 YAML 은 Modular Monolith deployability **negative**/medium, Layered modifiability **negative**/medium.
+
+- 원인: `quality_attributes` 는 `{attribute, effect, strength}` 항목들의 **목록**인데, 유형 질의가 "attribute = deployability" 와
+  "effect = positive" 를 **서로 다른 항목**에서 맞춰도 통과시켰다 (조건마다 중간 노드 변수를 따로 둠). Modular Monolith 는
+  deployability 항목(negative)과 다른 positive 항목이 있어 걸렸다. 스키마와 데이터는 맞았고 **검색 질의가 틀렸다** — 데이터 검증으로는 못 잡는 유형.
+- 수정: 같은 상위 경로를 가진 조건은 중간 노드를 공유해 **같은 항목에서** 맞춘다 (`class_query.compile_member_query`).
+  수정 후 같은 질문: Modular Monolith 를 "deployability negative — 배포에 불리" 로 바르게 답하고 결론은 Micro-Frontend.
+- 남은 점: Microservices 를 "수정 용이성 근거 없음" 으로 뺐다 — modifiability 가 `fit_signals` 와 `quality_attributes` 두 곳에 있는데
+  에이전트가 한 곳만 봤다 (덜 찾음). 같은 개념의 여러 위치를 계획에 알려 주는 것이 다음 과제.
+
+**test-ontology2 (텍스트)** — 답변 자체는 맞았다(Micro-Frontend, Microservices 는 놓침). 대신 확인 중 그래프에서
+`CQRS —has_moderate_negative_effect_on→ 배포 용이성 / 변경 용이성` 을 발견 — 원문은 "변경 용이성 **중간 긍정**", 배포는 언급 없음.
+스키마에는 맞아서(QualityAttribute) 데이터 검증에 안 잡히는 **④ 유형**(§2)의 실제 사례다. "변경 용이성에 부정적인 스타일은?" 에 CQRS 가 틀리게 들어갈 수 있다.
+
 ## 운영 체크리스트
 
 | 언제 | 할 일 |

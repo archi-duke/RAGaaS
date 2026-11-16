@@ -721,15 +721,21 @@ def plan_summary(plan: Dict[str, Any]) -> Dict[str, Any]:
 # 4. 컴파일
 # ---------------------------------------------------------------------------
 
-def _path_pattern(subject_var: str, uris: List[str], leaf_var: str, tag: str) -> Tuple[str, Optional[str]]:
-    """?e 에서 경로를 따라 leaf_var 까지 가는 패턴. (패턴, 마지막 구조노드 변수)"""
+def _path_pattern(subject_var: str, uris: List[str], leaf_var: str, tag: str,
+                  struct_tag: Optional[str] = None) -> Tuple[str, Optional[str]]:
+    """?e 에서 경로를 따라 leaf_var 까지 가는 패턴. (패턴, 마지막 구조노드 변수)
+
+    struct_tag: 중간 구조노드 변수 이름 — 같은 상위 경로를 가진 조건끼리 공유하면 **같은 목록 항목**에서 맞춘다
+    (quality_attributes.attribute = deployability AND quality_attributes.effect = positive 가 서로 다른 항목에서 맞으면 안 됨).
+    """
     if len(uris) == 1:
         return f"{subject_var} <{uris[0]}> {leaf_var} .", None
-    m1 = f"?m{tag}"
+    st = struct_tag or tag
+    m1 = f"?m{st}"
     pat = f"{subject_var} <{uris[0]}> {m1} . FILTER(REGEX(STR({m1}), \"{STRUCT_NODE_REGEX}\"))"
     if len(uris) == 2:
         return pat + f" {m1} <{uris[1]}> {leaf_var} .", m1
-    m2 = f"?n{tag}"
+    m2 = f"?n{st}"
     pat += f" {m1} <{uris[1]}> {m2} . FILTER(REGEX(STR({m2}), \"{STRUCT_NODE_REGEX}\")) {m2} <{uris[2]}> {leaf_var} ."
     return pat, m2
 
@@ -762,13 +768,22 @@ def compile_member_query(plan: Dict[str, Any]) -> str:
     """필터를 만족하는 결과 엔티티 조회. 동치 경로는 UNION (경로 1개면 기존과 동일한 SPARQL)."""
     members = plan["kind"]["members"]
     parts = [_values_clause("?e", members)]
+    # 같은 상위 경로(목록 항목·중첩 블록)를 가진 긍정 조건은 중간 구조노드를 공유 → 같은 항목에서 맞춘다.
+    # 레코드마다 하나뿐인 중첩 블록(fit_signals 등)은 공유해도 결과가 같다.
+    shared: Dict[Tuple[str, ...], str] = {}
+    for i, f in enumerate(plan["filters"]):
+        alts = _alts(f["path"])
+        if f["op"] not in ("ne", "not_exists") and len(alts) == 1 and len(alts[0]["uris"]) > 1:
+            shared.setdefault(tuple(alts[0]["uris"][:-1]), f"s{i}")
     for i, f in enumerate(plan["filters"]):
         negated = f["op"] in ("ne", "not_exists")
         blocks = []
-        for j, alt in enumerate(_alts(f["path"])):
+        alts = _alts(f["path"])
+        for j, alt in enumerate(alts):
             tag = f"f{i}" if j == 0 else f"f{i}a{j}"
             v = f"?v{tag}"
-            pat, _ = _path_pattern("?e", alt["uris"], v, tag)
+            st = shared.get(tuple(alt["uris"][:-1])) if (not negated and len(alts) == 1) else None
+            pat, _ = _path_pattern("?e", alt["uris"], v, tag, struct_tag=st)
             if f["op"] in ("exists", "not_exists"):
                 cond = ""
             elif f["op"] == "ne":
