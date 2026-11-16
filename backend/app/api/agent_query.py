@@ -151,6 +151,66 @@ async def lexicon_list(kb_id: str, q: Optional[str] = None, limit: int = 200):
     return {"total": len(rows), "entries": [r.model_dump(exclude={"id", "revision_id"}) for r in rows[:max(1, min(limit, 2000))]]}
 
 
+class LexiconEntryEdit(BaseModel):
+    label: str
+    ko: Optional[List[str]] = None
+    en: Optional[List[str]] = None
+    syn: Optional[List[str]] = None
+
+
+class LexiconAliasRemove(BaseModel):
+    alias: str
+    labels: Optional[List[str]] = None
+
+
+class LexiconBroaderEdit(BaseModel):
+    label: str
+    broader: str
+    status: str            # approved | rejected | proposed
+    labels: Optional[List[str]] = None     # 같은 상위 개념을 여러 항목에 한 번에
+
+
+def _lex_err(e: Exception):
+    raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.put("/{kb_id}/lexicon/entry")
+async def lexicon_edit(kb_id: str, req: LexiconEntryEdit):
+    """별칭 편집 (사람 수정 — 재생성 때 보존)."""
+    from app.services.agent_query import lexicon as lx
+    try:
+        return await lx.edit_entry(kb_id, req.label, req.ko, req.en, req.syn)
+    except lx.LexiconEditError as e:
+        _lex_err(e)
+
+
+@router.post("/{kb_id}/lexicon/alias/remove")
+async def lexicon_alias_remove(kb_id: str, req: LexiconAliasRemove):
+    from app.services.agent_query import lexicon as lx
+    try:
+        return await lx.remove_alias(kb_id, req.alias, req.labels)
+    except lx.LexiconEditError as e:
+        _lex_err(e)
+
+
+@router.post("/{kb_id}/lexicon/broader")
+async def lexicon_broader(kb_id: str, req: LexiconBroaderEdit):
+    """상위 개념 승인·거절. labels 를 주면 그 항목들 전부에 같은 결정."""
+    from app.services.agent_query import lexicon as lx
+    try:
+        done = [await lx.set_broader(kb_id, l, req.broader, req.status) for l in (req.labels or [req.label])]
+        return {"updated": [d["label"] for d in done]}
+    except lx.LexiconEditError as e:
+        _lex_err(e)
+
+
+@router.get("/{kb_id}/lexicon/review")
+async def lexicon_review(kb_id: str):
+    """검토 전 상위 개념 (상위 개념별 묶음)."""
+    from app.services.agent_query import lexicon as lx
+    return {"groups": await lx.review_queue(kb_id)}
+
+
 @router.get("/{kb_id}/lexicon/duplicates")
 async def lexicon_duplicates(kb_id: str):
     from app.services.agent_query import lexicon as lx
