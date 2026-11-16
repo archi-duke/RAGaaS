@@ -162,11 +162,15 @@ def parse_step(text: str, tools: List[str]) -> Dict[str, Any]:
     m = re.search(r"```(?:json)?\s*(.*?)```", t, re.S)
     if m:
         t = m.group(1)
+    # strict=False: GLM 이 스크래치패드 문자열 안에 줄바꿈을 그대로 넣는 경우 ("Invalid control character")
     try:
-        d = json.loads(t)
+        d = json.loads(t, strict=False)
     except ValueError:
         s, e = t.find("{"), t.rfind("}")
-        d = json.loads(t[s:e + 1]) if s != -1 and e > s else {}
+        try:
+            d = json.loads(t[s:e + 1], strict=False) if s != -1 and e > s else {}
+        except ValueError:
+            d = {}
     if not isinstance(d, dict):
         d = {}
     calls = []

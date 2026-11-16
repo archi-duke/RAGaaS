@@ -42,8 +42,9 @@ export function ScratchpadView({ text }: { text: string }) {
     return <div style={{ fontSize: '0.8rem', lineHeight: 1.5 }}>{out}</div>;
 }
 
-export default function AgenticReasoningCard({ agentic }: { agentic: any }) {
+export default function AgenticReasoningCard({ agentic, compact = false }: { agentic: any; compact?: boolean }) {
     const [openStep, setOpenStep] = React.useState<number | null>(null);
+    const [showSteps, setShowSteps] = React.useState(!compact);
     const steps: any[] = agentic.steps || [];
     return (
         <div className="card" style={{ padding: '1rem', width: '100%', boxSizing: 'border-box' }}>
@@ -61,7 +62,12 @@ export default function AgenticReasoningCard({ agentic }: { agentic: any }) {
                     <ScratchpadView text={agentic.scratchpad} />
                 </div>
             )}
-            {steps.map((s: any, i: number) => (
+            {!agentic.scratchpad && <div style={{ fontSize: '0.78rem', color: '#94a3b8', marginBottom: '0.4rem' }}>스크래치패드가 없습니다 (계획 LLM 이 메모를 내지 않음).</div>}
+            {compact && (
+                <button className="btn btn-secondary" style={{ fontSize: '0.72rem', padding: '0.1rem 0.5rem', marginBottom: '0.3rem' }}
+                    onClick={() => setShowSteps(!showSteps)}>{showSteps ? '단계별 과정 접기' : `단계별 과정 보기 (${steps.length}단계)`}</button>
+            )}
+            {showSteps && steps.map((s: any, i: number) => (
                 <div key={i} style={{ borderTop: '1px solid #e2e8f0', padding: '0.4rem 0' }}>
                     <div style={{ fontSize: '0.8rem' }}>
                         <b>단계 {s.step}</b> — {s.thought}

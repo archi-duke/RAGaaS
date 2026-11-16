@@ -148,8 +148,11 @@ export default function SearchResults({ chunks, kbId, graphBackend, logs, pipeli
     let extractedKeywords: string[] | null = null;
     let tokenizerName: string | null = null;
 
+    // 추론 내용(reasoning)이 있는 메타데이터를 우선 — 정렬 후 빈 메타데이터 청크가 앞에 올 수 있다
+    const withReasoning = chunks.find((c: any) => c.graph_metadata?.reasoning && Object.keys(c.graph_metadata.reasoning).length);
+    if (withReasoning) graphMetadata = withReasoning.graph_metadata;
     for (const chunk of chunks) {
-        if (!graphMetadata && chunk.graph_metadata) {
+        if (!graphMetadata && chunk.graph_metadata && Object.keys(chunk.graph_metadata).length) {
             graphMetadata = chunk.graph_metadata;
         }
         if (!extractedKeywords && chunk.metadata?.extracted_keywords && chunk.metadata.extracted_keywords.length > 0) {
@@ -400,6 +403,11 @@ export default function SearchResults({ chunks, kbId, graphBackend, logs, pipeli
                                     </div>
                                 </div>
                             )
+                        )}
+
+                        {/* Agentic 스크래치패드 — 결과 탭에서도 바로 보이게 (전체 과정은 Logs 탭) */}
+                        {graphMetadata?.reasoning?.agentic && (
+                            <AgenticReasoningCard agentic={graphMetadata.reasoning.agentic} compact />
                         )}
 
                         {/* Graph Detail Tabs */}
