@@ -6,7 +6,7 @@ import { schemaApi } from '../services/api';
 // 방향 오류를 못 잡는다. 트리플마다 원문 문장으로 LLM 이 판정한 결과를 보고, 사람이 골라서 뒤집거나 지운다.
 // 적용은 triple 규칙(@flip / 삭제) + 리플레이 — 규칙 목록에서 되돌릴 수 있다.
 
-interface Item { subject: string; predicate: string; object: string; verdict: string; reason: string; evidence: string[]; doc?: string; }
+interface Item { subject: string; predicate: string; object: string; verdict: string; reason: string; evidence: string[]; doc?: string; applied?: string; applied_by?: string; }
 
 const VERDICT: Record<string, { label: string; color: string }> = {
     reverse: { label: '방향 반대', color: '#dc2626' },
@@ -71,6 +71,8 @@ export default function DirectionAuditPanel({ kbId, onChanged }: { kbId: string;
             <div style={{ fontSize: '0.75rem', color: '#64748b', lineHeight: 1.5 }}>
                 인물→인물, 이론→이론처럼 같은 클래스끼리 잇는 관계는 클래스 검사로 방향 오류를 찾을 수 없습니다.
                 트리플마다 원문 문장을 관계 정의와 대조해 <b>맞음 / 방향 반대 / 관계 아님 / 판단 불가</b>로 판정합니다. 판정은 제안일 뿐이니 원문을 보고 고르세요.
+                한 번 검증한 KB 는 이후 적재·재추출로 들어온 <b>새 트리플만</b> 자동으로 검증하고, 근거 문장에 양끝이 모두 나오는 '방향 반대'는
+                자동으로 뒤집습니다 (규칙 목록에서 되돌릴 수 있음). 나머지는 여기서 검토하세요.
             </div>
             {data?.summary && (
                 <div style={{ fontSize: '0.75rem' }}>
@@ -100,7 +102,11 @@ export default function DirectionAuditPanel({ kbId, onChanged }: { kbId: string;
                         <tr key={r.i}>
                             <td style={cell}><input type="checkbox" checked={sel.has(r.i)} onChange={() => toggle(r.i)} /></td>
                             <td style={cell}><b>{r.subject}</b> —{r.predicate}→ <b>{r.object}</b>{r.doc && <div style={{ fontSize: '0.7rem', color: '#94a3b8' }}>{r.doc}</div>}</td>
-                            <td style={{ ...cell, color: VERDICT[r.verdict]?.color }}>{VERDICT[r.verdict]?.label || r.verdict}</td>
+                            <td style={{ ...cell, color: VERDICT[r.verdict]?.color }}>
+                                {VERDICT[r.verdict]?.label || r.verdict}
+                                {r.applied && <div style={{ fontSize: '0.7rem', color: '#0f766e' }}>
+                                    {r.applied === 'flip' ? '뒤집음' : '삭제함'}{r.applied_by === 'auto' ? ' (자동)' : ''}</div>}
+                            </td>
                             <td style={cell}>
                                 <div>{r.reason}</div>
                                 {r.evidence?.length > 0 && <div style={{ fontSize: '0.72rem', color: '#64748b', marginTop: '0.15rem' }}>“{r.evidence.join(' / ')}”</div>}

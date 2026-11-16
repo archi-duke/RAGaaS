@@ -56,7 +56,26 @@ def _sentences(text: str, a: str, b: str) -> List[str]:
     return (both + one)[:MAX_SENTENCES]
 
 
-async def run_audit(kb_id: str, properties: Optional[Sequence[str]] = None, limit_per_property: int = 200) -> Dict[str, Any]:
+def _key(i: Dict[str, Any]):
+    from app.services.agent_query.lexicon import _compact
+    return (_compact(i["subject"]), i["predicate"], _compact(i["object"]))
+
+
+def _both_in_evidence(i: Dict[str, Any]) -> bool:
+    """자동 뒤집기 조건: 근거 문장 하나에 양끝이 모두 나온다 (한쪽만 나오면 사람 검토)."""
+    from app.services.agent_query.lexicon import _compact
+
+    def has(sent: str, name: str) -> bool:
+        toks = [t for t in re.split(r"[\s·\-_()]+", name or "") if len(_compact(t)) >= 2]
+        return bool(toks) and any(_compact(t) in _compact(sent) for t in toks)
+    return any(has(e, i["subject"]) and has(e, i["object"]) for e in i.get("evidence") or [])
+
+
+async def run_audit(kb_id: str, properties: Optional[Sequence[str]] = None, limit_per_property: int = 200,
+                    incremental: bool = False, auto_apply: bool = False) -> Dict[str, Any]:
+    """incremental: 이전 검증에 있던 트리플은 다시 판정하지 않는다 (새로 들어온 것만).
+    auto_apply: 새로 판정한 것 중 reverse 이고 근거 문장 하나에 양끝이 모두 나오는 것만 자동으로 뒤집는다
+    (triple 규칙 origin=auto_direction — 규칙 목록에서 되돌릴 수 있음). 나머지는 화면에서 사람이 검토."""
     from app.core.llm import achat, no_thinking_extra_body
     from app.models.knowledge_base import KnowledgeBase
     from app.services.agent_query import catalog
@@ -83,6 +102,15 @@ async def run_audit(kb_id: str, properties: Optional[Sequence[str]] = None, limi
         for t in tr.get("triples") or []:
             items.append({"subject": t["subject"], "predicate": p["name"], "object": t["object"],
                           "source": t.get("source"), "doc": t.get("doc")})
+    prev = ((kb.promotion_metadata or {}).get("direction_audit") or {})
+    prev_items = list(prev.get("items") or [])
+    if incremental and prev_items:
+        known = {_key(i) for i in prev_items}
+        # 자동·수동으로 뒤집은 트리플은 뒤집힌 모양으로 다시 나타난다 — 그것도 판정 끝난 것으로
+        known |= {(_key(i)[2], i["predicate"], _key(i)[0]) for i in prev_items if i.get("applied") == "flip"}
+        items = [i for i in items if _key(i) not in known]
+    if not items:
+        return {"status": "done", "new": 0, "message": "새로 판정할 트리플 없음", "total": len(prev_items)}
     # 근거 문장
     srcs = list({i["source"] for i in items if i.get("source")})
     texts: Dict[str, str] = {}
@@ -117,12 +145,28 @@ async def run_audit(kb_id: str, properties: Optional[Sequence[str]] = None, limi
 
     await asyncio.gather(*(judge(items[k:k + BATCH], k) for k in range(0, len(items), BATCH)))
 
+    applied = 0
+    if auto_apply:
+        flips = [i for i in items if i["verdict"] == "reverse" and _both_in_evidence(i)]
+        if flips:
+            from app.services.schema_alignment.schema_editor import edit_triples
+            await edit_triples(kb_id, "flip", [{"subject": i["subject"], "predicate": i["predicate"], "object": i["object"]}
+                                               for i in flips], origin="auto_direction")
+            for i in flips:
+                i["applied"] = "flip"
+                i["applied_by"] = "auto"
+            applied = len(flips)
+    for i in items:
+        i["audited_at"] = datetime.utcnow().isoformat()
+    if incremental:
+        items = prev_items + items
     from collections import Counter
     summary = {p["name"]: dict(Counter(i["verdict"] for i in items if i["predicate"] == p["name"])) for p in targets}
     result = {
         "status": "done", "at": datetime.utcnow().isoformat(), "model": cfg.get("model"),
         "properties": [p["name"] for p in targets], "summary": summary,
         "items": items, "elapsed_s": round(time.time() - t0, 1),
+        "auto_applied": applied, "mode": "incremental" if incremental else "full",
     }
     meta = dict(kb.promotion_metadata or {})
     meta["direction_audit"] = result
@@ -135,3 +179,44 @@ async def get_audit(kb_id: str) -> Dict[str, Any]:
     from app.models.knowledge_base import KnowledgeBase
     kb = await KnowledgeBase.get(kb_id)
     return ((kb.promotion_metadata or {}).get("direction_audit")) or {"status": "none"}
+
+
+async def mark_applied(kb_id: str, triples: Sequence[Dict[str, str]], action: str, by: str = "user") -> None:
+    """화면에서 사람이 뒤집기·삭제한 트리플을 검증 결과에 표시 (다음 증분 검증이 다시 판정하지 않게)."""
+    from app.models.knowledge_base import KnowledgeBase
+    kb = await KnowledgeBase.get(kb_id)
+    meta = dict(kb.promotion_metadata or {})
+    au = meta.get("direction_audit") or {}
+    keys = {_key({"subject": t["subject"], "predicate": t["predicate"], "object": t["object"]}) for t in triples}
+    n = 0
+    for i in au.get("items") or []:
+        if _key(i) in keys:
+            i["applied"], i["applied_by"] = action, by
+            n += 1
+    if n:
+        meta["direction_audit"] = au
+        kb.promotion_metadata = meta
+        await kb.save()
+
+
+_AUTO_LAST: Dict[str, float] = {}
+
+
+async def auto_audit_if_enabled(kb_id: str, reason: str) -> None:
+    """그래프가 바뀌면(재추출 완료·카탈로그 지문 변경) 새 트리플만 방향 검증 + reverse 자동 뒤집기.
+    방향 검증을 한 번이라도 실행한 KB 에만 (원치 않는 LLM 비용 방지). 10분에 한 번까지."""
+    import logging
+    log = logging.getLogger(__name__)
+    try:
+        from app.models.knowledge_base import KnowledgeBase
+        kb = await KnowledgeBase.get(kb_id)
+        if not kb or not ((kb.promotion_metadata or {}).get("direction_audit") or {}).get("items"):
+            return
+        if time.time() - _AUTO_LAST.get(kb_id, 0) < 600:
+            return
+        _AUTO_LAST[kb_id] = time.time()
+        r = await run_audit(kb_id, incremental=True, auto_apply=True)
+        log.info("[DirectionAudit] auto (%s) kb=%s new=%s auto_flipped=%s", reason, kb_id,
+                 r.get("total"), r.get("auto_applied"))
+    except Exception as e:      # 검색·재추출을 막지 않는다
+        log.warning("[DirectionAudit] auto skipped: %s", e)

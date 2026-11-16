@@ -1032,7 +1032,8 @@ async def _add_to_schema(kb_id: str, new_class: Optional[Dict[str, Any]] = None,
 
 async def edit_triples(kb_id: str, action: str, triples: List[Dict[str, str]],
                        target_property: Optional[str] = None,
-                       new_property: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                       new_property: Optional[Dict[str, Any]] = None,
+                       origin: Optional[str] = None) -> Dict[str, Any]:
     """선택한 트리플을 다른 관계로 이동(move), 삭제(delete), 방향 뒤집기(flip). new_property 를 주면 그 관계를 스키마에 만들고 이동.
 
     triple 규칙: pair=[주어, 관계, 목적어](그래프 표기), target_path=이동할 관계 (삭제면 None). 같은 트리플의 기존 규칙은 덮는다.
@@ -1077,12 +1078,18 @@ async def edit_triples(kb_id: str, action: str, triples: List[Dict[str, str]],
             await r.save()
         else:
             await SchemaMappingRule(kb_id=kb_id, rule_type="triple", pair=pair, target_path=tgt,
-                                    origin=f"schema_editor:triple_{action}").insert()
+                                    origin=origin or f"schema_editor:triple_{action}").insert()
         n += 1
     kb = await KnowledgeBase.get(kb_id)
     kb.schema_rules_version = (kb.schema_rules_version or 0) + 1
     await kb.save()
     rp = await _replay_text_docs(kb_id)
+    if action in ("flip", "delete"):
+        try:   # 방향 검증 결과에 반영 표시 (다음 증분 검증이 다시 판정하지 않게)
+            from app.services.schema_alignment.direction_audit import mark_applied
+            await mark_applied(kb_id, rows, action, "auto" if origin == "auto_direction" else "user")
+        except Exception:
+            pass
     return {"action": action, "edited": n, "target_property": target_property if action == "move" else None,
             "created": created, **rp}
 

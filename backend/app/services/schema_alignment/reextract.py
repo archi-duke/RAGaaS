@@ -194,6 +194,11 @@ async def start(kb_id: str, doc_ids: Optional[List[str]], model_key: str = "inge
         except Exception as e:
             logger.warning(f"[Reextract] follow-up gap snapshot skipped: {e}")
         await _save_status(kb_id, {"status": "done", "finished_at": datetime.utcnow().isoformat(), "followup": followup})
+        try:   # 새로 뽑힌 트리플의 관계 방향 검증 + 확실한 반대 방향 자동 뒤집기 (D1, 검증을 켠 KB 만)
+            from app.services.schema_alignment.direction_audit import auto_audit_if_enabled
+            asyncio.create_task(auto_audit_if_enabled(kb_id, "reextract"))
+        except Exception:
+            pass
         try:
             from app.core.websocket_manager import manager
             await manager.broadcast(kb_id, {"type": "schema_reextract_done", "kb_id": kb_id})

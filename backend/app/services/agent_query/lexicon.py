@@ -617,11 +617,17 @@ async def ensure_fresh(kb_id: str) -> None:
             return
         if prev[0] == fp or time.time() - prev[1] < AUTO_REFRESH_MIN_INTERVAL_S:
             return
+        _LAST_FP[kb_id] = (fp, time.time())
+        # 그래프가 바뀌었다 — 각 후속 작업은 그 기능을 켠 KB 에서만 돈다
+        try:   # 새 트리플의 관계 방향 검증 + 확실한 반대 방향 자동 뒤집기 (D1, 방향 검증을 한 번 실행한 KB)
+            from app.services.schema_alignment.direction_audit import auto_audit_if_enabled
+            asyncio.create_task(auto_audit_if_enabled(kb_id, "graph_changed"))
+        except Exception:
+            pass
         if build_status(kb_id).get("state") == "running":
             return
         if await KbLexiconEntry.find_one({"kb_id": kb_id}) is None:
             return
-        _LAST_FP[kb_id] = (fp, time.time())
         logger.info("lexicon auto-refresh %s (fingerprint %s → %s)", kb_id, prev[0], fp)
         asyncio.create_task(build_lexicon(kb_id))
     except Exception as e:     # 검색을 막지 않는다
