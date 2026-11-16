@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { X as XIcon } from 'lucide-react';
-import { schemaApi } from '../services/api';
+import { kbApi, schemaApi } from '../services/api';
 
 // 속성 하나의 실제 트리플 목록 (스키마 편집기: 트리플 수 클릭) — docs/guide-schema-editor.md §2.2
 // 상태: ok(목적어가 range 멤버) / gap(멤버 누락) / violation(다른 클래스) / value(서술·수치) / -(range 없음)
@@ -26,6 +26,22 @@ export default function PropertyTriplesModal({ kbId, property, onClose, onChange
     const [q, setQ] = useState('');
     const [sel, setSel] = useState<Set<string>>(new Set());
     const [busy, setBusy] = useState(false);
+    // 근거 청크 펼치기: 행 번호 → 청크 내용 (청크 id 기준 캐시)
+    const [openRow, setOpenRow] = useState<number | null>(null);
+    const [chunks, setChunks] = useState<Record<string, { content?: string; error?: string }>>({});
+
+    const toggleChunk = async (i: number, source?: string | null) => {
+        if (!source) return;
+        if (openRow === i) { setOpenRow(null); return; }
+        setOpenRow(i);
+        if (chunks[source]) return;
+        try {
+            const r = await kbApi.getChunk(kbId, source);
+            setChunks((c) => ({ ...c, [source]: { content: r.data?.content || '' } }));
+        } catch (e: any) {
+            setChunks((c) => ({ ...c, [source]: { error: e?.response?.status === 404 ? '청크를 찾지 못했습니다 (재처리 등으로 id 가 바뀌었을 수 있음)' : '청크를 불러오지 못했습니다' } }));
+        }
+    };
 
     const load = () => schemaApi.propertyTriples(kbId, property).then((r) => setData(r.data))
         .catch((e) => setError(e?.response?.data?.detail?.errors?.join(' / ') || e.message));
@@ -91,8 +107,10 @@ export default function PropertyTriplesModal({ kbId, property, onClose, onChange
                             <tbody>
                                 {rows.map((r, i) => {
                                     const L = LABEL[r.status] || LABEL['-'];
+                                    const ck = r.source ? chunks[r.source] : undefined;
                                     return (
-                                        <tr key={i}>
+                                        <React.Fragment key={i}>
+                                        <tr style={openRow === i ? { background: '#f8fafc' } : undefined}>
                                             <td style={cell}>
                                                 <span title={L.help} style={{ color: L.color, background: L.bg, borderRadius: '10px', padding: '0.05rem 0.4rem', whiteSpace: 'nowrap' }}>{L.text}</span>
                                             </td>
@@ -110,11 +128,29 @@ export default function PropertyTriplesModal({ kbId, property, onClose, onChange
                                                 {r.object_class && <span style={{ color: '#94a3b8' }}> ({r.object_class})</span>}
                                                 {r.predicate && r.predicate !== property && <div style={{ fontSize: '0.68rem', color: '#94a3b8' }}>별칭 관계: {r.predicate}</div>}
                                             </td>
-                                            <td style={{ ...cell, color: '#64748b' }}>
-                                                {r.doc}
+                                            <td style={{ ...cell, color: '#64748b', cursor: r.source ? 'pointer' : 'default' }}
+                                                title={r.source ? '눌러서 근거 청크 보기' : '근거 청크 정보 없음'}
+                                                onClick={() => toggleChunk(i, r.source)}>
+                                                <span style={{ color: r.source ? '#2563eb' : undefined, textDecoration: r.source ? 'underline' : undefined }}>
+                                                    {openRow === i ? '▾ ' : r.source ? '▸ ' : ''}{r.doc}
+                                                </span>
                                                 {r.source && <div style={{ fontSize: '0.66rem', color: '#94a3b8', wordBreak: 'break-all' }}>{r.source}</div>}
                                             </td>
                                         </tr>
+                                        {openRow === i && (
+                                            <tr>
+                                                <td colSpan={4} style={{ ...cell, background: '#f8fafc' }}>
+                                                    {!ck && <span style={{ color: '#64748b' }}>불러오는 중…</span>}
+                                                    {ck?.error && <span style={{ color: '#b91c1c' }}>{ck.error}</span>}
+                                                    {ck?.content !== undefined && (
+                                                        <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.55, maxHeight: '260px', overflowY: 'auto', fontSize: '0.78rem' }}>
+                                                            {highlight(ck.content, [r.subject, r.object])}
+                                                        </div>
+                                                    )}
+                                                </td>
+                                            </tr>
+                                        )}
+                                        </React.Fragment>
                                     );
                                 })}
                                 {rows.length === 0 && <tr><td style={cell} colSpan={4}>해당하는 트리플이 없습니다.</td></tr>}
@@ -125,4 +161,17 @@ export default function PropertyTriplesModal({ kbId, property, onClose, onChange
             </div>
         </div>
     );
+}
+
+
+// 청크 본문에서 주어·목적어를 강조 (대소문자 무시, 2글자 이상만)
+function highlight(text: string, terms: string[]): React.ReactNode {
+    const ts = Array.from(new Set(terms.filter((t) => t && t.length >= 2))).sort((a, b) => b.length - a.length);
+    if (!ts.length) return text;
+    const esc = ts.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+    const re = new RegExp(`(${esc.join('|')})`, 'gi');
+    return text.split(re).map((part, i) =>
+        ts.some((t) => t.toLowerCase() === part.toLowerCase())
+            ? <mark key={i} style={{ background: '#fde68a', padding: 0 }}>{part}</mark>
+            : <React.Fragment key={i}>{part}</React.Fragment>);
 }

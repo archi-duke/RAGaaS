@@ -938,7 +938,9 @@ async def property_triples(kb_id: str, prop: str, limit: int = 200) -> Dict[str,
         domain, rng = kind["name"], path.get("ref_kind") or ""
         uris = path["uris"]
         chain = " . ".join(f"?n{i} <{u}> ?n{i + 1}" for i, u in enumerate(uris)).replace("?n0", "?s").replace(f"?n{len(uris)}", "?o")
-        q = f"""SELECT ?g ?s ?o (SAMPLE(?sl0) AS ?sl) (SAMPLE(?ol0) AS ?ol) WHERE {{ GRAPH ?g {{ {chain}
+        # 값을 직접 가진 노드(레코드 또는 마지막 중첩 노드) — 구조화 청크 id 는 '{doc}::struct::{노드 로컬명}'
+        holder = "?s" if len(uris) == 1 else f"?n{len(uris) - 1}"
+        q = f"""SELECT ?g ?s ?o (SAMPLE({holder}) AS ?h) (SAMPLE(?sl0) AS ?sl) (SAMPLE(?ol0) AS ?ol) WHERE {{ GRAPH ?g {{ {chain}
                  OPTIONAL {{ ?s {LBL} ?sl0 }} OPTIONAL {{ ?o {LBL} ?ol0 }} }}
                  FILTER(STRSTARTS(STR(?g), "urn:doc:")) }} GROUP BY ?g ?s ?o LIMIT {limit}"""
         members = set(kind["members"])
@@ -950,8 +952,11 @@ async def property_triples(kb_id: str, prop: str, limit: int = 200) -> Dict[str,
             o_uri = b["o"]["value"]
             ocls = owner.get(o_uri, "")
             st = ("ok" if ocls == rng else "violation" if ocls else "gap") if rng else ("value" if b["o"]["type"] != "uri" or not ocls else "-")
+            h = b.get("h", {}).get("value") or s_uri
+            doc_id = b["g"]["value"][8:]
             rows.append({"subject": label_of(b, "sl", "s"), "object": label_of(b, "ol", "o"), "object_class": ocls,
-                         "subject_class": domain, "status": st, "doc_id": b["g"]["value"][8:], "source": None})
+                         "subject_class": domain, "status": st, "doc_id": doc_id,
+                         "source": f"{doc_id}::struct::{h.rstrip('/').rsplit('/', 1)[-1]}"})
     else:
         ind = (kb.promotion_metadata or {}).get("induction") or {}
         p = next((x for x in ind.get("properties") or [] if x["name"] == prop), None)
