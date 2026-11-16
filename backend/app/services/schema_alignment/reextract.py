@@ -143,6 +143,8 @@ async def start(kb_id: str, doc_ids: Optional[List[str]], model_key: str = "inge
     spec = await build_schema_spec(kb)
     rules = await rules_for_ingest(kb_id, include_graph_rules=True)
     store = "fuseki" if kb.graph_backend == "ontology" else "neo4j"
+    # 재추출 뒤 정리 단계용: 지금의 멤버 누락 (새로 생긴 표기만 골라 보여 주기 위해)
+    gaps_before = await _gap_snapshot(kb_id)
     await _save_status(kb_id, {"status": "running", "started_at": datetime.utcnow().isoformat(),
                                "model": llm.get("model"), "docs": {}},
                        {str(d.id): {"filename": d.filename, "state": "queued"} for d in docs})
@@ -181,7 +183,17 @@ async def start(kb_id: str, doc_ids: Optional[List[str]], model_key: str = "inge
             await detect_proposals(kb_id)   # 스키마 밖 사실 → 새 속성·값 제안
         except Exception as e:
             logger.warning(f"[Reextract] proposal detection skipped: {e}")
-        await _save_status(kb_id, {"status": "done", "finished_at": datetime.utcnow().isoformat()})
+        followup = {}
+        try:
+            after = await _gap_snapshot(kb_id)
+            new = {c: [n for n in names if n not in set(gaps_before.get(c, []))] for c, names in after.items()}
+            new = {c: v for c, v in new.items() if v}
+            followup = {"gaps_before": sum(len(v) for v in gaps_before.values()),
+                        "gaps_after": sum(len(v) for v in after.values()),
+                        "new_gaps": new, "new_gap_count": sum(len(v) for v in new.values())}
+        except Exception as e:
+            logger.warning(f"[Reextract] follow-up gap snapshot skipped: {e}")
+        await _save_status(kb_id, {"status": "done", "finished_at": datetime.utcnow().isoformat(), "followup": followup})
         try:
             from app.core.websocket_manager import manager
             await manager.broadcast(kb_id, {"type": "schema_reextract_done", "kb_id": kb_id})
@@ -190,6 +202,16 @@ async def start(kb_id: str, doc_ids: Optional[List[str]], model_key: str = "inge
 
     asyncio.create_task(run_all())
     return {"queued": [str(d.id) for d in docs], "model": llm.get("model")}
+
+
+async def _gap_snapshot(kb_id: str) -> Dict[str, List[str]]:
+    """클래스별 멤버 누락 이름 (range 클래스로 이어지는데 클래스가 없는 목적어)."""
+    from app.services.schema_alignment.schema_editor import get_spec
+    try:
+        spec = await get_spec(kb_id)
+    except Exception:
+        return {}
+    return {c: [g["name"] for g in items] for c, items in (spec.get("member_gaps") or {}).items()}
 
 
 async def status(kb_id: str) -> Dict[str, Any]:

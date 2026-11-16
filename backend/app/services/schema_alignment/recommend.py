@@ -83,6 +83,22 @@ async def collect_context(kb_id: str, scope: Optional[Dict[str, Any]] = None) ->
     problems: List[Dict[str, Any]] = []
     if scope and scope.get("triples"):
         problems = [t for t in scope["triples"] if t.get("subject") and t.get("object")][:MAX_PROBLEM_TRIPLES]
+    elif scope and scope.get("gaps") is not None:
+        # 재추출 뒤 정리: 멤버 누락 목적어(특히 새로 생긴 표기)를 가진 트리플을 문제로 — 관계마다 고르게
+        want = {n for names in (scope.get("gaps") or {}).values() for n in names}
+        props_with_gaps = []
+        for items in (spec.get("member_gaps") or {}).values():
+            for g in items:
+                if not want or g["name"] in want:
+                    props_with_gaps.extend(g.get("via") or [])
+        for name in list(dict.fromkeys(props_with_gaps))[:8]:
+            try:
+                rows = (await property_triples(kb_id, name, 150))["triples"]
+            except SchemaEditError:
+                continue
+            for r in rows:
+                if r["status"] == "gap" and (not want or r["object"] in want) and len(problems) < MAX_PROBLEM_TRIPLES:
+                    problems.append({**r, "property": name, "predicate": r.get("predicate") or name})
     else:
         # 위반·누락이 많은 관계부터 문제 트리플을 고른다
         scored = []
@@ -292,7 +308,7 @@ async def recommend(kb_id: str, scope: Optional[Dict[str, Any]] = None) -> Dict[
         raise SchemaEditError([f"추천 생성 실패: {str(e)[:200]}"], 502)
     actions = validate_actions(parse_json_loose(raw), ctx)
     rec_id = uuid.uuid4().hex[:10]
-    await _log(kb_id, {"id": rec_id, "at": _now(), "model": cfg.get("model"), "scope": "triples" if scope else "schema",
+    await _log(kb_id, {"id": rec_id, "at": _now(), "model": cfg.get("model"), "scope": ("triples" if scope.get("triples") else "gaps") if scope else "schema",
                        "proposed": len(actions), "by_type": _count_types(actions), "dropped": ctx.get("dropped", [])[:10]})
     return {"id": rec_id, "model": cfg.get("model"), "version": ctx["spec"]["version"], "actions": actions,
             "dropped": ctx.get("dropped", [])[:10],

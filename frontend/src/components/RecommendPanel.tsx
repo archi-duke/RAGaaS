@@ -68,8 +68,9 @@ function EditForm({ a, onChange, classes, properties }: {
     }
 }
 
-export default function RecommendPanel({ kbId, triples, onClose, onApplied, classes = [], properties = [] }: {
+export default function RecommendPanel({ kbId, triples, gaps, onClose, onApplied, classes = [], properties = [] }: {
     kbId: string; triples?: any[]; onClose: () => void; onApplied: (msg: string) => void;
+    gaps?: Record<string, string[]>;   // 재추출 뒤 새 멤버 누락만 정리
     classes?: string[]; properties?: string[];
 }) {
     const [rec, setRec] = useState<any>(null);
@@ -84,7 +85,7 @@ export default function RecommendPanel({ kbId, triples, onClose, onApplied, clas
     const errMsg = (e: any) => e?.response?.data?.detail?.errors?.join(' / ') || e?.response?.data?.detail || e.message;
 
     useEffect(() => {
-        schemaApi.recommend(kbId, triples).then(async (r) => {
+        schemaApi.recommend(kbId, triples, gaps).then(async (r) => {
             setRec(r.data);
             setChecked(new Set((r.data.actions || []).filter((a: any) => a.confidence >= 0.7 && !a.warning).map((a: any) => a.id)));
             setBusy('');
@@ -140,7 +141,7 @@ export default function RecommendPanel({ kbId, triples, onClose, onApplied, clas
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.4)', zIndex: 2100, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={onClose}>
             <div className="card" style={{ width: 'min(980px, 95vw)', maxHeight: '88vh', display: 'flex', flexDirection: 'column', padding: '1rem' }} onClick={(e) => e.stopPropagation()}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.4rem' }}>
-                    <Sparkles size={16} /><h3 style={{ margin: 0 }}>AI 추천{triples ? ` — 선택한 트리플 ${triples.length}개` : ''}</h3>
+                    <Sparkles size={16} /><h3 style={{ margin: 0 }}>AI 추천{triples ? ` — 선택한 트리플 ${triples.length}개` : gaps ? ' — 재추출 뒤 새 멤버 누락' : ''}</h3>
                     {rec && <span style={{ fontSize: '0.78rem', color: '#64748b' }}>{rec.model} · 처리안 {rec.actions.length} · 분석한 문제 트리플 {rec.problems.length}
                         {rec.dropped?.length ? ` · 검증에서 뺀 것 ${rec.dropped.length}` : ''}</span>}
                     <button className="btn btn-secondary" style={{ marginLeft: 'auto', padding: '0.2rem 0.4rem' }} onClick={onClose}><XIcon size={14} /></button>
