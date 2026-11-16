@@ -1180,3 +1180,36 @@ async def reextract_preview(kb_id: str, spec_in: Dict[str, Any], triples: List[D
         results.append({**{k: t.get(k) for k in ("subject", "predicate", "object", "source", "doc")}, **res})
     return {"model": llm.get("model"), "chunks": n_chunks, "summary": summary, "results": results,
             "chunk_triples": out_by_chunk, "failures": failures[:5]}
+
+
+async def mismatch_triples(kb_id: str, status: str = "violation", class_name: Optional[str] = None,
+                           per_property: int = 300) -> Dict[str, Any]:
+    """range 를 가진 모든 관계에서 일치하지 않는 트리플 모음 (데이터 검증 카드에서 클릭).
+
+    status: violation(목적어가 다른 클래스) / gap(목적어에 클래스 없음) / all(둘 다).
+    class_name: range 가 그 클래스인 관계만 (멤버 누락을 클래스별로 볼 때).
+    """
+    from app.models.knowledge_base import KnowledgeBase
+    kb = await KnowledgeBase.get(kb_id)
+    if not kb or kb.schema_source not in EDITABLE_SOURCES:
+        raise SchemaEditError(["텍스트(승격) KB 에서만 볼 수 있습니다"])
+    ind = (kb.promotion_metadata or {}).get("induction") or {}
+    want = {"violation"} if status == "violation" else {"gap"} if status == "gap" else {"violation", "gap"}
+    rows, by_prop = [], {}
+    for p in ind.get("properties") or []:
+        if not p.get("range") or (class_name and p["range"] != class_name):
+            continue
+        try:
+            r = await property_triples(kb_id, p["name"], per_property)
+        except SchemaEditError:
+            continue
+        hit = [{**t, "property": p["name"], "range": p["range"], "domain": p.get("domain") or ""}
+               for t in r["triples"] if t["status"] in want]
+        if hit:
+            by_prop[p["name"]] = len(hit)
+            rows.extend(hit)
+    counts: Dict[str, int] = {}
+    for t in rows:
+        counts[t["status"]] = counts.get(t["status"], 0) + 1
+    return {"mode": "mismatch", "status": status, "class": class_name, "total": len(rows), "counts": counts,
+            "by_property": by_prop, "triples": rows, "truncated": False, "domain": "", "range": class_name or ""}

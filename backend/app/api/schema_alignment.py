@@ -480,3 +480,13 @@ async def schema_recommend_memory(kb_id: str):
 async def schema_recommend_forget(kb_id: str, body: ForgetBody):
     from app.services.schema_alignment import recommend as rc
     return await rc.forget(kb_id, body.sig, body.decided_key)
+
+
+@router.get("/{kb_id}/schema/spec/mismatches")
+async def schema_mismatches(kb_id: str, status: str = "violation", class_name: Optional[str] = None):
+    """일치하지 않는 트리플 모음 — range 위반·멤버 누락 (모든 관계, 또는 range 클래스별)."""
+    from app.services.schema_alignment import schema_editor as se
+    try:
+        return await se.mismatch_triples(kb_id, status, class_name)
+    except se.SchemaEditError as e:
+        _edit_error(e)

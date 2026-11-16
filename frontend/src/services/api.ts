@@ -184,6 +184,8 @@ export const schemaApi = {
         api.post(`knowledge-bases/${kbId}/schema/spec/members`, { class_name: className, entities }),
     mergeCandidates: (kbId: string, className: string) =>
         api.get(`knowledge-bases/${kbId}/schema/spec/merge-candidates`, { params: { class_name: className } }),
+    mismatches: (kbId: string, status: 'violation' | 'gap' | 'all', className?: string) =>
+        api.get(`knowledge-bases/${kbId}/schema/spec/mismatches`, { params: { status, class_name: className } }),
     propertyTriples: (kbId: string, property: string, limit = 300) =>
         api.get(`knowledge-bases/${kbId}/schema/spec/triples`, { params: { property, limit } }),
     editTriples: (kbId: string, body: { action: 'move' | 'delete'; triples: { subject: string; predicate: string; object: string }[];

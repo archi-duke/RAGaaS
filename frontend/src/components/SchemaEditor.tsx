@@ -47,6 +47,7 @@ export default function SchemaEditor({ kbId }: { kbId: string }) {
     const [showReextract, setShowReextract] = useState(false);
     const [view, setView] = useState<'table' | 'graph'>('table');
     const [triplesFor, setTriplesFor] = useState<string | null>(null);
+    const [mismatchFor, setMismatchFor] = useState<null | { status: 'violation' | 'gap'; className?: string }>(null);
     const [recFor, setRecFor] = useState<null | { triples?: any[]; gaps?: Record<string, string[]> }>(null);   // AI 추천 (스키마 전체·선택 트리플·재추출 뒤 새 누락)
     // 재추출 뒤 정리 안내: 마지막 재추출이 끝났고 새 멤버 누락이 있으면 (닫은 재추출은 다시 안 띄움)
     const [followup, setFollowup] = useState<null | { finished_at: string; new_gaps: Record<string, string[]>; new_gap_count: number; gaps_before: number; gaps_after: number }>(null);
@@ -220,7 +221,8 @@ export default function SchemaEditor({ kbId }: { kbId: string }) {
 
             {!structured && (
                 <SchemaChecks kbId={kbId} memberGaps={spec.member_gaps || {}} violations={spec.range_violations || []}
-                    onChanged={(m) => { setMessage(m); load(); }} />
+                    onChanged={(m) => { setMessage(m); load(); }}
+                    onOpenList={(status, className) => setMismatchFor({ status, className })} />
             )}
 
             <div style={{ display: 'flex', gap: 0 }}>
@@ -404,6 +406,16 @@ export default function SchemaEditor({ kbId }: { kbId: string }) {
                 </div>
             )}
 
+            {mismatchFor && (
+                <PropertyTriplesModal kbId={kbId} property="" mismatch={mismatchFor} onClose={() => setMismatchFor(null)}
+                    onChanged={(m) => { setMessage(m); load(); }}
+                    properties={props.filter((p) => orig.p[p.key]).map((p) => ({ name: orig.p[p.key], domain: p.domain, range: p.range }))}
+                    classes={classes.map((c) => orig.c[c.key] || c.name).filter(Boolean)}
+                    dirty={dirty}
+                    onRecommend={(tr) => setRecFor({ triples: tr })}
+                    getSpec={() => { const b = body(); return { classes: b.classes, properties: b.properties }; }} />
+            )}
+
             {triplesFor && (
                 <PropertyTriplesModal kbId={kbId} property={triplesFor} onClose={() => setTriplesFor(null)}
                     onChanged={(m) => { setMessage(m); load(); }}
@@ -418,7 +430,7 @@ export default function SchemaEditor({ kbId }: { kbId: string }) {
                 <RecommendPanel kbId={kbId} triples={recFor.triples} gaps={recFor.gaps} onClose={() => setRecFor(null)}
                     classes={classes.map((c) => orig.c[c.key] || c.name).filter(Boolean)}
                     properties={props.map((p) => orig.p[p.key] || p.name).filter(Boolean)}
-                    onApplied={(m) => { setMessage(m); setTriplesFor(null); if (recFor?.gaps) dismissFollowup(); load(); }} />
+                    onApplied={(m) => { setMessage(m); setTriplesFor(null); setMismatchFor(null); if (recFor?.gaps) dismissFollowup(); load(); }} />
             )}
 
             {showReextract && (

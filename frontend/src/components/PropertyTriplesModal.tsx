@@ -22,12 +22,14 @@ const LABEL: Record<string, { text: string; color: string; bg: string; help: str
 // - 멤버 누락: range 멤버로 지정 / 새 클래스를 만들어 멤버로 / 삭제
 type Panel = null | 'move' | 'newclass' | 'delete';
 
-export default function PropertyTriplesModal({ kbId, property, onClose, onChanged, properties = [], classes = [], dirty = false, getSpec, onRecommend }: {
+export default function PropertyTriplesModal({ kbId, property, onClose, onChanged, properties = [], classes = [], dirty = false, getSpec, onRecommend, mismatch }: {
     kbId: string; property: string; onClose: () => void; onChanged?: (msg: string) => void;
     properties?: { name: string; domain?: string; range?: string }[]; classes?: string[];
     dirty?: boolean;   // 편집기에 저장 안 한 변경이 있음 — 편집 동작 뒤 다시 불러오면 사라지므로 막는다
     getSpec?: () => { classes: any[]; properties: any[] };   // 편집 중인(저장 전) 스키마 — 재추출 테스트용
     onRecommend?: (triples: any[]) => void;                  // 선택 트리플로 AI 추천
+    // 모든 관계의 불일치 모음 (데이터 검증 카드에서 클릭) — 있으면 property 대신 이 목록을 연다
+    mismatch?: { status: 'violation' | 'gap' | 'all'; className?: string };
 }) {
     const [data, setData] = useState<any>(null);
     const [error, setError] = useState('');
@@ -58,14 +60,16 @@ export default function PropertyTriplesModal({ kbId, property, onClose, onChange
         }
     };
 
-    const load = () => schemaApi.propertyTriples(kbId, property).then((r) => setData(r.data))
+    const load = () => (mismatch ? schemaApi.mismatches(kbId, mismatch.status, mismatch.className)
+        : schemaApi.propertyTriples(kbId, property)).then((r) => setData(r.data))
         .catch((e) => setError(e?.response?.data?.detail?.errors?.join(' / ') || e.message));
     useEffect(() => { load(); }, [kbId, property]);   // eslint-disable-line react-hooks/exhaustive-deps
 
     const rows: Row[] = useMemo(() => (data?.triples || []).filter((r: Row) =>
         (filter === 'all' || r.status === filter) &&
-        (!q || `${r.subject} ${r.object} ${r.doc}`.toLowerCase().includes(q.toLowerCase()))), [data, filter, q]);
-    const keyOf = (r: Row) => `${r.subject}|${r.predicate || property}|${r.object}`;
+        (!q || `${r.subject} ${r.object} ${r.doc} ${(r as any).property || ''}`.toLowerCase().includes(q.toLowerCase()))), [data, filter, q]);
+    const predOf = (r: Row) => r.predicate || (r as any).property || property;
+    const keyOf = (r: Row) => `${r.subject}|${predOf(r)}|${r.object}`;
     const selected: Row[] = (data?.triples || []).filter((r: Row) => sel.has(keyOf(r)));
     const selGapObjects = Array.from(new Set(selected.filter((r) => r.status === 'gap').map((r) => r.object)));
     const editable = data && data.mode !== 'structured';
@@ -84,10 +88,20 @@ export default function PropertyTriplesModal({ kbId, property, onClose, onChange
             setError(`${label} 실패: ${errMsg(e)}`);
         } finally { setBusy(false); }
     };
-    const tri = () => selected.map((r) => ({ subject: r.subject, predicate: r.predicate || property, object: r.object }));
+    const tri = () => selected.map((r) => ({ subject: r.subject, predicate: predOf(r), object: r.object }));
 
-    const assign = () => run('멤버 지정', () => schemaApi.assignMembers(kbId, data.range, selGapObjects),
-        (d) => `${data.range} 멤버 지정 ${d.added + d.moved}건 (리플레이 완료)`);
+    // 멤버 지정: 행마다 range 가 다를 수 있다 (불일치 모음) → range 별로 나눠 지정
+    const gapRange = (r: Row) => (r as any).range || data.range;
+    const assignRanges = Array.from(new Set(selected.filter((r) => r.status === 'gap').map(gapRange))).filter(Boolean) as string[];
+    const assign = () => run('멤버 지정', async () => {
+        let added = 0;
+        for (const cls of assignRanges) {
+            const ents = Array.from(new Set(selected.filter((r) => r.status === 'gap' && gapRange(r) === cls).map((r) => r.object)));
+            const r = await schemaApi.assignMembers(kbId, cls, ents);
+            added += r.data.added + r.data.moved;
+        }
+        return { data: { added } };
+    }, (d) => `${assignRanges.join(', ')} 멤버 지정 ${d.added}건 (리플레이 완료)`);
     const doMove = () => moveTo === '__new__'
         ? run('새 관계로 이동', () => schemaApi.editTriples(kbId, { action: 'move', triples: tri(), new_property: newRel }),
             (d) => `새 관계 ${d.target_property} 를 만들고 트리플 ${d.edited}건 이동 (리플레이 완료)`)
@@ -103,7 +117,7 @@ export default function PropertyTriplesModal({ kbId, property, onClose, onChange
         setPreview(null);
         try {
             const spec = getSpec();
-            const r = await schemaApi.reextractPreview(kbId, { ...spec, triples: selected.map((x) => ({ ...x, predicate: x.predicate || property })) });
+            const r = await schemaApi.reextractPreview(kbId, { ...spec, triples: selected.map((x) => ({ ...x, predicate: predOf(x) })) });
             setPreview(r.data);
         } catch (e: any) {
             setError('재추출 테스트 실패: ' + errMsg(e));
@@ -117,14 +131,27 @@ export default function PropertyTriplesModal({ kbId, property, onClose, onChange
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.4)', zIndex: 2000, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={onClose}>
             <div className="card" style={{ width: 'min(1000px, 95vw)', maxHeight: '86vh', display: 'flex', flexDirection: 'column', padding: '1rem' }} onClick={(e) => e.stopPropagation()}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
-                    <h3 style={{ margin: 0 }}>{property}</h3>
+                    <h3 style={{ margin: 0 }}>{mismatch
+                        ? (mismatch.status === 'violation' ? 'range 위반 — 모든 관계' : `멤버 누락${mismatch.className ? ` — range ${mismatch.className}` : ''}`)
+                        : property}</h3>
                     {data && <span style={{ fontSize: '0.8rem', color: '#64748b' }}>
-                        {data.domain || '?'} → {data.range || '(값)'} · 트리플 {data.total}{data.truncated ? '+ (일부만 표시)' : ''}
+                        {mismatch ? `트리플 ${data.total} · 관계 ${Object.keys(data.by_property || {}).length}개`
+                            : `${data.domain || '?'} → ${data.range || '(값)'} · 트리플 ${data.total}${data.truncated ? '+ (일부만 표시)' : ''}`}
                     </span>}
                     <button className="btn btn-secondary" style={{ marginLeft: 'auto', padding: '0.2rem 0.4rem' }} onClick={onClose}><XIcon size={14} /></button>
                 </div>
                 {error && <div style={{ color: '#b91c1c', fontSize: '0.85rem' }}>{error}</div>}
                 {!data && !error && <div>불러오는 중…</div>}
+                {mismatch && data && (
+                    <div style={{ fontSize: '0.76rem', color: '#475569', background: '#f8fafc', borderRadius: '6px', padding: '0.35rem 0.6rem', marginBottom: '0.4rem' }}>
+                        {mismatch.status === 'violation'
+                            ? <>목적어가 그 관계의 range 가 아닌 <b>다른 클래스</b>로 이미 분류된 트리플입니다. 관계를 잘못 붙였으면 <b>다른 관계로 이동</b>,
+                                잘못 뽑힌 사실이면 <b>삭제</b>, 목적어 분류가 틀렸으면 그 엔티티의 클래스를 바꾸세요 (멤버 지정은 클래스를 옮깁니다).</>
+                            : <>목적어가 <b>아무 클래스에도 지정되지 않은</b> 트리플입니다. 맞는 종류면 <b>range 멤버로 지정</b>, 다른 종류면 <b>새 클래스</b>,
+                                '없음'·문장 조각 같은 잡음이면 <b>삭제</b>하세요.</>}
+                        {' '}관계별: {Object.entries(data.by_property || {}).map(([k, v]) => `${k} ${v}`).join(', ')}
+                    </div>
+                )}
                 {data && <>
                     <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap', alignItems: 'center', marginBottom: '0.5rem', fontSize: '0.78rem' }}>
                         {['all', 'ok', 'gap', 'violation', 'value', '-'].filter((k) => k === 'all' || data.counts?.[k]).map((k) => (
@@ -161,16 +188,16 @@ export default function PropertyTriplesModal({ kbId, property, onClose, onChange
                                 {onRecommend && (
                                     <button className="btn btn-secondary" style={sbtn} disabled={busy || dirty || selected.length > 14}
                                         title={selected.length > 14 ? '한 번에 14개까지' : '선택한 트리플과 근거 청크를 AI 가 분석해 처리안을 제시합니다'}
-                                        onClick={() => onRecommend(selected.map((x) => ({ ...x, predicate: x.predicate || property })))}>
+                                        onClick={() => onRecommend(selected.map((x) => ({ ...x, predicate: predOf(x) })))}>
                                         AI 추천
                                     </button>
                                 )}
                                 <button className={`btn ${panel === 'move' ? 'btn-primary' : 'btn-secondary'}`} style={sbtn} disabled={busy || dirty}
                                     title="주어·목적어는 그대로 두고 관계만 바꿉니다" onClick={() => setPanel(panel === 'move' ? null : 'move')}>다른 관계로 이동…</button>
-                                {data.range && selGapObjects.length > 0 && (
+                                {assignRanges.length > 0 && selGapObjects.length > 0 && (
                                     <button className="btn btn-secondary" style={sbtn} disabled={busy || dirty} onClick={assign}
-                                        title="선택한 '멤버 누락' 목적어를 range 클래스 멤버로 (class 규칙 + 리플레이)">
-                                        목적어 {selGapObjects.length}개를 {data.range} 멤버로
+                                        title="선택한 '멤버 누락' 목적어를 그 관계의 range 클래스 멤버로 (class 규칙 + 리플레이)">
+                                        목적어 {selGapObjects.length}개를 {assignRanges.join('·')} 멤버로
                                     </button>
                                 )}
                                 {selGapObjects.length > 0 && (
@@ -275,6 +302,7 @@ export default function PropertyTriplesModal({ kbId, property, onClose, onChange
                                         onChange={(e) => setSel((s) => { const n = new Set(s); rows.forEach((r) => e.target.checked ? n.add(keyOf(r)) : n.delete(keyOf(r))); return n; })} />
                                 </th>}
                                 <th style={{ ...cell, width: '8%' }}>상태</th>
+                                {mismatch && <th style={{ ...cell, width: '14%' }}>관계 → range</th>}
                                 <th style={{ ...cell, width: '28%' }}>주어 (클래스)</th>
                                 <th style={{ ...cell, width: '34%' }}>목적어 (클래스)</th>
                                 <th style={cell}>문서 · 근거 청크</th>
@@ -293,6 +321,10 @@ export default function PropertyTriplesModal({ kbId, property, onClose, onChange
                                             <td style={cell}>
                                                 <span title={L.help} style={{ color: L.color, background: L.bg, borderRadius: '10px', padding: '0.05rem 0.4rem', whiteSpace: 'nowrap' }}>{L.text}</span>
                                             </td>
+                                            {mismatch && <td style={cell}>
+                                                <b>{(r as any).property}</b>
+                                                <div style={{ fontSize: '0.68rem', color: '#94a3b8' }}>→ {(r as any).range}</div>
+                                            </td>}
                                             <td style={cell}>
                                                 {r.subject}
                                                 {r.subject_class && <span style={{ color: r.subject_mismatch ? '#b91c1c' : '#94a3b8' }}
@@ -314,7 +346,7 @@ export default function PropertyTriplesModal({ kbId, property, onClose, onChange
                                         </tr>
                                         {openRow === i && (
                                             <tr>
-                                                <td colSpan={editable ? 5 : 4} style={{ ...cell, background: '#f8fafc' }}>
+                                                <td colSpan={(editable ? 5 : 4) + (mismatch ? 1 : 0)} style={{ ...cell, background: '#f8fafc' }}>
                                                     {!ck && <span style={{ color: '#64748b' }}>불러오는 중…</span>}
                                                     {ck?.error && <span style={{ color: '#b91c1c' }}>{ck.error}</span>}
                                                     {ck?.content !== undefined && (
@@ -328,7 +360,7 @@ export default function PropertyTriplesModal({ kbId, property, onClose, onChange
                                         </React.Fragment>
                                     );
                                 })}
-                                {rows.length === 0 && <tr><td style={cell} colSpan={editable ? 5 : 4}>해당하는 트리플이 없습니다.</td></tr>}
+                                {rows.length === 0 && <tr><td style={cell} colSpan={(editable ? 5 : 4) + (mismatch ? 1 : 0)}>해당하는 트리플이 없습니다.</td></tr>}
                             </tbody>
                         </table>
                     </div>
