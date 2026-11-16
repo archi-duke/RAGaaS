@@ -35,6 +35,7 @@ class EntitiesRequest(BaseModel):
 class ChunksRequest(BaseModel):
     chunk_ids: List[str]
     max_chars: int = 1500
+    expand_doc: bool = False
 
 
 class SparqlRequest(BaseModel):
@@ -90,7 +91,7 @@ async def agent_entity(kb_id: str, req: EntityRequest):
 async def agent_chunks(kb_id: str, req: ChunksRequest):
     """⑤ 근거 청크 원문."""
     t = time.time()
-    out = await catalog.get_chunks(kb_id, req.chunk_ids, req.max_chars)
+    out = await catalog.get_chunks(kb_id, req.chunk_ids, req.max_chars, req.expand_doc)
     out["elapsed_ms"] = int((time.time() - t) * 1000)
     return out
 
