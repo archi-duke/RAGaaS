@@ -56,6 +56,13 @@ app.include_router(graph_viewer.router, prefix="/api/v2/graph", tags=["Graph Vie
 from app.api import agent_query
 app.include_router(agent_query.router, prefix="/api/v2/knowledge-bases", tags=["Agent Query"])
 
+# MCP 서버 (Streamable HTTP, /api/mcp → 게이트웨이 /ragaas/api/mcp) — docs/design-mcp-agent-query.md §5
+try:
+    from app.mcp_server import mount as _mount_mcp
+    _mount_mcp(app)
+except ImportError as _e:      # mcp SDK 미설치 이미지에서도 나머지 API 는 뜨게
+    print(f"[Startup] MCP 서버 비활성: {_e}")
+
 from app.api import providers
 app.include_router(providers.router, prefix="/api/v2", tags=["providers"])
 

@@ -297,7 +297,7 @@ Claude(Opus 5.5)가 호출하는 에이전트 역할을 맡았다. Fuseki 를 �
 | P2 | `query_plan`: 조건 트리(all/any) + key 기반 path. `validate_plan` 과 `compile_member_query` 확장. 내부 계획 LLM 도 같은 형식으로 | 기존 질의 계획 테스트 + 신규(OR, 순위) |
 | P3 | MCP 서버(`/mcp`) + 인증 + `agent_traces` | Claude Code 에서 MCP 연결해 도구 호출 |
 | P4 | 스킬 `ragaas-query` 작성 | 아래 평가 |
-| P5 | 게이트웨이 `/ragaas/mcp` (GoJIRA 쪽과 협의) | 게이트웨이 경유 호출 |
+| P5 | ~~게이트웨이 `/ragaas/mcp`~~ — 불필요 (기존 `/ragaas/api/` 규칙으로 `/ragaas/api/mcp/` 사용, §7.3) | 게이트웨이 경유 호출 확인 |
 | P6 | GoJIRA style-define 스킬을 MCP `query_plan` 으로 전환 | GoJIRA 쪽 수정 |
 | P7 | Neo4j: 카탈로그 추출 + `query_plan` → Cypher 컴파일러 | 같은 계획 JSON 으로 Fuseki·Neo4j KB 결과 비교 |
 
@@ -369,6 +369,26 @@ Claude(Opus 5.5)가 호출하는 에이전트 역할을 맡았다. Fuseki 를 �
 
 **배포 주의**: 구조화 KB 의 항목 조건 상관은 PR #58 의 `compile_member_query` 수정에 의존한다.
 이 브랜치(main 기준)에는 그 수정이 없다. **#58 을 먼저 머지**해야 한다.
+
+### 7.3 P3 결과 (2026-11-16) — MCP 서버
+
+구현: `backend/app/mcp_server.py`. Python MCP SDK 2.3.0 의 `MCPServer` 를 쓴다 (`requirements.txt` 에 `mcp==2.3.0`).
+
+- 전송: Streamable HTTP, stateless, JSON 응답. FastAPI 에 `/api/mcp` 로 마운트했다.
+  - 게이트웨이 주소는 **`/ragaas/api/mcp/`** 다. 기존 `/ragaas/api/` 규칙이 그대로 넘기므로 **게이트웨이 변경이 필요 없다** (P5 불필요).
+- 도구 7개: `list_kbs`, `describe_kb`, `lookup_values`, `resolve_entities`, `query_plan`, `get_chunks`, `search`.
+  - REST 와 같은 서비스 함수를 쓴다. 원문 `sparql` 은 MCP 에 노출하지 않는다.
+- 인증은 앱 전역 `platform_auth` 미들웨어가 한다.
+  - SSO 모드에서는 MCP 클라이언트가 `Authorization: Bearer` 를 보내야 한다.
+  - 서비스(GoJIRA)는 서비스 토큰 + `X-User-Id` 를 보낸다.
+- DNS rebinding 보호는 `MCP_ALLOWED_HOSTS` 가 있을 때만 켠다. 폐쇄망 + 게이트웨이 + 인증 뒤가 기본 구성이다.
+- 확인: 게이트웨이 경유로 initialize → tools/list → tools/call 을 했다 (헥사고널 → Hexagonal 아키텍처, query_plan 4건, get_chunks 원문).
+
+**Claude Code 연결**
+
+```bash
+claude mcp add --transport http ragaas http://<호스트>:44300/ragaas/api/mcp/
+```
 
 ## 8. 위험과 대응
 
