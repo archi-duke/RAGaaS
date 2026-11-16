@@ -61,3 +61,36 @@ def test_diff_spec_no_change():
                          "properties": [{**p, "aliases": [a for a in p["members"] if a != p["name"]]} for p in OLD["properties"]]})
     d = se.diff_spec(OLD, new)
     assert se._summary_text(d) == "변경 없음"
+
+
+# --- 구조화 KB 덧씌우기 (§7) ---
+from app.services.retrieval import class_query as cq
+
+NS = "http://rag.local/entity/"
+
+
+def _kind(name, members, class_uri=None):
+    return {"name": name, "class_uri": class_uri, "members": [NS + m for m in members]}
+
+
+def test_kind_overlay_matches_by_members_not_index():
+    kinds = [_kind("K1", ["b1", "b2"]), _kind("K2", ["a1", "a2", "a3", "a4"])]  # 순서가 바뀌어도
+    ov = {"classes": [{"orig": "K1", "name": "ArchitectureStyle", "description": "스타일",
+                       "members": ["a1", "a2", "a3", "a5"]}]}
+    cq.apply_kind_overlay(kinds, ov)
+    assert kinds[1]["name"] == "ArchitectureStyle" and kinds[1]["orig_name"] == "K2"
+    assert kinds[1]["description"] == "스타일"
+    assert kinds[0]["name"] == "K1"  # 겹침 0 → 그대로
+
+
+def test_kind_overlay_threshold():
+    kinds = [_kind("K1", ["a1", "x1", "x2", "x3"])]
+    cq.apply_kind_overlay(kinds, {"classes": [{"orig": "K1", "name": "S", "members": ["a1", "a2", "a3"]}]})
+    assert kinds[0]["name"] == "K1"  # Jaccard 1/6 < 0.5
+
+
+def test_path_overlay_and_prompt_line():
+    paths = [{"key": "fit_signals.modifiability", "type": "enum", "values": [{"uri": "u", "label": "high", "members": 3}]}]
+    cq.apply_path_overlay(paths, {"properties": {"fit_signals.modifiability": {"description": "빠른 변경", "aliases": ["수정용이성"]}}})
+    line = cq._path_line(0, paths[0])
+    assert "정의: 빠른 변경" in line and "별칭: 수정용이성" in line

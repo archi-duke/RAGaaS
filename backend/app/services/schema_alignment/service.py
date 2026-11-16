@@ -545,28 +545,43 @@ async def mark_structured_ontology(kb_id: str) -> Dict[str, Any]:
     def lit(x: str) -> str:
         return '"' + str(x).replace("\\", "\\\\").replace('"', '\\"') + '"'
 
+    # 사람이 고친 유형 이름·설명은 카탈로그(apply_kind_overlay)에서 이미 반영됨 — orig_name 이 있으면 덧씌운 이름
+    def kind_class(k):
+        if k.get("orig_name"):
+            return k["name"]
+        return local_name(k["class_uri"]) if k.get("class_uri") else "Record"
+
     classes: Dict[str, Dict[str, Any]] = {}
     for k in kinds:
-        name = local_name(k["class_uri"]) if k.get("class_uri") else "Record"
+        name = kind_class(k)
         classes[name] = {"label": name, "count": len(k["members"]),
-                         "description": "구조화 문서의 최상위 레코드" if not k.get("class_uri") else ""}
+                         "description": k.get("description") or (
+                             "구조화 문서의 최상위 레코드" if not k.get("class_uri") else "")}
     for name, n in struct_classes.items():
         classes.setdefault(name, {"label": name, "count": n, "description": "구조화 문서의 중첩 항목"})
     props: Dict[str, str] = {}
+    prop_notes: Dict[str, Dict[str, Any]] = {}   # 마지막 세그먼트 → 정의·별칭 (덧씌우기)
     for k in kinds:
-        dom = local_name(k["class_uri"]) if k.get("class_uri") else "Record"
+        dom = kind_class(k)
         for p in catalogs.get(k["name"], []):
             for i, seg in enumerate(p["segments"]):
                 props.setdefault(seg, dom if i == 0 else "")
+            if p.get("description") or p.get("aliases"):
+                prop_notes.setdefault(p["segments"][-1], {"description": p.get("description"), "aliases": p.get("aliases")})
 
     lines = ["@prefix owl: <http://www.w3.org/2002/07/owl#> .",
              "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .", ""]
     for name, c in classes.items():
         lines.append(f"<http://rag.local/class/{uri_part(name)}> a owl:Class ; rdfs:label {lit(name)}"
                      + (f" ; rdfs:comment {lit(c['description'])}" if c.get("description") else "") + " .")
+    lines.insert(2, "@prefix skos: <http://www.w3.org/2004/02/skos/core#> .")
     for seg, dom in props.items():
+        note = prop_notes.get(seg) or {}
         lines.append(f"<http://rag.local/rel/{uri_part(seg)}> a owl:ObjectProperty ; rdfs:label {lit(seg)}"
-                     + (f" ; rdfs:domain <http://rag.local/class/{uri_part(dom)}>" if dom else "") + " .")
+                     + (f" ; rdfs:domain <http://rag.local/class/{uri_part(dom)}>" if dom else "")
+                     + (f" ; rdfs:comment {lit(note['description'])}" if note.get("description") else "")
+                     + "".join(f" ; skos:altLabel {lit(a)}" for a in note.get("aliases") or [])
+                     + " .")
     ttl = "\n".join(lines) + "\n"
     graph_uri = f"urn:ontology:{kb_id}"
     tbox_ok = False

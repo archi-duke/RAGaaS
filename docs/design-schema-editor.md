@@ -18,8 +18,9 @@
 
 ## 2. 대상과 저장 위치
 
-- 대상: `schema_source` 가 `induced`(유도 승격) 또는 `declared` 인 KB.
-  구조화(YAML/JSON) KB 는 필드 구조가 곧 스키마라 대상이 아니다 — 스키마 정렬의 매핑 규칙으로 고친다.
+- 대상: 온톨로지로 승격된 KB 전부.
+  - 텍스트 KB (`schema_source` = `induced` / `declared`): 아래 §2~§5
+  - 구조화(YAML/JSON) KB (`structured`): 저장 방식이 달라 §7
 - 스키마 본체: `kb.promotion_metadata.induction`
   - `classes`: `[{name, description}]`
   - `properties`: `[{name, description, domain, range, members(별칭, 대표 이름 포함), seed?}]`
@@ -85,6 +86,37 @@ KB 상세의 **Schema** 탭 (온톨로지로 승격된 KB 에만 보임, `compon
 | 구조화 KB(test-ontology) | 편집 불가 안내 |
 
 단위 테스트: `backend/tests/test_schema_editor.py` (정규화·검증·변경 요약 5건)
+
+## 7. 구조화(YAML/JSON) KB 편집
+
+구조화 KB 의 스키마는 YAML 필드 구조에서 업로드할 때마다 다시 만들어진다 (`mark_structured_ontology`).
+스키마 그래프를 직접 고치면 다음 업로드 때 사라지므로, 편집 내용을 **따로 저장해 두고 만들 때마다 덧씌운다**.
+
+| 편집 | 저장 | 반영되는 곳 | 재업로드·새 문서 |
+|---|---|---|---|
+| 유형 이름·설명 (K1 → ArchitectureStyle) | `promotion_metadata.schema_overlay.classes` | 클래스 카탈로그(검색 계획·에이전틱 KB 요약), TBox 클래스 | 유지 |
+| 속성 정의·별칭 | `schema_overlay.properties[경로]` | 계획 프롬프트의 경로 설명, TBox `rdfs:comment`·`skos:altLabel` | 유지 |
+| 속성 이름(경로) 변경 | key 매핑 규칙 `옛 경로 → 새 경로` (origin=schema_editor) + 해당 문서 재정규화 | 데이터(그래프·청크) | 유지 (업로드 때 규칙 적용) |
+| 속성 추가·삭제, 방향 변경, 유형 추가 | 불가 — 오류로 안내 | YAML 원본에서 | - |
+
+- 유형 이름 K1, K2 … 는 멤버 수 순서로 매번 다시 매겨진다. 그래서 덧씌우기는 저장 당시 **멤버 목록**을 함께 두고,
+  멤버가 절반 이상 겹치는(Jaccard ≥ 0.5) 유형에 붙인다 (`class_query.match_overlay_class`). 클래스가 있는 유형은 원래 이름으로.
+- 되돌리기: 덧씌우기를 이력 버전으로 바꾸고, 그 버전 이후 편집기가 만든 경로 이름 변경 규칙은 끈 뒤 전체 문서 재정규화.
+
+검증 (2026-11-16, test-ontology):
+
+| 단계 | 결과 |
+|---|---|
+| 조회 | 유형 1(K1, 멤버 10), 속성 경로 95 (유형·값·레코드 수) |
+| 저장 v2 | K1 → ArchitectureStyle + 설명, `fit_signals.modifiability` 정의·별칭(수정용이성·변경용이성) |
+| 저장 v3 | `tradeoffs.cons` → `tradeoffs.weaknesses`: 규칙 1건, 문서 10건 재정규화, 그래프 술어 31건 이동 |
+| 속성 추가 시도 | 거부 ("YAML 원본에 필드를 추가하세요") |
+| serverless.yaml 삭제 후 재업로드 | 유형 이름·정의 유지, 새 문서에도 `weaknesses` 적용 |
+| v2 로 되돌리기 (v4) | 경로 이름만 `cons` 로 복귀, 유형 이름·정의는 유지 |
+| 검색 | 에이전틱 계획이 별칭을 사용 ("modifiability(수정용이성/서비스 빠른 추가)") |
+
+알려진 문제: 재정규화 중 문서 1건의 벡터 청크가 옛 내용으로 남았다 (그래프는 정상). 같은 청크 id 로 지웠다 바로
+다시 넣을 때 Milvus(v2.3)에서 생기는 것으로 보이며, 그 문서만 다시 재정규화하니 정상이 됐다. 재정규화 후 청크 검증이 필요하다.
 
 ## 6. 남은 것
 

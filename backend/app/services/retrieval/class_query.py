@@ -138,6 +138,53 @@ def infer_kinds(bindings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return kinds
 
 
+def match_overlay_class(kind: Dict[str, Any], overlay_classes: Sequence[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """사람이 붙인 유형 이름(스키마 덧씌우기)을 유형에 대응시킨다.
+
+    유형 이름(K1 …)은 멤버 수 순서로 매번 다시 매겨지므로, 저장 당시 멤버(로컬네임)와
+    겹치는 비율(Jaccard ≥ 0.5)로 찾는다. 클래스가 있는 유형은 원래 이름(orig)이 같으면 대응.
+    """
+    names = {local_name(m) for m in kind.get("members") or []}
+    best, best_j = None, 0.0
+    for oc in overlay_classes or []:
+        if kind.get("class_uri") and oc.get("orig") == local_name(kind["class_uri"]):
+            return oc
+        mem = set(oc.get("members") or [])
+        if not mem or not names:
+            continue
+        j = len(mem & names) / len(mem | names)
+        if j > best_j:
+            best, best_j = oc, j
+    return best if best_j >= 0.5 else None
+
+
+def apply_kind_overlay(kinds: List[Dict[str, Any]], overlay: Optional[Dict[str, Any]]) -> None:
+    """유형 이름·설명 덧씌우기 (제자리). 원래 이름은 orig_name 에 남긴다."""
+    if not overlay:
+        return
+    used = set()
+    for k in kinds:
+        oc = match_overlay_class(k, [c for c in overlay.get("classes") or [] if id(c) not in used])
+        if oc and oc.get("name"):
+            used.add(id(oc))
+            k["orig_name"] = k["name"]
+            k["name"] = oc["name"]
+            if oc.get("description"):
+                k["description"] = oc["description"]
+
+
+def apply_path_overlay(paths: List[Dict[str, Any]], overlay: Optional[Dict[str, Any]]) -> None:
+    """경로(속성) 정의·별칭 덧씌우기 (제자리)."""
+    props = (overlay or {}).get("properties") or {}
+    for p in paths:
+        o = props.get(p["key"])
+        if o:
+            if o.get("description"):
+                p["description"] = o["description"]
+            if o.get("aliases"):
+                p["aliases"] = list(o["aliases"])
+
+
 # ---------------------------------------------------------------------------
 # 2. 유형별 경로 카탈로그 (값 종류·값 어휘)
 # ---------------------------------------------------------------------------
@@ -270,6 +317,16 @@ def parse_kind_catalog(bindings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 def _path_line(i: int, p: Dict[str, Any], index: Optional[Dict[str, int]] = None) -> str:
+    line = _path_line_base(i, p, index)
+    extra = []
+    if p.get("description"):
+        extra.append(f"정의: {p['description']}")
+    if p.get("aliases"):
+        extra.append(f"별칭: {', '.join(p['aliases'])}")
+    return line + (f" — {' / '.join(extra)}" if extra else "")
+
+
+def _path_line_base(i: int, p: Dict[str, Any], index: Optional[Dict[str, int]] = None) -> str:
     if p.get("equiv") and p.get("equiv_rep") and p["equiv_rep"] != p["key"]:
         rep_no = (index or {}).get(p["equiv_rep"])
         ref = f"{rep_no}번" if rep_no is not None else p["equiv_rep"]
@@ -298,7 +355,8 @@ def build_plan_messages(
     kind_lines = []
     for k in kinds:
         cls = f" (class {k['name']})" if k.get("class_uri") else " (rdf:type 없음 · 경로 시그니처로 묶음)"
-        kind_lines.append(f"- {k['name']}{cls}: 멤버 {len(k['members'])}개, 예: {', '.join(k['examples'])}")
+        desc = f" — {k['description']}" if k.get("description") else ""
+        kind_lines.append(f"- {k['name']}{cls}{desc}: 멤버 {len(k['members'])}개, 예: {', '.join(k['examples'])}")
     path_blocks = []
     for k in kinds:
         cat = catalogs.get(k["name"], [])[:MAX_PATHS_FOR_LLM]

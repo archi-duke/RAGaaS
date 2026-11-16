@@ -6,7 +6,11 @@
 - 이름 변경: 속성은 key 규칙(옛 이름 → 새 이름)을, 클래스는 class 규칙의 대상 이름을 바꾼 뒤
   텍스트 문서를 리플레이해 기존 그래프에 반영한다 (LLM 비용 0, 저장된 추출 트리플 기준·멱등).
 - 정의·방향(domain/range)·별칭의 의미 변경은 '스키마 기준 재추출'을 돌려야 데이터에 반영된다 (선택).
-구조화(YAML/JSON) KB 는 필드 구조가 곧 스키마라 이 편집기 대상이 아니다 — 매핑 규칙으로 고친다.
+구조화(YAML/JSON) KB 는 필드 구조에서 스키마가 매번 다시 만들어지므로, 편집 내용을 '덧씌우기'
+(promotion_metadata.schema_overlay)와 매핑 규칙으로 저장해 재업로드·새 문서에도 유지한다 (§7):
+- 유형 이름·설명, 속성 정의·별칭 → 덧씌우기 (카탈로그·TBox 생성 때 적용)
+- 속성 이름(경로) 변경 → key 규칙 + 해당 문서 재정규화
+- 속성 추가·방향 변경은 불가 (데이터 구조가 YAML 필드에서 나옴)
 """
 
 import copy
@@ -16,6 +20,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 HISTORY_MAX = 20
 EDITABLE_SOURCES = ("induced", "declared")
+STRUCTURED = "structured"
 
 
 class SchemaEditError(ValueError):
@@ -159,6 +164,8 @@ async def get_spec(kb_id: str) -> Dict[str, Any]:
     if not kb:
         raise SchemaEditError(["KB 없음"], 404)
     meta = kb.promotion_metadata or {}
+    if kb.schema_source == STRUCTURED and kb.is_promoted:
+        return await _get_structured_spec(kb)
     ind = meta.get("induction") or {}
     editable = kb.schema_source in EDITABLE_SOURCES and bool(ind.get("classes") or ind.get("properties"))
     members: Dict[str, int] = {}
@@ -177,7 +184,7 @@ async def get_spec(kb_id: str) -> Dict[str, Any]:
     out_of_schema = sorted(((k, v) for k, v in usage.items() if k not in known), key=lambda x: -x[1])[:30]
     hist = meta.get("schema_history") or []
     return {
-        "kb_id": kb_id, "editable": editable, "schema_source": kb.schema_source,
+        "kb_id": kb_id, "editable": editable, "mode": "induced", "schema_source": kb.schema_source,
         "reason": None if editable else (
             "구조화(YAML/JSON) KB 는 필드 구조가 스키마입니다 — 스키마 정렬의 매핑 규칙으로 고치세요"
             if kb.schema_source == "structured" else "승격(스키마 유도)된 KB 만 편집할 수 있습니다"),
@@ -276,6 +283,8 @@ async def save_spec(kb_id: str, spec_in: Dict[str, Any], base_version: Optional[
     kb = await KnowledgeBase.get(kb_id)
     if not kb:
         raise SchemaEditError(["KB 없음"], 404)
+    if kb.schema_source == STRUCTURED:
+        return await _save_structured_spec(kb, spec_in, base_version, note)
     if kb.schema_source not in EDITABLE_SOURCES:
         raise SchemaEditError([f"편집할 수 없는 KB 입니다 (schema_source={kb.schema_source})"])
     meta = dict(kb.promotion_metadata or {})
@@ -349,6 +358,8 @@ async def revert_to(kb_id: str, version: int) -> Dict[str, Any]:
     h = next((x for x in meta.get("schema_history") or [] if int(x["version"]) == int(version)), None)
     if not h:
         raise SchemaEditError([f"이력에 버전 {version} 이 없습니다"], 404)
+    if kb.schema_source == STRUCTURED:
+        return await _revert_structured(kb, h)
     cur = meta.get("induction") or {}
     spec = copy.deepcopy(h["spec"])
     # 현재 이름 → 옛 이름 되돌리기를 renamed_from 으로 표시해 규칙이 따라가게 한다
@@ -367,3 +378,246 @@ async def revert_to(kb_id: str, version: int) -> Dict[str, Any]:
         p.setdefault("aliases", [a for a in p.get("members") or [] if a != p["name"]])
     return await save_spec(kb_id, spec, base_version=int(meta.get("schema_version") or 1),
                            note=f"버전 {version} 으로 되돌림")
+
+
+# ---------------------------------------------------------------------------
+# 구조화(YAML/JSON) KB — 덧씌우기 + 매핑 규칙 (§7)
+# ---------------------------------------------------------------------------
+
+async def _structured_catalog(kb_id: str):
+    from app.services.retrieval.graph_backends.fuseki import FusekiBackend
+    return await FusekiBackend()._class_catalog(kb_id, lambda _m: None, {})
+
+
+def _path_count(p: Dict[str, Any]) -> int:
+    if p.get("member_ids"):
+        return len(p["member_ids"])
+    return sum(int(v.get("members") or 0) for v in p.get("values") or [])
+
+
+async def _get_structured_spec(kb) -> Dict[str, Any]:
+    from app.services.retrieval.relation_targeting import local_name
+    kb_id = str(kb.id)
+    meta = kb.promotion_metadata or {}
+    kinds, catalogs = await _structured_catalog(kb_id)
+    classes, props = [], []
+    for k in kinds:
+        classes.append({"name": k["name"], "orig": k.get("orig_name") or k["name"],
+                        "description": k.get("description", ""), "member_count": len(k["members"]),
+                        "examples": [local_name(m) for m in k["members"][:8]]})
+        for p in catalogs.get(k["name"]) or []:
+            if p.get("equiv_rep") and p["equiv_rep"] != p["key"]:
+                continue
+            props.append({"name": p["key"], "kind": k["name"], "type": p.get("type"),
+                          "values": [str(v["label"])[:40] for v in (p.get("values") or [])[:10]],
+                          "value_count": p.get("dv", 0), "description": p.get("description", ""),
+                          "aliases": p.get("aliases") or [], "triple_count": _path_count(p)})
+    hist = meta.get("schema_history") or []
+    return {
+        "kb_id": kb_id, "editable": True, "mode": "structured", "schema_source": kb.schema_source,
+        "reason": None,
+        "notes": ["구조화(YAML/JSON) KB: 스키마는 필드 구조에서 만들어집니다. 고친 내용은 KB 에 따로 저장돼 "
+                  "다시 올리거나 새 문서를 넣어도 유지됩니다.",
+                  "유형 이름·설명, 속성 정의·별칭은 바로 반영됩니다. 속성 이름(경로) 변경은 매핑 규칙으로 저장되고 "
+                  "해당 문서를 재정규화합니다. 속성 추가·방향 변경은 YAML 원본에서 해야 합니다."],
+        "version": int(meta.get("schema_version") or 1),
+        "updated_at": meta.get("schema_updated_at") or meta.get("promoted_at"),
+        "classes": classes, "properties": props, "out_of_schema": [],
+        "history": [{"version": h["version"], "at": h.get("at"), "summary": h.get("summary")} for h in reversed(hist)],
+    }
+
+
+def _valid_path(x: str) -> bool:
+    segs = [t for t in str(x or "").split(".")]
+    return bool(segs) and all(re.fullmatch(r"[0-9A-Za-z가-힣_\-]+", t or "") for t in segs)
+
+
+async def _save_structured_spec(kb, spec_in: Dict[str, Any], base_version: Optional[int], note: str,
+                                dry_run: bool = False) -> Dict[str, Any]:
+    from app.models.schema_mapping import SchemaMappingRule
+    from app.services.retrieval.graph_backends.fuseki import FusekiBackend
+    from app.services.retrieval.relation_targeting import local_name
+    from app.services.schema_alignment.service import (
+        _docs_with_path, mark_structured_ontology, renormalize_documents)
+
+    kb_id = str(kb.id)
+    meta = dict(kb.promotion_metadata or {})
+    version = int(meta.get("schema_version") or 1)
+    if base_version is not None and int(base_version) != version:
+        raise SchemaEditError([f"다른 곳에서 먼저 저장했습니다 (현재 버전 {version}, 편집 기준 {base_version}) — 새로 불러온 뒤 다시 편집하세요"], 409)
+    kinds, catalogs = await _structured_catalog(kb_id)
+    by_name = {k["name"]: k for k in kinds}
+    cur_paths = {p["key"]: p for k in kinds for p in catalogs.get(k["name"]) or []}
+
+    errors, warnings = [], []
+    new_classes = []
+    for c in spec_in.get("classes") or []:
+        cur = by_name.get(c.get("renamed_from") or c.get("name")) or by_name.get(c.get("orig") or "")
+        name = clean_class_name(c.get("name"))
+        if not cur:
+            errors.append(f"구조화 KB 에서는 유형을 새로 만들 수 없습니다: '{c.get('name')}'")
+            continue
+        if not name:
+            errors.append("이름 없는 유형이 있습니다")
+            continue
+        new_classes.append({"orig": cur.get("orig_name") or cur["name"], "name": name,
+                            "description": str(c.get("description") or "").strip()[:500],
+                            "members": [local_name(m) for m in cur["members"][:200]]})
+    names = [c["name"] for c in new_classes]
+    dup = {n for n in names if names.count(n) > 1}
+    if dup:
+        errors.append(f"유형 이름 중복: {', '.join(sorted(dup))}")
+
+    renames, prop_notes = {}, {}
+    seen = set()
+    for p in spec_in.get("properties") or []:
+        name = str(p.get("name") or "").strip()
+        old = str(p.get("renamed_from") or name).strip()
+        if old not in cur_paths:
+            errors.append(f"구조화 KB 에서는 속성을 새로 만들 수 없습니다: '{name}' (YAML 원본에 필드를 추가하세요)")
+            continue
+        if not _valid_path(name):
+            errors.append(f"속성 경로 '{name}' 형식이 잘못됐습니다 (점으로 구분한 이름)")
+            continue
+        if name != old:
+            if name in cur_paths:
+                warnings.append(f"'{old}' → '{name}': 이미 있는 경로라 두 필드가 합쳐집니다")
+            if old.split(".")[:-1] != name.split(".")[:-1]:
+                warnings.append(f"'{old}' → '{name}': 상위 경로가 바뀌어 필드가 다른 위치로 옮겨집니다")
+            renames[old] = name
+        if name in seen:
+            errors.append(f"속성 경로 중복: {name}")
+        seen.add(name)
+        aliases = p.get("aliases") or []
+        if isinstance(aliases, str):
+            aliases = re.split(r"[,\n]", aliases)
+        aliases = [a.strip() for a in aliases if a and a.strip() and a.strip() != name]
+        desc = str(p.get("description") or "").strip()[:500]
+        if desc or aliases:
+            prop_notes[name] = {"description": desc, "aliases": aliases}
+    if errors:
+        raise SchemaEditError(errors)
+
+    old_overlay = meta.get("schema_overlay") or {}
+    new_overlay = {"classes": [c for c in new_classes if c["name"] != c["orig"] or c["description"]],
+                   "properties": prop_notes}
+    summary = _structured_summary(old_overlay, new_overlay, renames)
+    if dry_run:
+        return {"errors": [], "warnings": warnings, "summary": summary}
+    if summary == "변경 없음":
+        return {"version": version, "summary": summary, "warnings": warnings, "saved": False}
+
+    hist = list(meta.get("schema_history") or [])
+    hist.append({"version": version, "at": meta.get("schema_updated_at") or meta.get("promoted_at"),
+                 "summary": meta.get("schema_last_summary") or "구조화 스키마 (YAML 필드 구조)",
+                 "overlay": old_overlay, "structured": True})
+    meta["schema_history"] = hist[-HISTORY_MAX:]
+    meta["schema_overlay"] = new_overlay
+    meta["schema_version"] = version + 1
+    meta["schema_updated_at"] = datetime.utcnow().isoformat()
+    meta["schema_last_summary"] = summary + (f" — {note}" if note else "")
+    kb.promotion_metadata = meta
+
+    affected = set()
+    for old, new in renames.items():
+        exists = await SchemaMappingRule.find_one(SchemaMappingRule.kb_id == kb_id, SchemaMappingRule.rule_type == "key",
+                                                  SchemaMappingRule.source_path == old)
+        if exists:
+            exists.target_path, exists.status = new, "active"
+            await exists.save()
+        else:
+            await SchemaMappingRule(kb_id=kb_id, rule_type="key", source_path=old, target_path=new,
+                                    origin="schema_editor").insert()
+        affected.update(_docs_with_path(kb_id, cur_paths[old]["uris"]))
+    if renames:
+        kb.schema_rules_version = (kb.schema_rules_version or 0) + 1
+    await kb.save()
+
+    FusekiBackend.invalidate_class_catalog(kb_id)
+    tbox = await mark_structured_ontology(kb_id)
+    result = {"version": version + 1, "summary": summary, "warnings": warnings, "saved": True,
+              "tbox_uploaded": bool(tbox.get("tbox")), "rules_changed": len(renames)}
+    if affected:
+        rn = await renormalize_documents(kb_id, sorted(affected))
+        result["renormalize"] = {"queued": len(rn["queued"]), "needs_source": rn["needs_source"]}
+    return result
+
+
+def _structured_summary(old: Dict[str, Any], new: Dict[str, Any], renames: Dict[str, str]) -> str:
+    parts = []
+    oc = {c["orig"]: c for c in old.get("classes") or []}
+    for c in new.get("classes") or []:
+        o = oc.get(c["orig"])
+        if not o or o.get("name") != c["name"]:
+            parts.append(f"유형 이름 {(o or {}).get('name') or c['orig']}→{c['name']}")
+        elif (o.get("description") or "") != (c.get("description") or ""):
+            parts.append(f"유형 설명 {c['name']}")
+    for c in old.get("classes") or []:
+        if c["orig"] not in {x["orig"] for x in new.get("classes") or []}:
+            parts.append(f"유형 이름 {c['name']}→{c['orig']}")
+    op, np_ = old.get("properties") or {}, new.get("properties") or {}
+    changed = [k for k in set(op) | set(np_) if op.get(k) != np_.get(k) and k not in renames.values()]
+    if changed:
+        parts.append(f"속성 정의·별칭 {', '.join(sorted(changed)[:5])}" + (" …" if len(changed) > 5 else ""))
+    if renames:
+        parts.append("속성 이름 " + ", ".join(f"{a}→{b}" for a, b in list(renames.items())[:5]))
+    return " / ".join(parts) or "변경 없음"
+
+
+async def _revert_structured(kb, h: Dict[str, Any]) -> Dict[str, Any]:
+    """덧씌우기를 이력 버전으로 되돌리고, 그 뒤 편집기가 만든 경로 이름 변경 규칙은 끈 뒤 재정규화."""
+    from app.models.schema_mapping import SchemaMappingRule
+    from app.services.retrieval.graph_backends.fuseki import FusekiBackend
+    from app.services.schema_alignment.service import mark_structured_ontology, renormalize_documents
+    from app.models.document import Document
+
+    kb_id = str(kb.id)
+    meta = dict(kb.promotion_metadata or {})
+    version = int(meta.get("schema_version") or 1)
+    since = h.get("at")
+    disabled = 0
+    for r in await SchemaMappingRule.find(SchemaMappingRule.kb_id == kb_id, SchemaMappingRule.rule_type == "key",
+                                          SchemaMappingRule.origin == "schema_editor",
+                                          SchemaMappingRule.status == "active").to_list():
+        if not since or r.created_at.isoformat() > str(since):
+            r.status = "disabled"
+            await r.save()
+            disabled += 1
+    hist = list(meta.get("schema_history") or [])
+    hist.append({"version": version, "at": meta.get("schema_updated_at"), "summary": meta.get("schema_last_summary"),
+                 "overlay": meta.get("schema_overlay") or {}, "structured": True})
+    meta["schema_history"] = hist[-HISTORY_MAX:]
+    meta["schema_overlay"] = copy.deepcopy(h.get("overlay") or {})
+    meta["schema_version"] = version + 1
+    meta["schema_updated_at"] = datetime.utcnow().isoformat()
+    meta["schema_last_summary"] = f"버전 {h['version']} 으로 되돌림"
+    kb.promotion_metadata = meta
+    if disabled:
+        kb.schema_rules_version = (kb.schema_rules_version or 0) + 1
+    await kb.save()
+    FusekiBackend.invalidate_class_catalog(kb_id)
+    await mark_structured_ontology(kb_id)
+    result = {"version": version + 1, "summary": meta["schema_last_summary"], "rules_changed": disabled, "saved": True}
+    if disabled:
+        docs = [str(d.id) for d in await Document.find(Document.kb_id == kb_id).to_list()]
+        rn = await renormalize_documents(kb_id, docs)
+        result["renormalize"] = {"queued": len(rn["queued"]), "needs_source": rn["needs_source"]}
+    return result
+
+
+async def preview(kb_id: str, spec_in: Dict[str, Any]) -> Dict[str, Any]:
+    """저장 전 미리보기 — {errors, warnings, summary}."""
+    from app.models.knowledge_base import KnowledgeBase
+    kb = await KnowledgeBase.get(kb_id)
+    if not kb:
+        raise SchemaEditError(["KB 없음"], 404)
+    if kb.schema_source == STRUCTURED:
+        try:
+            return await _save_structured_spec(kb, spec_in, None, "", dry_run=True)
+        except SchemaEditError as e:
+            return {"errors": e.errors, "warnings": [], "summary": ""}
+    spec = _norm_spec(spec_in)
+    errors, warnings = validate_spec(spec)
+    ind = (kb.promotion_metadata or {}).get("induction") or {}
+    diff = diff_spec({"classes": ind.get("classes") or [], "properties": ind.get("properties") or []}, spec)
+    return {"errors": errors, "warnings": warnings, "diff": diff, "summary": _summary_text(diff)}

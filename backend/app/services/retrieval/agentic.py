@@ -75,20 +75,23 @@ async def describe_kb(kb_id: str, graph_backend: str, llm_model_config: Optional
     lines = []
     for k in kinds[:6]:
         ex = ", ".join(local_name(m) for m in k["members"][:15])
-        lines.append(f"[유형 {k['name']}] 멤버 {len(k['members'])}개: {ex}" + (" …" if len(k["members"]) > 15 else ""))
+        lines.append(f"[유형 {k['name']}]" + (f" {k['description']}" if k.get("description") else "")
+                     + f" 멤버 {len(k['members'])}개: {ex}" + (" …" if len(k["members"]) > 15 else ""))
         for p in (catalogs.get(k["name"]) or [])[:80]:
             if p.get("equiv_rep") and p["equiv_rep"] != p["key"]:
                 continue
             labels = [str(v["label"]) for v in p["values"]]
+            note = (f" — {p['description']}" if p.get("description") else "") + (
+                f" (별칭: {', '.join(p['aliases'])})" if p.get("aliases") else "")
             if p["type"] == "number":
                 lo, hi = p.get("range", [0, 0])
-                lines.append(f"  - {p['key']} [수치 {lo:g}~{hi:g}]")
+                lines.append(f"  - {p['key']} [수치 {lo:g}~{hi:g}]{note}")
             elif p["type"] == "enum" and all(len(l) <= 30 for l in labels):
-                lines.append(f"  - {p['key']} [값: {', '.join(labels[:8])}]")
+                lines.append(f"  - {p['key']} [값: {', '.join(labels[:8])}]{note}")
             else:
                 # 긴 서술 값은 예시 하나만 짧게 — 요약이 잘려 뒤쪽 속성(tradeoffs.* 등)이 빠지지 않게
                 ex = labels[0].replace("\n", " ")[:40] if labels else ""
-                lines.append(f"  - {p['key']} [서술 {len(labels)}종, 예: {ex}]")
+                lines.append(f"  - {p['key']} [서술 {len(labels)}종, 예: {ex}]{note}")
     text = "\n".join(lines)
     return text[:8000]
 

@@ -242,16 +242,11 @@ async def get_schema_spec(kb_id: str):
 @router.post("/{kb_id}/schema/spec/validate")
 async def validate_schema_spec(kb_id: str, body: SchemaSpecBody):
     """저장 전 미리보기: 오류·경고·변경 요약."""
-    from app.models.knowledge_base import KnowledgeBase
     from app.services.schema_alignment import schema_editor as se
-    kb = await KnowledgeBase.get(kb_id)
-    if not kb:
-        raise HTTPException(status_code=404, detail="KB 없음")
-    spec = se._norm_spec(body.model_dump())
-    errors, warnings = se.validate_spec(spec)
-    ind = (kb.promotion_metadata or {}).get("induction") or {}
-    diff = se.diff_spec({"classes": ind.get("classes") or [], "properties": ind.get("properties") or []}, spec)
-    return {"errors": errors, "warnings": warnings, "diff": diff, "summary": se._summary_text(diff)}
+    try:
+        return await se.preview(kb_id, body.model_dump())
+    except se.SchemaEditError as e:
+        _edit_error(e)
 
 
 @router.put("/{kb_id}/schema/spec")

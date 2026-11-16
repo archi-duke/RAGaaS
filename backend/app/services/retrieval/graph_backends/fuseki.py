@@ -1306,8 +1306,11 @@ class FusekiBackend(GraphBackend):
             return cached[2], cached[3]
 
         rules = await self._load_schema_rules(kb_id)
+        overlay = await self._load_schema_overlay(kb_id)
         use_llm = os.getenv("SCHEMA_EQUIV_LLM_AUTO_USE", "true").lower() != "false"
         kinds = cq.infer_kinds(self._bindings(kb_id, cq.build_member_query()))[: self._MAX_KINDS]
+        # 사람이 고친 유형 이름·설명 (스키마 편집기, 구조화 KB) — docs/design-schema-editor.md §7
+        cq.apply_kind_overlay(kinds, overlay)
         catalogs = {}
         for k in kinds:
             paths = cq.parse_kind_catalog(self._bindings(kb_id, cq.build_kind_catalog_query(k["members"])))
@@ -1336,10 +1339,20 @@ class FusekiBackend(GraphBackend):
                 for x in grp:
                     x["value_equiv"] = vmap
             k["equiv_groups"] = groups
+            cq.apply_path_overlay(paths, overlay)
             catalogs[k["name"]] = paths
         self._CLASS_CATALOG_CACHE[kb_id] = (fingerprint, _time.time(), kinds, catalogs)
         log_trace(f"[Fuseki] Class catalog built: {[(k['name'], len(k['members']), len(k['equiv_groups'])) for k in kinds]}")
         return kinds, catalogs
+
+    async def _load_schema_overlay(self, kb_id: str) -> Dict[str, Any]:
+        """스키마 편집기 덧씌우기 (promotion_metadata.schema_overlay). 없거나 실패하면 빈 dict."""
+        try:
+            from app.models.knowledge_base import KnowledgeBase
+            kb = await KnowledgeBase.get(kb_id)
+            return ((kb.promotion_metadata or {}).get("schema_overlay") or {}) if kb else {}
+        except Exception:
+            return {}
 
     async def _load_schema_rules(self, kb_id: str) -> Dict[str, Any]:
         """KB 매핑 규칙 (Part 2). 규칙 저장소가 없거나 실패하면 빈 규칙."""

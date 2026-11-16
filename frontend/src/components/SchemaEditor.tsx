@@ -7,13 +7,15 @@ import ReextractModal from './ReextractModal';
 // 저장 시: 검증 → 이전 버전 이력 보관 → TBox 재생성. 이름 변경은 규칙 + 리플레이로 기존 그래프에 반영.
 // 정의·방향·별칭 변경은 "스키마 기준 재추출"을 돌려야 데이터에 반영된다.
 
-interface ClassRow { key: string; name: string; description: string; member_count?: number; renamed_from?: string; }
+interface ClassRow { key: string; name: string; description: string; member_count?: number; renamed_from?: string; orig?: string; examples?: string[]; }
 interface PropRow {
     key: string; name: string; description: string; domain: string; range: string;
     aliases: string; seed?: boolean; triple_count?: number; renamed_from?: string;
+    kind?: string; type?: string; values?: string[]; value_count?: number;
 }
 interface Spec {
     editable: boolean; reason?: string; schema_source: string; version: number; updated_at?: string;
+    mode?: 'induced' | 'structured'; notes?: string[];
     classes: any[]; properties: any[]; out_of_schema: { name: string; triple_count: number }[];
     history: { version: number; at?: string; summary?: string }[];
 }
@@ -40,10 +42,14 @@ export default function SchemaEditor({ kbId }: { kbId: string }) {
         const r = await schemaApi.getSpec(kbId);
         const s: Spec = r.data;
         setSpec(s);
-        const c = (s.classes || []).map((x: any) => ({ key: nextKey(), name: x.name, description: x.description || '', member_count: x.member_count }));
+        const c = (s.classes || []).map((x: any) => ({
+            key: nextKey(), name: x.name, description: x.description || '', member_count: x.member_count,
+            orig: x.orig, examples: x.examples,
+        }));
         const p = (s.properties || []).map((x: any) => ({
             key: nextKey(), name: x.name, description: x.description || '', domain: x.domain || '', range: x.range || '',
             aliases: (x.aliases || []).join(', '), seed: x.seed, triple_count: x.triple_count,
+            kind: x.kind, type: x.type, values: x.values, value_count: x.value_count,
         }));
         setClasses(c);
         setProps(p);
@@ -57,7 +63,7 @@ export default function SchemaEditor({ kbId }: { kbId: string }) {
     const body = useCallback(() => ({
         base_version: spec?.version,
         classes: classes.map((c) => ({
-            name: c.name, description: c.description,
+            name: c.name, description: c.description, ...(c.orig ? { orig: c.orig } : {}),
             ...(orig.c[c.key] && orig.c[c.key] !== c.name ? { renamed_from: orig.c[c.key] } : {}),
         })),
         properties: props.map((p) => ({
@@ -76,6 +82,8 @@ export default function SchemaEditor({ kbId }: { kbId: string }) {
         return () => clearTimeout(t);
     }, [kbId, body, spec]);
 
+    // 구조화(YAML/JSON) KB: 유형·속성은 YAML 필드 구조에서 나오므로 추가·삭제·방향 변경 불가
+    const structured = spec?.mode === 'structured';
     const classNames = useMemo(() => classes.map((c) => c.name).filter(Boolean), [classes]);
     const shown = props.filter((p) => !filter || `${p.name} ${p.aliases} ${p.description}`.toLowerCase().includes(filter.toLowerCase()));
     const dirty = !!check && check.summary !== '변경 없음';
@@ -136,14 +144,18 @@ export default function SchemaEditor({ kbId }: { kbId: string }) {
                 </span>
                 <div style={{ marginLeft: 'auto', display: 'flex', gap: '0.5rem' }}>
                     <button className="btn btn-secondary" style={btn} disabled={busy} onClick={() => load()}><RefreshCw size={14} /> 다시 불러오기</button>
-                    <button className="btn btn-secondary" style={btn} disabled={busy} onClick={openReextract}>스키마 기준 재추출…</button>
+                    {!structured && <button className="btn btn-secondary" style={btn} disabled={busy} onClick={openReextract}>스키마 기준 재추출…</button>}
                     <button className="btn btn-primary" style={btn} disabled={busy || !dirty || !!check?.errors?.length} onClick={save}><Save size={14} /> 저장</button>
                 </div>
             </div>
-            <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', margin: 0 }}>
+            {structured ? (
+                <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', margin: 0 }}>
+                    {(spec.notes || []).map((n, i) => <div key={i}>{n}</div>)}
+                </div>
+            ) : <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', margin: 0 }}>
                 저장하면 이전 버전이 이력에 남고 TBox 가 다시 만들어집니다. <b>이름 변경</b>은 규칙과 리플레이로 기존 그래프에 바로 반영됩니다(LLM 비용 없음).
                 <b> 정의·방향(domain→range)·별칭</b> 변경은 재추출 때 프롬프트로 쓰이므로, 데이터에 반영하려면 "스키마 기준 재추출"을 실행하세요.
-            </p>
+            </p>}
 
             {check && (check.errors.length > 0 || check.warnings.length > 0 || dirty) && (
                 <div style={{ fontSize: '0.8rem', background: check.errors.length ? '#fef2f2' : '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '6px', padding: '0.5rem 0.75rem' }}>
@@ -158,9 +170,9 @@ export default function SchemaEditor({ kbId }: { kbId: string }) {
             {/* 클래스 */}
             <div className="card" style={{ padding: '0.75rem' }}>
                 <div style={{ display: 'flex', alignItems: 'center', marginBottom: '0.4rem' }}>
-                    <h4 style={{ margin: 0 }}>클래스</h4>
-                    <button className="btn btn-secondary" style={{ ...btn, marginLeft: 'auto' }}
-                        onClick={() => setClasses([...classes, { key: nextKey(), name: '', description: '' }])}><Plus size={14} /> 클래스 추가</button>
+                    <h4 style={{ margin: 0 }}>{structured ? '유형' : '클래스'}</h4>
+                    {!structured && <button className="btn btn-secondary" style={{ ...btn, marginLeft: 'auto' }}
+                        onClick={() => setClasses([...classes, { key: nextKey(), name: '', description: '' }])}><Plus size={14} /> 클래스 추가</button>}
                 </div>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
                     <thead><tr style={{ textAlign: 'left', color: '#64748b' }}>
@@ -176,10 +188,11 @@ export default function SchemaEditor({ kbId }: { kbId: string }) {
                                 </td>
                                 <td style={cell}><input style={input} value={c.description}
                                     onChange={(e) => setClasses(classes.map((x, j) => j === i ? { ...x, description: e.target.value } : x))} /></td>
-                                <td style={cell}>{c.member_count ?? '-'}</td>
+                                <td style={cell} title={(c.examples || []).join(', ')}>{c.member_count ?? '-'}</td>
                                 <td style={cell}>
-                                    <button className="btn btn-secondary" style={{ ...btn, padding: '0.2rem 0.35rem' }} title="삭제 (멤버 지정 규칙은 꺼짐)"
-                                        onClick={() => setClasses(classes.filter((_, j) => j !== i))}><Trash2 size={12} /></button>
+                                    {!structured && <button className="btn btn-secondary" style={{ ...btn, padding: '0.2rem 0.35rem' }} title="삭제 (멤버 지정 규칙은 꺼짐)"
+                                        onClick={() => setClasses(classes.filter((_, j) => j !== i))}><Trash2 size={12} /></button>}
+                                    {c.orig && c.orig !== c.name && <div style={{ fontSize: '0.7rem', color: '#64748b' }}>자동: {c.orig}</div>}
                                 </td>
                             </tr>
                         ))}
@@ -190,18 +203,18 @@ export default function SchemaEditor({ kbId }: { kbId: string }) {
             {/* 속성 */}
             <div className="card" style={{ padding: '0.75rem' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.4rem' }}>
-                    <h4 style={{ margin: 0 }}>속성 (관계)</h4>
+                    <h4 style={{ margin: 0 }}>{structured ? '속성 (YAML 필드 경로)' : '속성 (관계)'}</h4>
                     <input style={{ ...input, width: '220px' }} placeholder="이름·별칭·정의 검색" value={filter} onChange={(e) => setFilter(e.target.value)} />
-                    <button className="btn btn-secondary" style={{ ...btn, marginLeft: 'auto' }}
-                        onClick={() => setProps([...props, { key: nextKey(), name: '', description: '', domain: '', range: '', aliases: '' }])}><Plus size={14} /> 속성 추가</button>
+                    {!structured && <button className="btn btn-secondary" style={{ ...btn, marginLeft: 'auto' }}
+                        onClick={() => setProps([...props, { key: nextKey(), name: '', description: '', domain: '', range: '', aliases: '' }])}><Plus size={14} /> 속성 추가</button>}
                 </div>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
                     <thead><tr style={{ textAlign: 'left', color: '#64748b' }}>
                         <th style={{ ...cell, width: '14%' }}>이름</th>
-                        <th style={{ ...cell, width: '24%' }}>방향 (domain → range)</th>
-                        <th style={cell}>정의 (재추출 프롬프트에 그대로 들어감)</th>
+                        <th style={{ ...cell, width: '24%' }}>{structured ? '유형 · 값' : '방향 (domain → range)'}</th>
+                        <th style={cell}>{structured ? '정의 (검색 계획·TBox 에 쓰임)' : '정의 (재추출 프롬프트에 그대로 들어감)'}</th>
                         <th style={{ ...cell, width: '18%' }}>별칭 (쉼표 구분)</th>
-                        <th style={{ ...cell, width: '6%' }}>트리플</th>
+                        <th style={{ ...cell, width: '6%' }}>{structured ? '레코드' : '트리플'}</th>
                         <th style={{ ...cell, width: '4%' }} />
                     </tr></thead>
                     <tbody>
@@ -214,7 +227,13 @@ export default function SchemaEditor({ kbId }: { kbId: string }) {
                                         {rename(orig.p[p.key], p.name)}
                                         {p.seed && <div style={{ fontSize: '0.7rem', color: '#64748b' }}>시드</div>}
                                     </td>
-                                    <td style={cell}>
+                                    {structured ? (
+                                        <td style={cell}>
+                                            <div style={{ fontSize: '0.72rem', color: '#475569' }}>{p.kind} · {p.type}{p.value_count ? ` · 값 ${p.value_count}종` : ''}</div>
+                                            <div style={{ fontSize: '0.72rem', color: '#64748b', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '22rem' }}
+                                                title={(p.values || []).join(' | ')}>{(p.values || []).slice(0, 5).join(', ')}</div>
+                                        </td>
+                                    ) : <td style={cell}>
                                         <div style={{ display: 'flex', gap: '0.25rem', alignItems: 'center' }}>
                                             <select style={input} value={p.domain} onChange={(e) => upd({ domain: e.target.value })}>
                                                 <option value="">(지정 안 함)</option>
@@ -224,16 +243,16 @@ export default function SchemaEditor({ kbId }: { kbId: string }) {
                                             <input style={input} list={`ranges-${kbId}`} value={p.range} placeholder="클래스 또는 값"
                                                 onChange={(e) => upd({ range: e.target.value })} />
                                         </div>
-                                    </td>
+                                    </td>}
                                     <td style={cell}><textarea style={{ ...input, minHeight: '2.2rem', resize: 'vertical' }} value={p.description}
                                         onChange={(e) => upd({ description: e.target.value })} /></td>
                                     <td style={cell}><textarea style={{ ...input, minHeight: '2.2rem', resize: 'vertical' }} value={p.aliases}
                                         onChange={(e) => upd({ aliases: e.target.value })} /></td>
                                     <td style={cell}>{p.triple_count ?? 0}</td>
                                     <td style={cell}>
-                                        <button className="btn btn-secondary" style={{ ...btn, padding: '0.2rem 0.35rem' }}
+                                        {!structured && <button className="btn btn-secondary" style={{ ...btn, padding: '0.2rem 0.35rem' }}
                                             title="스키마에서 삭제 (기존 트리플은 남고 스키마 밖으로 분류)"
-                                            onClick={() => setProps(props.filter((x) => x.key !== p.key))}><Trash2 size={12} /></button>
+                                            onClick={() => setProps(props.filter((x) => x.key !== p.key))}><Trash2 size={12} /></button>}
                                     </td>
                                 </tr>
                             );
