@@ -14,12 +14,16 @@ from typing import Any, Dict, List, Optional, Tuple
 
 MAX_CHUNK_CHARS = 6000
 CONCURRENCY = 4
+MAX_MEMBERS_PER_CLASS = 80   # 목적어 표기를 기존 멤버에 맞추도록 (range 클래스 어휘) — 재추출이 새 표기를 만들면 멤버 누락이 된다
+
+# 부재·부정 표현: "충돌하는 스타일은 없다" → (X, 충돌, 없음) 같은 트리플은 사실이 아니다
+_ABSENT_RE = re.compile(r"^\s*(없음|없다|없습니다|해당\s*(사항\s*)?없음|해당되지\s*않음|해당\s*없다|n/?a|none|null|-)\s*\.?$", re.I)
 
 
 def build_schema_text(spec: Dict[str, Any]) -> str:
     lines = ["[클래스]"]
     for c in spec.get("classes") or []:
-        mem = ", ".join((c.get("members") or [])[:40])
+        mem = ", ".join((c.get("members") or [])[:MAX_MEMBERS_PER_CLASS])
         lines.append(f"- {c['name']}: {c.get('description') or ''}" + (f" (알려진 멤버: {mem})" if mem else ""))
     lines.append("\n[속성] 이름 (domain → range): 정의 — 같은 뜻의 다른 표기 / 허용 값")
     for p in spec.get("properties") or []:
@@ -49,8 +53,10 @@ def build_messages(schema_text: str, text: str) -> List[Dict[str, str]]:
    "B는 A의 지도로 학위를 받았다" 는 subject=A, object=B. 일반 동사(소속·발표 등)로 뭉뚱그리지 말고 가장 구체적인 속성을 고른다.
    정의에 'A | 속성 | B' 형태가 있으면 그 자리 그대로 쓴다. 예: '계승_발전' 이 'A | 계승_발전 | B (A가 선행)' 이면
    "B는 A를 이어받아 발전시켰다" 는 subject=A, object=B — 문장의 주어(B)를 subject 로 쓰지 않는다.
-3. subject 는 알려진 멤버 이름 그대로 (같은 대상의 다른 표기도 대표 이름으로).
+3. subject 와 object 는 알려진 멤버 이름 그대로 (같은 대상의 다른 표기·번역도 대표 이름으로).
+   예: 알려진 멤버에 '테스트 용이성' 이 있으면 'testability' 가 아니라 '테스트 용이성'. 텍스트가 영어여도 멤버 표기를 따른다.
 4. object 는 허용 값이 있으면 그 표기로 (예: 높다 → 목록에 '높다'가 있으면 '높다'). 없으면 짧은 명사구로.
+   "충돌하는 스타일은 없다", "해당 없음" 처럼 무언가가 **없다**는 문장은 트리플로 만들지 마라 ('없음' 을 object 로 쓰지 마라).
 5. 위 속성으로 표현할 수 없는 사실은 out_of_schema 에 넣는다 (predicate 는 짧은 명사구로 지어도 된다). 버리지 마라.
 6. 텍스트에 없는 사실을 만들지 마라. 속성에 억지로 맞추지 마라 — 예: "1931년 세상을 떠났다" 는 수상이 아니다.
    텍스트가 그 속성의 의미를 직접 말할 때만 그 속성을 쓰고, 아니면 out_of_schema 로.
@@ -168,6 +174,10 @@ def parse_response(data: Optional[Dict[str, Any]], node_id: str, allowed: set,
             t = {"subject": s, "predicate": p, "object": o, "source_node_id": node_id,
                  "confidence": 0.9 if not is_oos else 0.7, "out_of_schema": is_oos,
                  "extraction": "schema_reextract"}
+            if _ABSENT_RE.match(o):
+                t = {**t, "drop": "absent"}
+                out.append(t)
+                continue
             t = check_domain(t, *type_index) if type_index else t
             if text is not None and not t.get("drop") and not is_grounded(o, text, allowed_values):
                 t = {**t, "drop": "ungrounded"}
@@ -208,6 +218,7 @@ async def reextract_chunks(
     stats = {"chunks": len(chunks), "triples": len(triples),
              "dropped_domain": sum(1 for t in raw if t.get("drop") == "domain"),
              "dropped_ungrounded": sum(1 for t in raw if t.get("drop") == "ungrounded"),
+             "dropped_absent": sum(1 for t in raw if t.get("drop") == "absent"),
              "out_of_schema": sum(1 for t in triples if t["out_of_schema"]),
              "direction_fixed": sum(1 for t in triples if t.get("direction_fixed")),
              "chunk_failures": failures}

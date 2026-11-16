@@ -395,6 +395,7 @@ async def schema_reextract_preview(kb_id: str, body: ReextractPreviewBody):
 
 class RecommendBody(BaseModel):
     triples: Optional[List[dict]] = None      # 트리플 창에서 호출하면 그 트리플만 대상으로
+    gaps: Optional[dict] = None               # {클래스: [이름]} — 재추출 뒤 새 멤버 누락만 정리 ({} 면 누락 전체)
 
 
 class RecommendActionsBody(BaseModel):
@@ -410,7 +411,8 @@ async def schema_recommend(kb_id: str, body: RecommendBody):
     from app.services.schema_alignment import recommend as rc
     from app.services.schema_alignment.schema_editor import SchemaEditError
     try:
-        return await rc.recommend(kb_id, {"triples": body.triples} if body.triples else None)
+        scope = {"triples": body.triples} if body.triples else ({"gaps": body.gaps} if body.gaps is not None else None)
+        return await rc.recommend(kb_id, scope)
     except SchemaEditError as e:
         _edit_error(e)
 
