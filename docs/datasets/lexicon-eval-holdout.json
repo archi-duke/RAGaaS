@@ -1,0 +1,210 @@
+{
+ "_doc": "홀드아웃 평가 세트 — 튜닝에 쓰지 않은 항목 (docs/design-kb-lexicon.md §6). 프롬프트·규칙 변경 후 lexicon-eval.json 과 함께 돌린다.",
+ "kbs": {
+  "test-ontology2": "f220990a-25a5-47a8-8562-7c4c7264c9eb",
+  "test-ontology": "406b0eeb-8002-4a3f-8368-c580d397fa89",
+  "test-ontology3": "4ec88353-f9fb-4142-93bb-9f08bbfa77b9"
+ },
+ "items": [
+  {
+   "kb": "test-ontology2",
+   "type": "translit",
+   "term": "레이어드 아키텍처",
+   "expect": [
+    "Layered 스타일"
+   ]
+  },
+  {
+   "kb": "test-ontology2",
+   "type": "synonym",
+   "term": "CQRS 패턴",
+   "expect": [
+    "CQRS"
+   ]
+  },
+  {
+   "kb": "test-ontology2",
+   "type": "translit",
+   "term": "서비스메시",
+   "expect": [
+    "Service Mesh"
+   ]
+  },
+  {
+   "kb": "test-ontology2",
+   "type": "synonym",
+   "term": "테스트 가능성",
+   "expect": [
+    "테스트 용이성"
+   ]
+  },
+  {
+   "kb": "test-ontology2",
+   "type": "synonym",
+   "term": "확장 가능성",
+   "expect": [
+    "확장성"
+   ]
+  },
+  {
+   "kb": "test-ontology2",
+   "type": "en-ko",
+   "term": "cost efficiency",
+   "expect": [
+    "비용 효율"
+   ]
+  },
+  {
+   "kb": "test-ontology2",
+   "type": "en-ko",
+   "term": "observability",
+   "expect": [
+    "관측성"
+   ]
+  },
+  {
+   "kb": "test-ontology2",
+   "type": "negative",
+   "term": "쿠버네티스 오퍼레이터",
+   "expect": []
+  },
+  {
+   "kb": "test-ontology",
+   "type": "translit",
+   "term": "서킷브레이커",
+   "expect": [
+    "circuit_breaker"
+   ]
+  },
+  {
+   "kb": "test-ontology",
+   "type": "ko-en",
+   "term": "카나리 배포",
+   "expect": [
+    "canary_rollout"
+   ]
+  },
+  {
+   "kb": "test-ontology",
+   "type": "synonym",
+   "term": "기능 플래그",
+   "expect": [
+    "feature_toggle"
+   ]
+  },
+  {
+   "kb": "test-ontology",
+   "type": "translit",
+   "term": "타임아웃",
+   "expect": [
+    "timeout"
+   ]
+  },
+  {
+   "kb": "test-ontology",
+   "type": "ko-en",
+   "term": "재시도",
+   "expect": [
+    "retry"
+   ]
+  },
+  {
+   "kb": "test-ontology",
+   "type": "translit",
+   "term": "벌크헤드",
+   "expect": [
+    "bulkhead"
+   ]
+  },
+  {
+   "kb": "test-ontology",
+   "type": "ko-en",
+   "term": "이식성",
+   "expect": [
+    "portability"
+   ]
+  },
+  {
+   "kb": "test-ontology3",
+   "type": "en-ko",
+   "term": "Planck",
+   "expect": [
+    "플랑크"
+   ]
+  },
+  {
+   "kb": "test-ontology3",
+   "type": "en-ko",
+   "term": "Bohr model",
+   "expect": [
+    "보어 원자 모형"
+   ]
+  },
+  {
+   "kb": "test-ontology3",
+   "type": "en-ko",
+   "term": "Lorentz transformation",
+   "expect": [
+    "로렌츠 변환"
+   ]
+  },
+  {
+   "kb": "test-ontology3",
+   "type": "en-ko",
+   "term": "wave-particle duality",
+   "expect": [
+    "파동 입자 이중성",
+    "파동-입자 이중성"
+   ]
+  },
+  {
+   "kb": "test-ontology3",
+   "type": "en-ko",
+   "term": "Faraday",
+   "expect": [
+    "패러데이"
+   ]
+  },
+  {
+   "kb": "test-ontology3",
+   "type": "en-ko",
+   "term": "Dirac equation",
+   "expect": [
+    "디랙 방정식"
+   ]
+  },
+  {
+   "kb": "test-ontology3",
+   "type": "synonym",
+   "term": "양자 전기 역학",
+   "expect": [
+    "QED",
+    "양자 전기역학"
+   ]
+  },
+  {
+   "kb": "test-ontology3",
+   "type": "en-ko",
+   "term": "Galileo",
+   "expect": [
+    "갈릴레오 갈릴레이"
+   ]
+  },
+  {
+   "kb": "test-ontology3",
+   "type": "synonym",
+   "term": "상대성 이론",
+   "expect": [],
+   "narrower": [
+    "특수 상대론",
+    "일반 상대론"
+   ]
+  },
+  {
+   "kb": "test-ontology3",
+   "type": "negative",
+   "term": "도커",
+   "expect": []
+  }
+ ]
+}

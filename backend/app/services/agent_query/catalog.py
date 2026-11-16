@@ -177,12 +177,37 @@ def _contains(term: str, label: str) -> bool:
 
 async def lookup_values(kb_id: str, terms: Sequence[str], kind: Optional[str] = None,
                         limit: int = 8) -> Dict[str, Any]:
+    from app.services.agent_query import lexicon as lx
     _kb_, kinds, catalogs, version = await load_catalog(kb_id)
+    idx = await lx.get_index(kb_id)
+    # 값 라벨 → 등장 위치 (유형·경로)
+    where: Dict[str, List[Dict[str, Any]]] = {}
+    for k in kinds:
+        if kind and k["name"] != kind:
+            continue
+        for p in catalogs.get(k["name"], []):
+            # 동치 경로의 값도 포함 — 보고는 대표 경로로 (대표 경로로 조회하면 동치 경로가 함께 조회됨)
+            rep = p.get("equiv_rep") or p["key"]
+            for v in p.get("values") or []:
+                where.setdefault(v.get("label") or "", []).append(
+                    {"kind": k["name"], "path": rep, "value": v.get("label"), "members": v.get("members", 0)})
+    for lab, ws in where.items():
+        where[lab] = _dedupe(ws)
     terms = [t.strip() for t in (terms or []) if t and t.strip()][:20]
     matches: Dict[str, List[Dict[str, Any]]] = {}
     related: Dict[str, List[Dict[str, Any]]] = {}
+    narrower: Dict[str, List[Dict[str, Any]]] = {}
     for term in terms:
         hits, rel = [], []
+        # 용어 사전 (한영·음역·동의어) — docs/design-kb-lexicon.md §5
+        for m in lx.match_term(idx, term):
+            for w in where.get(m["label"], []):
+                hits.append({**w, "score": m["score"], "via": f"lexicon:{m['via']}"})
+        nar = []
+        for n in lx.narrower_of(idx, term):
+            for w in where.get(n["label"], []):
+                nar.append({**w, "reviewed": n["reviewed"]})
+        narrower[term] = nar[: limit * 3]
         for k in kinds:
             if kind and k["name"] != kind:
                 continue
@@ -206,8 +231,10 @@ async def lookup_values(kb_id: str, terms: Sequence[str], kind: Optional[str] = 
         rel.sort(key=lambda h: -h["members"])
         matches[term] = _dedupe(hits)[:limit]
         related[term] = _dedupe(rel)[:limit]
-    return {"schema_version": version, "matches": matches, "related": related,
-            "note": "matches 가 비면 그래프에 그 값이 없다는 뜻 — 상위 개념이면 하위 속성으로 풀어 다시 찾는다."}
+    return {"schema_version": version, "matches": matches, "related": related, "narrower": narrower,
+            "lexicon_entries": idx["entries"],
+            "note": "matches 가 비면 그래프에 그 값이 없다는 뜻. narrower 는 상위 개념을 하위 값으로 푼 후보 "
+                    "(reviewed=false 는 사람 검토 전) — 푼 방식을 답변에 밝힐 것."}
 
 
 def _dedupe(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -256,9 +283,21 @@ async def resolve_entities(kb_id: str, names: Sequence[str], kind: Optional[str]
                     ent["labels"].add(r["l"]["value"])
                 if r.get("alt"):
                     ent["aliases"].add(r["alt"]["value"])
+    from app.services.agent_query import lexicon as lx
+    idx = await lx.get_index(kb_id)
+    label_to_uri: Dict[str, str] = {}
+    for u, ent in by_uri.items():
+        for l in ent["labels"]:
+            label_to_uri[l] = u
     out: Dict[str, List[Dict[str, Any]]] = {}
     for name in [n.strip() for n in (names or []) if n and n.strip()][:20]:
         cands = []
+        for m in lx.match_term(idx, name):
+            u = label_to_uri.get(m["label"])
+            if u:
+                ent = by_uri[u]
+                cands.append({"label": m["label"], "kind": ent["kind"], "score": m["score"],
+                              "via": f"lexicon:{m['via']}", "aliases": sorted(ent["aliases"])[:5]})
         for u, ent in by_uri.items():
             label = sorted(ent["labels"])[0] if ent["labels"] else u.rsplit("/", 1)[-1].replace("_", " ")
             best, via = 0.0, ""
@@ -273,8 +312,11 @@ async def resolve_entities(kb_id: str, names: Sequence[str], kind: Optional[str]
             if best >= 60:
                 cands.append({"label": label, "kind": ent["kind"], "score": round(best, 1), "via": via,
                               "aliases": sorted(ent["aliases"])[:5]})
-        cands.sort(key=lambda c: -c["score"])
-        out[name] = cands[:limit]
+        best: Dict[str, Dict[str, Any]] = {}
+        for c in cands:
+            if c["label"] not in best or c["score"] > best[c["label"]]["score"]:
+                best[c["label"]] = c
+        out[name] = sorted(best.values(), key=lambda c: -c["score"])[:limit]
     return {"schema_version": version, "entities": out,
             "note": "비어 있으면 그 이름의 엔티티가 그래프에 없다. 영문·한글 표기를 바꿔 다시 시도하거나 search 를 쓴다."}
 

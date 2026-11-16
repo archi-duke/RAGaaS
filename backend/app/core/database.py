@@ -7,6 +7,7 @@ from app.models.prompt import PromptTemplate
 from app.models.document import Document
 from app.models.provider import CustomProvider, BuiltinProviderConfig
 from app.models.schema_mapping import SchemaMappingRule, SchemaMappingProposal
+from app.models.lexicon import KbLexiconEntry
 
 # Client 인스턴스를 전역으로 유지할 수도 있음 (선택사항)
 client: AsyncIOMotorClient = None
@@ -27,6 +28,7 @@ async def init_db():
             SchemaMappingRule,
             SchemaMappingProposal,
             ChatTrace,
+            KbLexiconEntry,
         ]
     )
 

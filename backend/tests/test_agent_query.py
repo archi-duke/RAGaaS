@@ -64,3 +64,55 @@ def test_readonly_allows(q):
 def test_readonly_rejects(q):
     with pytest.raises(HTTPException):
         check_readonly(q)
+
+
+# --- 용어 사전 (docs/design-kb-lexicon.md) ---------------------------------------------------------
+from types import SimpleNamespace
+
+from app.services.agent_query import lexicon as lx
+
+
+def _e(label, ko=(), en=(), syn=(), broader=(), concept_only=False, skip=False, variants=()):
+    return SimpleNamespace(label=label, norm=lx._compact(label), ko=list(ko), en=list(en), syn=list(syn),
+                           broader=[{"label": b, "status": "proposed"} for b in broader],
+                           concept_only=concept_only, skip=skip, variants=list(variants))
+
+
+def test_compact_normalizes_dashes():
+    assert lx._compact("Michelson–Morley experiment") == lx._compact("Michelson-Morley experiment")
+
+
+def test_index_alias_variant_and_generic_suffix():
+    idx = lx.build_index([
+        _e("Hexagonal 아키텍처", ko=["헥사고날 아키텍처"], syn=["Ports and Adapters", "포트와 어댑터"], broader=["아키텍처 스타일"]),
+        _e("Clean Architecture", ko=["클린 아키텍처"], variants=["clean-architecture"]),
+        _e("변경 용이성", en=["modifiability"], syn=["수정 용이성"], broader=["유지보수성"]),
+        _e("유지보수성", en=["maintainability"], concept_only=True),
+    ])
+    top = lambda t: [m["label"] for m in lx.match_term(idx, t)]
+    assert top("헥사고날")[0] == "Hexagonal 아키텍처"                  # 일반어 제거 표기
+    assert lx.match_term(idx, "헥사고날")[0]["score"] == lx.SCORE_STRIPPED
+    assert top("포트와 어댑터") == ["Hexagonal 아키텍처"]
+    assert set(top("클린 아키텍처")) == {"Clean Architecture", "clean-architecture"}   # 변형 라벨
+    assert top("수정 용이성") == ["변경 용이성"]
+    assert top("블록체인") == []
+    # 상위 개념: 한국어·영어 표기 모두 하위 라벨로
+    assert [n["label"] for n in lx.narrower_of(idx, "유지보수성")] == ["변경 용이성"]
+    assert [n["label"] for n in lx.narrower_of(idx, "maintainability")] == ["변경 용이성"]
+    assert lx.narrower_of(idx, "유지보수성")[0]["reviewed"] is False
+
+
+def test_index_concept_lends_aliases_and_descriptive_labels_not_aliased():
+    idx = lx.build_index([
+        _e("deployability", ko=["배포 가능성"]),
+        _e("배포성", ko=["배포 용이성"], en=["deployability"], concept_only=True),
+        _e("단순 CRUD에 포트/어댑터 도입은 과설계", syn=["헥사고날"]),
+    ])
+    assert [m["label"] for m in lx.match_term(idx, "배포 용이성")] == ["deployability"]
+    assert lx.match_term(idx, "헥사고날") == []          # 설명형 라벨의 별칭은 색인하지 않음
+
+
+def test_rejected_broader_ignored():
+    e = _e("변경 용이성", broader=["유지보수성"])
+    e.broader[0]["status"] = "rejected"
+    assert lx.narrower_of(lx.build_index([e]), "유지보수성") == []

@@ -77,6 +77,44 @@ async def agent_chunks(kb_id: str, req: ChunksRequest):
 
 
 # ---------------------------------------------------------------------------
+# 용어 사전 (docs/design-kb-lexicon.md)
+# ---------------------------------------------------------------------------
+
+@router.post("/{kb_id}/lexicon/build")
+async def lexicon_build(kb_id: str, rebuild: bool = False):
+    """사전 생성 (백그라운드). 기본은 사전에 없는 라벨만 — rebuild=true 면 LLM 항목을 다시."""
+    from app.services.agent_query import lexicon as lx
+    if lx.build_status(kb_id).get("state") == "running":
+        return lx.build_status(kb_id)
+    asyncio.create_task(lx.build_lexicon(kb_id, rebuild=rebuild))
+    await asyncio.sleep(0)
+    return {"state": "running"}
+
+
+@router.get("/{kb_id}/lexicon/status")
+async def lexicon_status(kb_id: str):
+    from app.services.agent_query import lexicon as lx
+    return lx.build_status(kb_id)
+
+
+@router.get("/{kb_id}/lexicon")
+async def lexicon_list(kb_id: str, q: Optional[str] = None, limit: int = 200):
+    from app.models.lexicon import KbLexiconEntry
+    rows = await KbLexiconEntry.find({"kb_id": kb_id}).to_list()
+    if q:
+        ql = q.lower()
+        rows = [r for r in rows if ql in " ".join([r.label] + r.ko + r.en + r.syn).lower()]
+    rows.sort(key=lambda r: (r.concept_only, r.label))
+    return {"total": len(rows), "entries": [r.model_dump(exclude={"id", "revision_id"}) for r in rows[:max(1, min(limit, 2000))]]}
+
+
+@router.get("/{kb_id}/lexicon/duplicates")
+async def lexicon_duplicates(kb_id: str):
+    from app.services.agent_query import lexicon as lx
+    return {"groups": await lx.duplicates(kb_id)}
+
+
+# ---------------------------------------------------------------------------
 # 원문 SPARQL — 관리자·디버깅 전용 (§4.5, §9-5). 기본 꺼짐: AGENT_SPARQL_ENABLED=true
 # ---------------------------------------------------------------------------
 
