@@ -15,7 +15,8 @@ import time
 import urllib.request
 
 BASE = os.getenv("RAGAAS_BASE", "http://localhost:44300/ragaas/api/v2/knowledge-bases/")
-D = "/private/tmp/claude-501/-Users-dukekimm-Works-RAGaaS/503152e9-a23b-429e-ac1f-71a13cb65ae9/scratchpad/physics/"
+HERE = os.path.dirname(os.path.abspath(__file__)) + "/"
+D = os.path.dirname(HERE.rstrip("/")) + "/"   # 데이터셋 폴더 (facts.json, questions.json)
 NEG_PAT = re.compile(r"(없습니다|없다|포함되어 있지 않|찾을 수 없|언급되어 있지 않|알 수 없|정보가 없|couldn't find|not)", re.I)
 
 
@@ -48,12 +49,18 @@ def main(kb_id, label, only=None):
     docs = get(BASE + kb_id + "/documents")
     docs = docs if isinstance(docs, list) else docs.get("documents", [])
     id_by_name = {d["filename"]: d["id"] for d in docs}
+    # AGENTIC=auto|always 이면 KB 파이프라인 앞에 에이전틱 필터를 붙여 요청 (docs/design-agentic-filter.md)
+    agentic = os.getenv("AGENTIC")
+    pipeline = None
+    if agentic:
+        stages = [s for s in (get(BASE + kb_id).get("pipeline_config") or {}).get("stages", []) if s["type"] != "agentic"]
+        pipeline = {"stages": [{"type": "agentic", "params": {"mode": agentic}}] + stages}
     rows = []
     for q in qs:
         if only and q["id"] not in only:
             continue
         t = time.time()
-        req = urllib.request.Request(BASE + kb_id + "/chat", data=json.dumps({"query": q["question"]}).encode(),
+        req = urllib.request.Request(BASE + kb_id + "/chat", data=json.dumps({"query": q["question"], **({"pipeline": pipeline} if pipeline else {})}).encode(),
                                      headers={"Content-Type": "application/json"})
         try:
             d = json.load(urllib.request.urlopen(req, timeout=900))
@@ -83,7 +90,7 @@ def main(kb_id, label, only=None):
         print(f"{r['id']:4} {r['type']:10} mode={str(r['mode']):9} ans={'O' if r['answer_hit'] else ('△' if r['partial'] else 'X')} "
               f"evid={'O' if r['evidence_hit'] else ('-' if r['evidence_hit'] is None else 'X')} {r['sec']}s | {q['question'][:50]}",
               flush=True)
-    out = D + f"eval_{label}.json"
+    out = HERE + f"eval_{label}.json"
     json.dump(rows, open(out, "w"), ensure_ascii=False, indent=1)
     by = {}
     for r in rows:
