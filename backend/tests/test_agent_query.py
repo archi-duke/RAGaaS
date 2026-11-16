@@ -208,3 +208,24 @@ def test_validate_plan_strict_in_skips_unknown_values():
 def test_to_dnf_allows_many_or_leaves():
     leaves = [{"path": f"p{i}", "op": "eq", "value": i} for i in range(40)]
     assert len(to_dnf({"any": leaves})) == 40
+
+
+def test_run_plan_reports_query_failure(monkeypatch):
+    """그래프 조회 실패를 '결과 없음'으로 숨기지 않고 status=error 로 돌려준다."""
+    import asyncio
+    from app.services.agent_query import plan as pl
+    from app.services.agent_query import catalog as ct
+
+    kinds, cats = _catalog()
+
+    async def fake_load(kb_id):
+        return None, kinds, cats, "v1"
+
+    def boom(*a, **k):
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr(ct, "load_catalog", fake_load)
+    import app.core.fuseki as F
+    monkeypatch.setattr(F.fuseki_client, "query_sparql_strict", boom)
+    r = asyncio.run(pl.run_plan("kb", {"kind": "Style", "where": {"path": "consistency_model", "op": "eq", "value": "strong"}}))
+    assert r["status"] == "error" and "조회 실패" in r["message"]
