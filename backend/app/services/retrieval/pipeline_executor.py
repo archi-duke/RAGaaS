@@ -152,6 +152,12 @@ class PipelineExecutor:
                 ctx.logs.append("[Agentic] auto: 단순 질문 → 단일 실행")
                 ctx = await self._run_sequential(ctx, stages)
                 if not ag.single_run_failed(ctx.results, ctx.metadata.get("graph_metadata")):
+                    # 에이전틱을 건너뛴 사실을 화면에 알린다 (스크래치패드가 없는 이유)
+                    gm = ctx.metadata.get("graph_metadata")
+                    if isinstance(gm, dict):
+                        gm.setdefault("reasoning", {})["agentic_skipped"] = {
+                            "mode": "auto", "reason": "단순 질문으로 판단 — 단계 진행 없이 단일 검색으로 답함 "
+                                                       "(복합 질문인데 이렇게 나오면 Agentic 카드의 Mode 를 always 로)"}
                     return ctx
                 ctx.logs.append("[Agentic] auto: 단일 실행이 근거 없이 끝남 → 단계 진행으로 승격")
                 first = {"results": list(ctx.results), "meta": ctx.metadata.get("graph_metadata")}

@@ -405,6 +405,12 @@ export default function SearchResults({ chunks, kbId, graphBackend, logs, pipeli
                             )
                         )}
 
+                        {/* Agentic 을 건너뛴 경우 — 스크래치패드가 없는 이유 */}
+                        {graphMetadata?.reasoning?.agentic_skipped && (
+                            <div style={{ fontSize: '0.8rem', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '6px', padding: '0.45rem 0.7rem' }}>
+                                <b>Agentic 건너뜀</b> (mode {graphMetadata.reasoning.agentic_skipped.mode}) — {graphMetadata.reasoning.agentic_skipped.reason}
+                            </div>
+                        )}
                         {/* Agentic 스크래치패드 — 결과 탭에서도 바로 보이게 (전체 과정은 Logs 탭) */}
                         {graphMetadata?.reasoning?.agentic && (
                             <AgenticReasoningCard agentic={graphMetadata.reasoning.agentic} compact />

@@ -10,7 +10,10 @@ def test_looks_complex():
     assert ag.looks_complex("사용자가 원하는 서비스를 빠르게 추가하는 스타일들이 가지는 공통적인 약점은?")
     assert ag.looks_complex("아인슈타인과 보어의 차이는?")
     assert ag.looks_complex("Hexagonal 과 Clean Architecture 비교")
+    assert ag.looks_complex("배포 용이성과 수정 용이성이 좋은 스타일은?")
+    assert ag.looks_complex("확장성과 가용성이 모두 높은 것은?")
     assert not ag.looks_complex("마이크로서비스 아키텍처의 단점은?")
+    assert not ag.looks_complex("파인만과 휠러의 관계는?")
     assert not ag.looks_complex("플랑크가 받은 상은?")
 
 
