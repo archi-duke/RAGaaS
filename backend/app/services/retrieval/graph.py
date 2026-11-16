@@ -15,6 +15,16 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
+_CLASS_Q_RE = re.compile(
+    r"(좋은|높은|낮은|빠른|느린|적합한|유리한|불리한|많은|적은|있는|없는|가진|갖는|하는|되는|강한|약한)\s+\S+(은|는|들은|들|이|가)?\s*\??\s*$"
+    r"|(모두|목록|전부|몇\s*개|몇\s*가지|어떤\s+\S+(들|것))")
+
+
+def looks_class_query(query: str) -> bool:
+    """유형 수준 질문(조건으로 대상을 고르는 질문)처럼 보이는가 — 질의 계획을 미리 시작할지 판단용 (틀려도 LLM 1회 낭비뿐)."""
+    return bool(_CLASS_Q_RE.search((query or "").strip()))
+
+
 class GraphRetrievalStrategy(RetrievalStrategy):
     def __init__(self):
         # 실제 저장 네임스페이스와 일치시킴 (sparql_generator / fuseki_connector 와 동일).
@@ -69,8 +79,22 @@ class GraphRetrievalStrategy(RetrievalStrategy):
 
         log(f"🚀 Graph Search Start for query: {query}")
         
+        # 유형 질문으로 보이면 질의 계획을 질문 분석과 **동시에** 시작한다 (차례로 부르면 LLM 2회 ≈ 6초 → 동시면 ≈ 3초)
+        spec_task = None
+        if kwargs.get("graph_backend", "ontology") == "ontology" and kwargs.get("llm_model_config") and looks_class_query(query):
+            try:
+                from app.services.retrieval.graph_backends.fuseki import FusekiBackend
+                spec_task = asyncio.create_task(FusekiBackend().speculative_plan(kb_id, query, dict(kwargs)))
+            except Exception:
+                spec_task = None
+
         # 1+2. Analyze query + extract entities in a SINGLE LLM call (병합: 2 호출 → 1)
         entities, query_analysis = await self._analyze_and_extract(kb_id, query, llm_cfg=llm_cfg, llm_model=llm_model_name)
+        if spec_task is not None:
+            if (query_analysis.get("intent") or "").lower() == "class_query":
+                kwargs["_speculative_plan"] = spec_task
+            else:
+                spec_task.cancel()   # 유형 질문이 아니면 버린다
         log(f"DEBUG: Query Analysis -> Type: {query_analysis.get('query_type')}, Hops: {query_analysis.get('hop_count', 1)}, Rel: {query_analysis.get('relationship_type')}, Roles: {query_analysis.get('entity_roles')}, RelAliases: {query_analysis.get('relation_aliases')}")
         log(f"DEBUG: 🔍 Extracted entities: {entities}")
         

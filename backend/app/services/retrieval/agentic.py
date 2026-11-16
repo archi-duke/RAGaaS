@@ -45,6 +45,16 @@ _COMPLEX_PATTERNS = [
 _COMPLEX_RE = re.compile("|".join(_COMPLEX_PATTERNS))
 
 
+def count_unknown(scratchpad: str) -> int:
+    """스크래치패드 '후보 × 조건' 표의 미확인(?) 칸 수."""
+    n = 0
+    for line in (scratchpad or "").splitlines():
+        if line.strip().startswith("|") and not set(line.replace("|", "").strip()) <= set("-: "):
+            cells = [c.strip() for c in line.strip().strip("|").split("|")][1:]
+            n += sum(1 for c in cells if c.startswith("?"))
+    return n
+
+
 def looks_complex(query: str) -> bool:
     return bool(_COMPLEX_RE.search(query or ""))
 
@@ -108,10 +118,13 @@ def build_step_messages(query: str, kb_summary: str, tools: List[str], history: 
                         step_no: int, max_steps: int, scratchpad: str = "", final: bool = False) -> List[Dict[str, str]]:
     tool_lines = "\n".join(f"- {t}: {TOOL_DESC[t]}" for t in tools)
     hist = []
-    for h in history:
+    # 지난 단계는 짧게 (내용은 스크래치패드에 정리돼 있다), 직전 단계만 관찰 전문 — 계획 프롬프트가 단계마다 커져 느려지는 것 방지
+    for idx, h in enumerate(history):
+        last = idx == len(history) - 1
         hist.append(f"## 단계 {h['step']} — {h.get('thought', '')}")
         for c in h["calls"]:
-            hist.append(f"- {c['tool']}(\"{c['query']}\") → {c['observation']}")
+            obs = c['observation'] if last else str(c['observation'])[:160]
+            hist.append(f"- {c['tool']}(\"{c['query']}\") → {obs}")
     hist_text = "\n".join(hist) if hist else "(아직 없음)"
     user = f"""사용자 질문에 답할 근거를 모으기 위해 검색을 단계별로 진행한다. 지금은 {step_no}/{max_steps} 단계다.
 
@@ -141,6 +154,8 @@ def build_step_messages(query: str, kb_summary: str, tools: List[str], history: 
 4. 같은 질문을 반복하지 않는다. 질문에 답할 근거가 모이면 바로 finish 한다. 답변 작성은 하지 않는다.
 5. 같은 사실을 표현만 바꿔 두 번 찾았는데도 근거가 없으면 더 찾지 말고 finish 한다 — 문서에 없는 사실일 수 있다.
 6. 스크래치패드를 매 단계 갱신한다 (마크다운, 짧게):
+   ## 질문에서 주어진 조건 — 사용자가 직접 말한 조건만 (예: 서비스 4종, 동시 접속 100명)
+   ## 가정 — 질문에 없지만 판단에 쓰는 전제 (예: 팀 규모 작다고 가정). 답변에서 가정으로 밝혀야 한다
    ## 알게 된 것 — 검색으로 확인한 사실만 (출처 단계 번호)
    ## 후보 × 조건 — 조건이 둘 이상이면 표: | 후보 | 조건1 | 조건2 | 칸은 ✔(근거 있음) ✘(반대 근거) ?(미확인)
    ## 아직 모르는 것 — ? 칸과 빠진 정보
@@ -148,6 +163,8 @@ def build_step_messages(query: str, kb_summary: str, tools: List[str], history: 
 7. 표에 ? 가 남아 있으면 finish 하지 말고 그 칸을 채우는 검색을 먼저 한다. 한 조건이 지식베이스 구조의
    여러 위치에 있을 수 있다 (예: 수정 용이성 = 적합 신호 속성과 품질 속성 목록 둘 다) — 한 곳에 없다고 ✘ 로 두지 말고 다른 위치도 확인.
    반대 근거(예: effect=negative)가 있으면 ✘.
+8. 단계 수를 아껴라 — 한 후보에 필요한 여러 속성은 한 하위 질문으로 묶고("X 의 A, B, C"), 필요한 조회를 가능한 한 한 단계에 몰아라.
+   단계마다 계획 시간이 든다.
 
 JSON 만 출력:
 {{"thought": "이번 단계에서 할 일과 이유 (한 문장)", "action": "search" | "finish",
@@ -266,6 +283,7 @@ async def run_agentic(
 
     model = planner_cfg.get("model")
     scratchpad = ""   # 에이전트 메모 — 단계마다 갱신해 다음 단계로 넘기고, 마지막 것은 답변 모델에 전달
+    finish_rejected = False
     for step_no in range(1, max_steps + 1):
         # 남은 예산이 계획 1회 + 검색 1회에 못 미치면 새 단계를 시작하지 않는다 (중간에 잘린 검색은 근거가 안 됨)
         if budget - (time.time() - t0) < MIN_STEP_S:
@@ -286,8 +304,16 @@ async def run_agentic(
         if plan.get("scratchpad"):
             scratchpad = plan["scratchpad"]
         if plan["action"] == "finish":
+            unknown = count_unknown(scratchpad)
+            # 표에 ? 가 남았는데 종료하려 하면 한 번은 되돌린다 (계획 LLM 이 규칙을 어기는 경우) — 시간·단계가 남아 있을 때만
+            if unknown and not finish_rejected and step_no < max_steps and budget - (time.time() - t0) > 2 * MIN_STEP_S:
+                finish_rejected = True
+                history.append({"step": step_no, "thought": f"종료 보류 — 스크래치패드 표에 ? {unknown}칸이 남음. 그 칸을 채우는 검색을 먼저 할 것",
+                                "calls": [], "scratchpad": scratchpad})
+                log(f"[Agentic] 단계 {step_no}: 종료 보류 — 미확인(?) {unknown}칸 남음")
+                continue
             note = plan["note"]
-            stop_reason = "근거 충분"
+            stop_reason = "근거 충분" if not unknown else f"종료 (미확인 {unknown}칸 남음)"
             log(f"[Agentic] 단계 {step_no}: 종료 — {plan['thought']} ({plan_sec:.1f}초)")
             break
         calls = [c for c in plan["calls"] if (c["tool"], c["query"]) not in seen_calls]
@@ -313,7 +339,14 @@ async def run_agentic(
                 res, meta = [], {"error": str(e)[:200]}
             return c, res, meta or {}, time.time() - tc
 
-        outs = await asyncio.gather(*(one(c) for c in calls))
+        outs = list(await asyncio.gather(*(one(c) for c in calls)))
+        # 실패(시간 초과·오류)한 하위 검색은 남은 시간 안에서 하나씩 한 번 더 — 동시 실행이 공급자 한도에 걸렸을 수 있다
+        for k, (c, res, meta, sec) in enumerate(outs):
+            if meta.get("error") and budget - (time.time() - t0) > MIN_STEP_S:
+                c2, res2, meta2, sec2 = await one(c)
+                if not meta2.get("error"):
+                    outs[k] = (c2, res2, meta2, sec + sec2)
+                    log(f"[Agentic]   ↻ 재시도 성공: {c['query']}")
         rec = {"step": step_no, "thought": plan["thought"], "calls": [], "scratchpad": plan.get("scratchpad") or ""}
         for c, res, meta, sec in outs:
             obs = ("오류: " + meta["error"]) if meta.get("error") else summarize_observation(res, meta)
@@ -322,11 +355,13 @@ async def run_agentic(
             gathered.append({"step": step_no, "query": c["query"], "results": res, "meta": meta})
             log(f"[Agentic]   └ {c['tool']}(\"{c['query']}\") {sec:.1f}초 → {obs[:300]}")
         history.append(rec)
+        if rec["calls"] and all(str(c["observation"]).startswith("오류") for c in rec["calls"]):
+            log(f"[Agentic] 단계 {step_no}: 하위 검색이 모두 실패")
     else:
         stop_reason = "단계 상한"
 
     # 근거 충분으로 끝나지 않았으면(시간·단계 상한, 반복) 지금까지의 관찰로 스크래치패드를 한 번 정리 — 검색은 하지 않는다
-    if stop_reason != "근거 충분" and history and stop_reason != "계획 실패":
+    if stop_reason in ("시간 상한", "단계 상한", "새 검색 없음 (반복)") and history:
         try:
             raw = await achat(planner_cfg, build_step_messages(ctx.query, kb_summary, tools, history, len(history) + 1,
                                                                max_steps, scratchpad=scratchpad, final=True),
@@ -398,7 +433,7 @@ def merge_evidence(gathered: List[Dict[str, Any]], note: str = "", query: str = 
             head.append(f"- 단계 {h['step']}: {h.get('thought', '')} → {qs}")
     if scratchpad:
         head.append("[에이전트 스크래치패드 — 단계별로 확인한 내용. 후보 × 조건 표의 ✔(근거 있음)/✘(반대 근거)/?(미확인)를 지켜 답하고, "
-                    "? 는 '확인되지 않음' 으로 밝힐 것]\n" + scratchpad)
+                    "? 는 '확인되지 않음' 으로 밝힐 것. '가정' 항목은 사용자가 말하지 않은 전제이므로 답변에서 가정이라고 밝힐 것]\n" + scratchpad)
     if note:
         head.append(f"[답변 시 유의] {note}")
     summary = "\n".join(head) + ("\n\n" if head and summaries else "") + "\n\n".join(summaries)

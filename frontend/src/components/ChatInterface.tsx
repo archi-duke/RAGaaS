@@ -14,6 +14,7 @@ interface Message {
     has_error?: boolean;
     used_fallback?: boolean;
     pipeline_config?: any;
+    streaming?: boolean;   // 답변 생성 중 (스트리밍 자리표시)
 }
 
 interface ChatInterfaceProps {
@@ -210,7 +211,7 @@ export default function ChatInterface({
             });
             console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
-            const response = await retrievalApi.chat(kbId, {
+            const chatBody = {
                 query: queryText,
                 top_k: effectiveTopK,
                 score_threshold: annThreshold,
@@ -248,7 +249,38 @@ export default function ChatInterface({
                 model_config_keyword: settings.keyword_llm,
                 // Pipeline Configuration (if set, backend will use pipeline executor)
                 pipeline: pipeline && pipeline.stages.length > 0 ? pipeline : undefined
-            });
+            };
+
+            // 스트리밍 우선: 검색 결과를 먼저 보여 주고 답변은 생성되는 대로 표시. 실패하면(시작 전) 일반 요청으로.
+            let response: { data: any };
+            let streamStarted = false;
+            let streamText = '';
+            try {
+                const final = await retrievalApi.chatStream(kbId, chatBody, {
+                    onRetrieval: (d) => {
+                        streamStarted = true;
+                        onChunksReceived(d.chunks, d.execution_log);
+                        setMessages(prev => [...prev, { role: 'assistant', content: '', streaming: true }]);
+                    },
+                    onToken: (t) => {
+                        streamText += t;
+                        const text = streamText;
+                        setMessages(prev => {
+                            const next = [...prev];
+                            const last = next[next.length - 1];
+                            if (last && last.streaming) next[next.length - 1] = { ...last, content: text };
+                            return next;
+                        });
+                    },
+                });
+                response = { data: final };
+            } catch (streamErr) {
+                if (streamStarted) throw streamErr;
+                console.warn('[ChatInterface] 스트리밍 실패 → 일반 요청', streamErr);
+                response = await retrievalApi.chat(kbId, chatBody);
+            }
+            // 스트리밍 자리표시 메시지는 최종 메시지로 교체
+            setMessages(prev => (prev.length && prev[prev.length - 1].streaming ? prev.slice(0, -1) : prev));
 
             // Debug: Log the raw API response to verify data integrity
             console.log('[ChatInterface] Raw API response chunks:', response.data.chunks);
@@ -279,6 +311,7 @@ export default function ChatInterface({
             }
         } catch (error) {
             console.error('Chat error:', error);
+            setMessages(prev => (prev.length && prev[prev.length - 1].streaming ? prev.slice(0, -1) : prev));
             const errorMessage: Message = {
                 role: 'assistant',
                 content: 'Sorry, I encountered an error while processing your request.'
@@ -375,6 +408,7 @@ export default function ChatInterface({
                             <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem', justifyContent: 'space-between' }}>
                                 <div style={{ flex: 1, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
                                     {msg.content}
+                                    {msg.streaming && <span style={{ opacity: 0.5 }}>{msg.content ? ' ▍' : '답변 작성 중…'}</span>}
                                 </div>
                                 {msg.role === 'user' && (
                                     <button
@@ -426,7 +460,7 @@ export default function ChatInterface({
                     </div>
                 ))}
 
-                {isLoading && (
+                {isLoading && !(messages.length && messages[messages.length - 1].streaming) && (
                     <div style={{ display: 'flex', justifyContent: 'flex-start', marginBottom: '1rem' }}>
                         <div style={{
                             padding: '0.75rem 1rem',

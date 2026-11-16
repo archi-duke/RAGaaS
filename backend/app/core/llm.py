@@ -12,11 +12,60 @@ RAGaaS 의 모든 LLM 챗 호출은 이 모듈의 achat()/chat() 한 경로로 �
   호출자·사용자에게 그대로 전달한다. 임의 모델 기본값이나 조용한 빈 결과 반환은 하지 않는다.
   (임의 fallback 은 착오로 인한 잘못된 결과를 유발할 수 있음)
 """
-from typing import Any, Optional, List, Dict
+import asyncio
+import os
+import random
+import threading
+import time
+from typing import Any, AsyncIterator, Optional, List, Dict
+from urllib.parse import urlparse
 
 import httpx
 
 DEFAULT_TIMEOUT = 120.0
+
+# ── 공급자별 동시 호출 제한 + 429 재시도 ───────────────────────────────────────
+# Z.ai(GLM)는 같은 키로 동시 8개를 보내면 429 "Rate limit reached for requests" 를 준다 (2026-11-16 측정, 4개는 정상).
+# 에이전틱 필터의 동시 하위 검색이나 여러 사용자의 동시 검색이 한도를 넘지 않도록 호스트별로 줄을 세운다.
+# 429 는 잠깐 기다렸다 다시 시도하고, 그래도 실패하면 LLMError 로 올린다 (실패를 숨기지 않음).
+LLM_MAX_CONCURRENCY = int(os.getenv("LLM_MAX_CONCURRENCY", "4"))
+LLM_RATE_RETRIES = int(os.getenv("LLM_RATE_RETRIES", "3"))
+_async_sems: Dict[tuple, asyncio.Semaphore] = {}
+_sync_sems: Dict[str, threading.BoundedSemaphore] = {}
+_sync_lock = threading.Lock()
+
+
+def _host(url: str) -> str:
+    try:
+        return urlparse(url).netloc or url
+    except Exception:
+        return url
+
+
+def _async_sem(url: str) -> asyncio.Semaphore:
+    key = (_host(url), id(asyncio.get_running_loop()))
+    sem = _async_sems.get(key)
+    if sem is None:
+        sem = _async_sems[key] = asyncio.Semaphore(LLM_MAX_CONCURRENCY)
+    return sem
+
+
+def _sync_sem(url: str) -> threading.BoundedSemaphore:
+    h = _host(url)
+    with _sync_lock:
+        if h not in _sync_sems:
+            _sync_sems[h] = threading.BoundedSemaphore(max(1, LLM_MAX_CONCURRENCY // 2))
+        return _sync_sems[h]
+
+
+def _retry_wait(resp: "httpx.Response", attempt: int) -> float:
+    ra = resp.headers.get("retry-after")
+    try:
+        if ra:
+            return min(10.0, float(ra))
+    except ValueError:
+        pass
+    return min(8.0, (2 ** attempt) * 0.8) + random.uniform(0, 0.4)
 
 
 class LLMError(RuntimeError):
@@ -168,12 +217,79 @@ async def achat(
     payload = _build_payload(cfg, messages, model, temperature, max_tokens, response_format, extra_body)
     url = chat_endpoint((cfg or {}).get("base_url"))
     headers = build_headers((cfg or {}).get("api_key"), (cfg or {}).get("extra_headers"))
-    try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.post(url, headers=headers, json=payload)
-    except httpx.RequestError as e:
-        raise LLMError(f"LLM 게이트웨이 연결 실패 (endpoint={url}): {e}") from e
-    return _handle_response(resp.status_code, resp.text, url, payload["model"])
+    sem = _async_sem(url)
+    for attempt in range(LLM_RATE_RETRIES + 1):
+        try:
+            async with sem:
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    resp = await client.post(url, headers=headers, json=payload)
+        except httpx.RequestError as e:
+            raise LLMError(f"LLM 게이트웨이 연결 실패 (endpoint={url}): {e}") from e
+        if resp.status_code == 429 and attempt < LLM_RATE_RETRIES:
+            await asyncio.sleep(_retry_wait(resp, attempt))   # 줄 밖에서 기다린다
+            continue
+        return _handle_response(resp.status_code, resp.text, url, payload["model"])
+
+
+async def achat_stream(
+    cfg: dict,
+    messages: List[Dict[str, str]],
+    *,
+    model: Optional[str] = None,
+    temperature: Optional[float] = None,
+    max_tokens: Optional[int] = None,
+    extra_body: Optional[dict] = None,
+    timeout: float = DEFAULT_TIMEOUT,
+) -> AsyncIterator[str]:
+    """스트리밍 챗 (OpenAI 호환 SSE). 생성되는 대로 텍스트 조각을 내보낸다 — 답변 첫 글자를 일찍 보여 주기 위함.
+
+    429 는 스트림이 시작되기 전에만 재시도한다. 오류·빈 응답은 LLMError (실패를 숨기지 않음).
+    """
+    import json as _json
+    payload = _build_payload(cfg, messages, model, temperature, max_tokens, None, extra_body)
+    payload["stream"] = True
+    url = chat_endpoint((cfg or {}).get("base_url"))
+    headers = build_headers((cfg or {}).get("api_key"), (cfg or {}).get("extra_headers"))
+    sem = _async_sem(url)
+    got_any = False
+    for attempt in range(LLM_RATE_RETRIES + 1):
+        retry = False
+        async with sem:
+            try:
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    async with client.stream("POST", url, headers=headers, json=payload) as resp:
+                        if resp.status_code == 429 and attempt < LLM_RATE_RETRIES:
+                            retry = True
+                            wait = _retry_wait(resp, attempt)
+                        elif resp.status_code >= 400:
+                            body = (await resp.aread()).decode("utf-8", "replace")
+                            _handle_response(resp.status_code, body, url, payload["model"])
+                        else:
+                            async for line in resp.aiter_lines():
+                                line = line.strip()
+                                if not line.startswith("data:"):
+                                    continue
+                                data = line[5:].strip()
+                                if data == "[DONE]":
+                                    break
+                                try:
+                                    ev = _json.loads(data)
+                                except ValueError:
+                                    continue
+                                for ch in ev.get("choices") or []:
+                                    d = ch.get("delta") or {}
+                                    piece = d.get("content") or ""
+                                    if piece:
+                                        got_any = True
+                                        yield piece
+            except httpx.RequestError as e:
+                raise LLMError(f"LLM 게이트웨이 연결 실패 (endpoint={url}): {e}") from e
+        if retry:
+            await asyncio.sleep(wait)
+            continue
+        break
+    if not got_any:
+        raise LLMError(f"LLM 스트림 응답이 비었습니다 (endpoint={url}, model={payload['model']})")
 
 
 def chat(
@@ -191,9 +307,15 @@ def chat(
     payload = _build_payload(cfg, messages, model, temperature, max_tokens, response_format, extra_body)
     url = chat_endpoint((cfg or {}).get("base_url"))
     headers = build_headers((cfg or {}).get("api_key"), (cfg or {}).get("extra_headers"))
-    try:
-        with httpx.Client(timeout=timeout) as client:
-            resp = client.post(url, headers=headers, json=payload)
-    except httpx.RequestError as e:
-        raise LLMError(f"LLM 게이트웨이 연결 실패 (endpoint={url}): {e}") from e
-    return _handle_response(resp.status_code, resp.text, url, payload["model"])
+    sem = _sync_sem(url)
+    for attempt in range(LLM_RATE_RETRIES + 1):
+        try:
+            with sem:
+                with httpx.Client(timeout=timeout) as client:
+                    resp = client.post(url, headers=headers, json=payload)
+        except httpx.RequestError as e:
+            raise LLMError(f"LLM 게이트웨이 연결 실패 (endpoint={url}): {e}") from e
+        if resp.status_code == 429 and attempt < LLM_RATE_RETRIES:
+            time.sleep(_retry_wait(resp, attempt))
+            continue
+        return _handle_response(resp.status_code, resp.text, url, payload["model"])

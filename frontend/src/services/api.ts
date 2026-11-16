@@ -282,6 +282,57 @@ export const retrievalApi = {
         // Pipeline Configuration
         pipeline?: { stages: any[] };
     }) => api.post(`knowledge-bases/${kbId}/chat`, data),
+    // 답변 스트리밍 (SSE) — 검색 결과(retrieval)를 먼저, 답변은 조각(token)으로, 끝나면 전체 응답(done)
+    chatStream: async (
+        kbId: string,
+        data: any,
+        handlers: {
+            onRetrieval?: (d: { chunks: any[]; execution_log: string[] }) => void;
+            onToken?: (t: string) => void;
+        },
+    ): Promise<any> => {
+        const headers: Record<string, string> = { 'Content-Type': 'application/json', Accept: 'text/event-stream' };
+        const token = getToken();
+        if (token) headers.Authorization = `Bearer ${token}`;
+        else {
+            const user = getUser();
+            if (user) headers['X-User-Id'] = user.loginid;
+        }
+        const base = String(config.RAGAAS_API || '').replace(/\/?$/, '/');
+        const res = await fetch(`${base}knowledge-bases/${kbId}/chat/stream`, {
+            method: 'POST', headers, body: JSON.stringify(data),
+        });
+        if (res.status === 401) requireLogin();
+        if (!res.ok || !res.body) throw new Error(`stream HTTP ${res.status}`);
+        const reader = res.body.getReader();
+        const dec = new TextDecoder();
+        let buf = '';
+        let final: any = null;
+        for (;;) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buf += dec.decode(value, { stream: true });
+            let i: number;
+            while ((i = buf.indexOf('\n\n')) >= 0) {
+                const block = buf.slice(0, i);
+                buf = buf.slice(i + 2);
+                let ev = 'message';
+                const dataLines: string[] = [];
+                for (const line of block.split('\n')) {
+                    if (line.startsWith('event:')) ev = line.slice(6).trim();
+                    else if (line.startsWith('data:')) dataLines.push(line.slice(5).trim());
+                }
+                if (!dataLines.length) continue;
+                const payload = JSON.parse(dataLines.join('\n'));
+                if (ev === 'retrieval') handlers.onRetrieval?.(payload);
+                else if (ev === 'token') handlers.onToken?.(payload.t);
+                else if (ev === 'done') final = payload;
+                else if (ev === 'error') throw new Error(payload.detail || 'stream error');
+            }
+        }
+        if (!final) throw new Error('stream ended without result');
+        return final;
+    },
     getChatPrompt: () => api.get('knowledge-bases/settings/chat-prompt'),
     updateChatPrompt: (content: string) =>
         api.put('knowledge-bases/settings/chat-prompt', { content }),

@@ -12,6 +12,10 @@ import re
 
 router = APIRouter()
 
+import contextvars as _contextvars
+# 스트리밍 요청일 때만 설정되는 큐 (chat_with_kb 가 답변 조각을 넣는다)
+_STREAM_QUEUE: "_contextvars.ContextVar" = _contextvars.ContextVar("ragaas_chat_stream_queue", default=None)
+
 _RETRIEVAL_MODEL_KEYMAP = {
     "default": {
         "provider": "retrieval_llm_provider",
@@ -683,17 +687,27 @@ async def chat_with_kb(
     system_prompt = _load_chat_system_prompt()
 
     try:
-        from app.core.llm import achat
-        answer = await achat(
-            llm_cfg,
-            [
+        from app.core.llm import achat, achat_stream
+        _q = _STREAM_QUEUE.get()
+        _answer_msgs = [
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {request.query}\n\nPlease provide a comprehensive answer based on the context above. If there are multiple answers, please list them all."},
-            ],
-            model=llm_model, temperature=0.3, max_tokens=1000,
-            # 추론 모델(glm 계열)이 사고과정을 답변에 섞지 않도록 thinking 비활성 (OpenAI 등엔 미적용)
-            extra_body={"thinking": {"type": "disabled"}} if "glm" in (llm_model or "").lower() else None,
-        )
+                {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {request.query}\n\nPlease provide a comprehensive answer based on the context above. If there are multiple answers, please list them all.\n"
+                 "질문에 없는 사용자 상황(예: 팀 규모, 운영 성숙도, 예산)을 사실처럼 쓰지 마라 — 판단에 필요하면 '가정' 이라고 밝히고, "
+                 "그 가정이 달라지면 결론이 어떻게 바뀌는지 한 줄로 덧붙여라."},
+            ]
+        _answer_kw = dict(model=llm_model, temperature=0.3, max_tokens=1000,
+                          # 추론 모델(glm 계열)이 사고과정을 답변에 섞지 않도록 thinking 비활성 (OpenAI 등엔 미적용)
+                          extra_body={"thinking": {"type": "disabled"}} if "glm" in (llm_model or "").lower() else None)
+        if _q is not None:
+            # 스트리밍 요청: 검색 결과를 먼저 보내고, 답변은 생성되는 대로 조각을 보낸다
+            await _q.put(("retrieval", {"chunks": results, "execution_log": list(execution_logs)}))
+            _parts = []
+            async for _piece in achat_stream(llm_cfg, _answer_msgs, **_answer_kw):
+                _parts.append(_piece)
+                await _q.put(("token", _piece))
+            answer = "".join(_parts)
+        else:
+            answer = await achat(llm_cfg, _answer_msgs, **_answer_kw)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to generate response: {str(e)}")
     
@@ -823,6 +837,51 @@ async def get_chat_trace(kb_id: str, trace_id: str):
     d = r.model_dump(mode="json")
     d["id"] = str(r.id)
     return d
+
+# ---------------------------------------------------------------------------
+# 답변 스트리밍 (SSE) — 검색이 끝나면 결과를 먼저 보내고, 답변은 생성되는 대로 (첫 글자를 일찍 보여 준다)
+# 이벤트: retrieval {chunks, execution_log} → token {t} … → done {ChatResponse} | error {detail}
+# 게이트웨이 /ragaas/api/ 는 proxy_buffering off.
+# ---------------------------------------------------------------------------
+
+@router.post("/{kb_id}/chat/stream")
+async def chat_with_kb_stream(kb_id: str, request: ChatRequest):
+    from fastapi.encoders import jsonable_encoder
+    from fastapi.responses import StreamingResponse
+    q: asyncio.Queue = asyncio.Queue()
+    token = _STREAM_QUEUE.set(q)
+    try:
+        task = asyncio.create_task(chat_with_kb(kb_id, request))   # 컨텍스트(큐)가 태스크로 복사된다
+    finally:
+        _STREAM_QUEUE.reset(token)
+
+    def sse(event: str, data) -> str:
+        return f"event: {event}\ndata: {json.dumps(jsonable_encoder(data), ensure_ascii=False)}\n\n"
+
+    async def gen():
+        while True:
+            getter = asyncio.create_task(q.get())
+            done, _ = await asyncio.wait({getter, task}, return_when=asyncio.FIRST_COMPLETED)
+            if getter in done:
+                kind, payload = getter.result()
+                yield sse(kind, {"t": payload} if kind == "token" else payload)
+                continue
+            getter.cancel()
+            while not q.empty():   # 끝나기 직전에 들어온 조각
+                kind, payload = q.get_nowait()
+                yield sse(kind, {"t": payload} if kind == "token" else payload)
+            try:
+                resp = task.result()
+                yield sse("done", resp)
+            except HTTPException as e:
+                yield sse("error", {"detail": e.detail, "status": e.status_code})
+            except Exception as e:
+                yield sse("error", {"detail": str(e)[:500]})
+            break
+
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
 
 @router.get("/{kb_id}/chunks/{chunk_id}")
 async def get_chunk(kb_id: str, chunk_id: str):

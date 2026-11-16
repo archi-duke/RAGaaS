@@ -1380,6 +1380,13 @@ class FusekiBackend(GraphBackend):
         )
         return parse_json_loose(content)
 
+    async def speculative_plan(self, kb_id: str, query_text: str, kwargs: Dict[str, Any]):
+        """질문 분석과 동시에 미리 만드는 질의 계획 (유형 질문으로 보일 때). 값 힌트 없이 만든다 — 쓸 때 다시 검증."""
+        kinds, catalogs = await self._class_catalog(kb_id, lambda _m: None, kwargs)
+        if not kinds:
+            return None
+        return await self._plan_with_llm(query_text, kinds, catalogs, [], kwargs)
+
     async def _class_level_query(
         self, kb_id: str, query_text: str, value_hints: List[str], kwargs: Dict[str, Any], log_trace
     ) -> Tuple[Optional[Dict[str, Any]], List[str]]:
@@ -1405,8 +1412,23 @@ class FusekiBackend(GraphBackend):
             return None, all_preds
 
         try:
-            raw = await self._plan_with_llm(query_text, kinds, catalogs, value_hints, kwargs)
-            checked = cq.validate_plan(raw, kinds, catalogs, value_hints)
+            raw, checked = None, None
+            spec = kwargs.pop("_speculative_plan", None)
+            if spec is not None:
+                # 질문 분석과 동시에 만든 계획 — 검증을 통과하면 그대로 쓴다 (LLM 호출 1회 절약, 약 3초)
+                try:
+                    raw = await spec
+                except Exception:
+                    raw = None
+                if raw:
+                    checked = cq.validate_plan(raw, kinds, catalogs, value_hints)
+                    if checked["status"] == "reject":
+                        raw, checked = None, None
+                    else:
+                        log_trace("[Fuseki] 질의 계획: 질문 분석과 동시에 만든 계획 사용")
+            if raw is None:
+                raw = await self._plan_with_llm(query_text, kinds, catalogs, value_hints, kwargs)
+                checked = cq.validate_plan(raw, kinds, catalogs, value_hints)
             if checked["status"] == "reject":
                 log_trace(f"[Fuseki] Plan rejected: {checked['message']} — retrying once")
                 note = f"\n이전 계획이 반려됨: {checked['message']}. 목록의 번호·값만 사용해 다시 작성하라."
