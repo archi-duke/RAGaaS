@@ -33,3 +33,11 @@ def test_flipped_triples_are_known_in_incremental_mode():
     flipped_back = {"subject": "아이작 배로", "predicate": "지도교수_of", "object": "뉴턴"}
     known = {(_key(prev)[2], prev["predicate"], _key(prev)[0])}
     assert _key(flipped_back) in known
+
+
+def test_one_char_names_find_evidence():
+    from app.services.schema_alignment.direction_audit import _sentences, _both_in_evidence
+    text = "크뢰벨은 시계공 집안에서 태어났다. 젊은 크뢰벨에게 가장 큰 영향을 준 사람은 영국의 제임스 줄이었다."
+    s = _sentences(text, "크뢰벨", "줄")
+    assert "영향을 준 사람" in s[0]
+    assert _both_in_evidence({"subject": "크뢰벨", "object": "줄", "evidence": s})

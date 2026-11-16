@@ -752,3 +752,29 @@ async def get_duplicate_review(kb_id: str) -> Dict[str, Any]:
     from app.models.knowledge_base import KnowledgeBase
     kb = await KnowledgeBase.get(kb_id)
     return ((kb.promotion_metadata or {}).get("duplicate_review")) or {"items": []}
+
+
+
+async def absorb_merged(kb_id: str, canonical: str, aliases: Sequence[str]) -> int:
+    """병합된 이름을 대표 항목의 별칭으로 옮긴다 (데이터 품질 D2).
+    '조머펠트' → '아르놀드 조머펠트' 병합 뒤에도 '조머펠트' 로 찾을 수 있게. 옮긴 이름의 별칭도 함께 가져온다."""
+    from app.models.lexicon import KbLexiconEntry
+    canon = await KbLexiconEntry.find_one({"kb_id": kb_id, "norm": _compact(canonical)})
+    if canon is None:
+        canon = KbLexiconEntry(kb_id=kb_id, label=canonical, norm=_compact(canonical), source="user")
+        await canon.insert()
+    moved = 0
+    for a in aliases:
+        e = await KbLexiconEntry.find_one({"kb_id": kb_id, "norm": _compact(a)})
+        extra = [a] + ((e.ko + e.syn) if e else [])
+        en = list(e.en) if e else []
+        canon.ko = _clean_user_list(list(canon.ko) + [x for x in extra if not _is_ascii_word(x)], canon.label)
+        canon.en = _clean_user_list(list(canon.en) + en + [x for x in extra if _is_ascii_word(x)], canon.label)
+        if e is not None and e.id != canon.id and _compact(a) != canon.norm:
+            await e.delete()
+        moved += 1
+    canon.source = "user"
+    canon.updated_at = datetime.utcnow()
+    await canon.save()
+    invalidate(kb_id)
+    return moved

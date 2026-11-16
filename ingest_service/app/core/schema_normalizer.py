@@ -372,6 +372,7 @@ def apply_rules_to_triples(
     seen = set()
     for t in triples:
         n = dict(t)
+        orig_names = {"subject": n.get("subject"), "object": n.get("object")}
         for side in ("subject", "object"):
             tgt = _resolve(n.get(side)) if compact(n.get(side)) in entity_map else None
             if tgt and n.get(side) != tgt:
@@ -406,7 +407,11 @@ def apply_rules_to_triples(
                     n["edited"] = "moved"
                     counts["triple_moved"] += 1
         for side, tkey in (("subject", "subject_type"), ("object", "object_type")):
-            cls = class_map.get(compact(n.get(side)))
+            # 병합으로 이름이 바뀌면 새 이름에 클래스 규칙이 없을 수 있다 → 원래 이름의 클래스를 이어받는다
+            # ('조머펠트'(Person) → '아르놀드 조머펠트' 병합 뒤 Person 에서 빠지던 문제, 2026-11-16 D2).
+            # 뒤집기면 주어·목적어가 바뀌었으니 원래 이름도 맞바꿔 본다.
+            src = orig_names["object" if side == "subject" else "subject"] if n.get("edited") == "flipped" else orig_names[side]
+            cls = class_map.get(compact(n.get(side))) or class_map.get(compact(src))
             if cls:
                 n[tkey] = cls
                 counts["class"] += 1

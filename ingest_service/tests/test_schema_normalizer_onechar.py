@@ -84,3 +84,11 @@ def test_entity_rename_applies_when_normalized_keys_collide():
     out, _ = apply_rules_to_triples([{"subject": "맥스웰", "predicate": "p", "object": "x"},
                                      {"subject": "제임스 클러크 맥스웰", "predicate": "p", "object": "y"}], rules)
     assert [t["subject"] for t in out] == ["J. C. 맥스웰", "J. C. 맥스웰"]
+
+
+def test_merged_name_keeps_class_of_original():
+    """병합 뒤 새 이름에 클래스 규칙이 없으면 원래 이름의 클래스를 이어받는다."""
+    rules = [{"rule_type": "class", "source_value": "조머펠트", "target_value": "Person", "status": "active"},
+             {"rule_type": "entity", "source_value": "조머펠트", "target_value": "아르놀드 조머펠트", "status": "active"}]
+    out, _ = apply_rules_to_triples([{"subject": "조머펠트", "predicate": "지도교수_of", "object": "파울리"}], rules)
+    assert out[0]["subject"] == "아르놀드 조머펠트" and out[0]["subject_type"] == "Person"

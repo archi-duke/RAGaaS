@@ -895,6 +895,11 @@ async def merge_entities(kb_id: str, canonical: str, aliases: List[str], replay:
     if n or conflicts:
         kb.schema_rules_version = (kb.schema_rules_version or 0) + 1
         await kb.save()
+    try:   # 용어 사전: 병합된 이름을 대표 항목의 별칭으로 (병합 뒤에도 옛 이름·성만으로 찾을 수 있게)
+        from app.services.agent_query.lexicon import absorb_merged
+        await absorb_merged(kb_id, canonical, [x for x in aliases if x and x.strip() and x.strip() != canonical])
+    except Exception:
+        pass
     rp = await _replay_text_docs(kb_id) if (replay and (n or conflicts)) else {"replayed": 0, "errors": []}
     return {"canonical": canonical, "merged": n, "conflicts_disabled": conflicts, **rp}
 

@@ -425,6 +425,12 @@ async def resolve_entities(kb_id: str, names: Sequence[str], kind: Optional[str]
                         cands.append({"label": label, "kind": ent["kind"], "score": 75.0, "uri": u,
                                       "via": f"partial:{f}", "aliases": sorted(ent["aliases"])[:5]})
                         break
+                    # 줄인 이름: 질문 이름의 어절이 모두 라벨에 있음 ('제임스 줄' ⊆ '제임스 프레스콧 줄', '조머펠트' ⊆ '아르놀드 조머펠트')
+                    if ft and name_tokens and name_tokens < set(ft) and len("".join(name_tokens)) >= 1:
+                        label = sorted(ent["labels"])[0] if ent["labels"] else f
+                        cands.append({"label": label, "kind": ent["kind"], "score": 72.0, "uri": u,
+                                      "via": f"shortened:{f}", "aliases": sorted(ent["aliases"])[:5]})
+                        break
         best: Dict[str, Dict[str, Any]] = {}
         for c in cands:
             if c["label"] not in best or c["score"] > best[c["label"]]["score"]:
