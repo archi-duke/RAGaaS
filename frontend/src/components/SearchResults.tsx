@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import AgenticReasoningCard from './AgenticScratchpad';
 
 interface SearchResultsProps {
     chunks: any[];
@@ -419,7 +420,9 @@ export default function SearchResults({ chunks, kbId, graphBackend, logs, pipeli
                         boxSizing: 'border-box'
                     }}>
                         {/* 그래프 추론 과정 (관계 타게팅 리포트) */}
-                        {graphMetadata?.reasoning && <GraphReasoningCard reasoning={graphMetadata.reasoning} />}
+                        {graphMetadata?.reasoning && (graphMetadata.reasoning.agentic
+                            ? <AgenticReasoningCard agentic={graphMetadata.reasoning.agentic} />
+                            : <GraphReasoningCard reasoning={graphMetadata.reasoning} />)}
 
                         {/* Execution Logs */}
                         <div className="card" style={{ padding: '1rem', width: '100%', boxSizing: 'border-box' }}>

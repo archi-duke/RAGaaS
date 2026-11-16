@@ -87,3 +87,37 @@ def test_run_agentic_loop(monkeypatch):
     assert len(out["results"]) == 3
     assert out["graph_metadata"]["reasoning"]["targeting"]["mode"] == "AG"
     assert any("[Agentic] 종료" in l for l in ctx.logs)
+
+
+def test_scratchpad_carried_and_finalized(monkeypatch):
+    """스크래치패드가 다음 단계 프롬프트로 넘어가고, 상한으로 끝나면 정리 호출로 최종본을 만든다."""
+    seen_prompts = []
+    plans = iter([
+        {"thought": "후보 찾기", "action": "search", "calls": [{"tool": "graph_search", "query": "조건1"}],
+         "scratchpad": "## 후보 × 조건\n| 후보 | c1 | c2 |\n| A | ? | ? |"},
+        {"thought": "정리", "action": "finish", "calls": [],
+         "scratchpad": "## 후보 × 조건\n| 후보 | c1 | c2 |\n| A | ✔ | ? |\n## 아직 모르는 것\n- A 의 c2"},
+    ])
+
+    async def fake_achat(cfg, messages, **kw):
+        seen_prompts.append(messages[1]["content"])
+        return json.dumps(next(plans))
+
+    async def fake_describe(*a, **k):
+        return ""
+
+    import app.core.llm as llm
+    monkeypatch.setattr(llm, "achat", fake_achat)
+    monkeypatch.setattr(ag, "describe_kb", fake_describe)
+
+    async def run_stage(st_type, params, query):
+        return [{"chunk_id": "c", "content": "x"}], {"triples": []}
+
+    ctx = SimpleNamespace(query="A 는 c1, c2 둘 다?", kb_id="kb", graph_backend="ontology", metadata={}, logs=[])
+    out = asyncio.run(ag.run_agentic(ctx, {"max_steps": 1, "time_budget_s": 60},
+                                     {"graph_search": ("graph", {})}, run_stage, {"model": "m"}))
+    assert "| A | ? | ? |" in seen_prompts[1]                       # 1단계 메모가 정리 호출에 넘어감
+    assert "정리 단계" in seen_prompts[1]
+    sp = out["graph_metadata"]["reasoning"]["agentic"]["scratchpad"]
+    assert "| A | ✔ | ? |" in sp
+    assert "스크래치패드" in out["graph_metadata"]["result_summary"]
