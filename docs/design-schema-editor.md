@@ -118,6 +118,23 @@ KB 상세의 **Schema** 탭 (온톨로지로 승격된 KB 에만 보임, `compon
 알려진 문제: 재정규화 중 문서 1건의 벡터 청크가 옛 내용으로 남았다 (그래프는 정상). 같은 청크 id 로 지웠다 바로
 다시 넣을 때 Milvus(v2.3)에서 생기는 것으로 보이며, 그 문서만 다시 재정규화하니 정상이 됐다. 재정규화 후 청크 검증이 필요하다.
 
+## 8. 스키마 그래프 보기
+
+Schema 탭의 **그래프로 보기** → 기존 그래프 뷰어의 스키마 모드(`/graph-viewer?mode=schema`)를 새 탭으로 연다.
+편집기에서 저장하면 TBox 가 다시 만들어지므로 그래프에도 바로 반영된다.
+
+고친 것:
+- `GET /graph/schema`: 질의 하나에 OPTIONAL 이 겹쳐 행이 불어나 `LIMIT 100` 에 잘렸다
+  (test-ontology3 클래스 8 중 6, test-ontology 12 중 2). 클래스·속성·subClassOf 질의로 나눴다.
+  range 가 클래스인 속성은 클래스 간 링크, 아니면 domain 클래스의 `attributes`(정의·별칭 포함)로 → 노드 툴팁에 표시.
+- 구조화 KB TBox: 중첩 구조의 domain·range 가 없어 링크가 그려지지 않았다. 데이터의 rdf:type 으로 채운다
+  (`fit_signals`: ArchitectureStyle → Fit_signals, `modifiability`: Fit_signals 의 값 속성).
+- `GET /graph/schema/instances`: 인스턴스를 온톨로지 그래프에서만 찾아 비어 있었다 (데이터는 문서 그래프에 있음).
+  문서 그래프의 rdf:type 으로 찾고, 타입이 없는 레코드(구조화 KB 최상위)는 클래스 카탈로그의 유형 멤버로.
+
+결과: test-ontology3 클래스 8·관계 10, test-ontology 유형 12·관계 11. Person 클릭 시 인스턴스가 펼쳐지는데,
+'암', '빛' 같은 잘못 분류된 엔티티가 보인다 — 2단계(트리플·엔티티 검토)에서 다룰 대상.
+
 ## 6. 남은 것
 
 - 재추출 후 결과 비교(전/후 트리플 차이)를 편집기 안에서 보여 주기

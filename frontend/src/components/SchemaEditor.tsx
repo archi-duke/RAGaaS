@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Plus, Trash2, RefreshCw, Save, RotateCcw, AlertTriangle } from 'lucide-react';
+import { Plus, Trash2, RefreshCw, Save, RotateCcw, AlertTriangle, Share2 } from 'lucide-react';
 import { schemaApi } from '../services/api';
 import ReextractModal from './ReextractModal';
 
@@ -143,6 +143,11 @@ export default function SchemaEditor({ kbId }: { kbId: string }) {
                     버전 {spec.version}{spec.updated_at ? ` · ${spec.updated_at.replace('T', ' ').slice(0, 16)}` : ''} · 클래스 {classes.length} · 속성 {props.length}
                 </span>
                 <div style={{ marginLeft: 'auto', display: 'flex', gap: '0.5rem' }}>
+                    <button className="btn btn-secondary" style={btn}
+                        title="클래스(유형)와 관계를 그래프로 봅니다 — 새 탭. 클래스를 누르면 인스턴스가 펼쳐집니다."
+                        onClick={() => window.open(`${import.meta.env.BASE_URL}graph-viewer?kb_id=${kbId}&backend=ontology&mode=schema`, '_blank')}>
+                        <Share2 size={14} /> 그래프로 보기
+                    </button>
                     <button className="btn btn-secondary" style={btn} disabled={busy} onClick={() => load()}><RefreshCw size={14} /> 다시 불러오기</button>
                     {!structured && <button className="btn btn-secondary" style={btn} disabled={busy} onClick={openReextract}>스키마 기준 재추출…</button>}
                     <button className="btn btn-primary" style={btn} disabled={busy || !dirty || !!check?.errors?.length} onClick={save}><Save size={14} /> 저장</button>

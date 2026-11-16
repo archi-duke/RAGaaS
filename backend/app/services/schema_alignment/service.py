@@ -569,6 +569,27 @@ async def mark_structured_ontology(kb_id: str) -> Dict[str, Any]:
             if p.get("description") or p.get("aliases"):
                 prop_notes.setdefault(p["segments"][-1], {"description": p.get("description"), "aliases": p.get("aliases")})
 
+    # 중첩 구조의 방향 (스키마 그래프용): 속성 → 값 노드의 rdf:type = range, 주어 노드의 rdf:type = domain
+    #   예: fit_signals (ArchitectureStyle → Fit_signals), modifiability (Fit_signals → 값)
+    ranges: Dict[str, str] = {}
+    nested_dom: Dict[str, str] = {}
+    try:
+        q_rng = """SELECT ?p (SAMPLE(?ot) AS ?t) WHERE { GRAPH ?g { ?s ?p ?o . ?o a ?ot }
+                   FILTER(STRSTARTS(STR(?g), "urn:doc:")) FILTER(STRSTARTS(STR(?ot), "http://rag.local/class/"))
+                   FILTER(STRSTARTS(STR(?p), "http://rag.local/rel/")) } GROUP BY ?p"""
+        for b in fuseki_client.query_sparql(kb_id, q_rng).get("results", {}).get("bindings", []):
+            ranges[local_name(b["p"]["value"])] = local_name(b["t"]["value"])
+        q_dom = """SELECT ?p (SAMPLE(?st) AS ?t) WHERE { GRAPH ?g { ?s ?p ?o . ?s a ?st }
+                   FILTER(STRSTARTS(STR(?g), "urn:doc:")) FILTER(STRSTARTS(STR(?st), "http://rag.local/class/"))
+                   FILTER(STRSTARTS(STR(?p), "http://rag.local/rel/")) } GROUP BY ?p"""
+        for b in fuseki_client.query_sparql(kb_id, q_dom).get("results", {}).get("bindings", []):
+            nested_dom[local_name(b["p"]["value"])] = local_name(b["t"]["value"])
+    except Exception as e:
+        logger.warning(f"[Schema] structured domain/range scan skipped: {e}")
+    for seg in list(props):
+        if not props[seg] and nested_dom.get(seg) in classes:
+            props[seg] = nested_dom[seg]
+
     lines = ["@prefix owl: <http://www.w3.org/2002/07/owl#> .",
              "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .", ""]
     for name, c in classes.items():
@@ -579,6 +600,8 @@ async def mark_structured_ontology(kb_id: str) -> Dict[str, Any]:
         note = prop_notes.get(seg) or {}
         lines.append(f"<http://rag.local/rel/{uri_part(seg)}> a owl:ObjectProperty ; rdfs:label {lit(seg)}"
                      + (f" ; rdfs:domain <http://rag.local/class/{uri_part(dom)}>" if dom else "")
+                     + (f" ; rdfs:range <http://rag.local/class/{uri_part(ranges[seg])}>"
+                        if ranges.get(seg) in classes else "")
                      + (f" ; rdfs:comment {lit(note['description'])}" if note.get("description") else "")
                      + "".join(f" ; skos:altLabel {lit(a)}" for a in note.get("aliases") or [])
                      + " .")
