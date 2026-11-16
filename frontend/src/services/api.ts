@@ -200,6 +200,11 @@ export const schemaApi = {
     recommendApply: (kbId: string, actions: any[], baseVersion?: number, recId?: string, outcome?: any) =>
         api.post(`knowledge-bases/${kbId}/schema/recommend/apply`, { actions, base_version: baseVersion, rec_id: recId, outcome }, { timeout: 900000 }),
     recommendLog: (kbId: string) => api.get(`knowledge-bases/${kbId}/schema/recommend/log`),
+    recommendReject: (kbId: string, recId: string, rejected: any[], proposed: number) =>
+        api.post(`knowledge-bases/${kbId}/schema/recommend/reject`, { rec_id: recId, rejected_actions: rejected, proposed }),
+    recommendMemory: (kbId: string) => api.get(`knowledge-bases/${kbId}/schema/recommend/memory`),
+    recommendForget: (kbId: string, body: { sig?: string; decided_key?: string }) =>
+        api.post(`knowledge-bases/${kbId}/schema/recommend/memory/forget`, body),
     mergeEntities: (kbId: string, canonical: string, aliases: string[]) =>
         api.post(`knowledge-bases/${kbId}/schema/spec/merge`, { canonical, aliases }),
     reingest: (kbId: string, docId: string, file: File) => {

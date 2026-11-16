@@ -105,7 +105,9 @@ export default function RecommendPanel({ kbId, triples, gaps, onClose, onApplied
     }, [kbId]);   // eslint-disable-line react-hooks/exhaustive-deps
 
     const patch = (id: string, p: any) => {
-        setRec((r: any) => ({ ...r, actions: r.actions.map((a: any) => a.id === id ? { ...a, ...p, edited: true } : a) }));
+        // 처음 수정할 때 원래 안을 남긴다 — 수정으로 뺀 멤버·병합 이름은 거절로 기억
+        setRec((r: any) => ({ ...r, actions: r.actions.map((a: any) => a.id === id
+            ? { ...a, ...p, edited: true, orig: a.orig || { entities: a.entities, aliases: a.aliases } } : a) }));
         if (rec?.actions.find((a: any) => a.id === id)?.type === 'set_definition') setDefTests((d) => ({ ...d, [id]: { stale: true } }));
     };
 
@@ -123,16 +125,33 @@ export default function RecommendPanel({ kbId, triples, gaps, onClose, onApplied
     const doApply = async () => {
         setBusy('apply'); setError('');
         try {
+            const rejectedActs = rec.actions.filter((a: any) => !checked.has(a.id));
             const r = await schemaApi.recommendApply(kbId, chosen, rec.version, rec.id, {
-                proposed: rec.actions.length, rejected: rec.actions.length - chosen.length,
+                proposed: rec.actions.length, rejected: rec.actions.length - chosen.length, rejected_actions: rejectedActs,
                 preview: pv ? { ...pv.summary, range_fit: pv.range_fit } : null,
             });
             const d = r.data;
             onApplied(`AI 추천 ${chosen.length}건 반영: ` + (d.schema_saved ? `스키마 v${d.version} 저장, ` : '') + `규칙 ${d.rules_created}건, 리플레이 ${d.replayed}건`
+                + (d.remembered?.rejected ? ` · 거절 ${d.remembered.rejected}건 기억(다음 추천에서 제외)` : '')
                 + (d.reextract_recommended ? ' · 정의·range 변경은 "스키마 기준 재추출"을 돌려야 전체 데이터에 반영됩니다.' : ''));
             onClose();
         } catch (e: any) { setError('반영 실패: ' + errMsg(e)); } finally { setBusy(''); }
     };
+
+    const doRejectClose = async () => {
+        const rejectedActs = (rec?.actions || []).filter((a: any) => !checked.has(a.id));
+        if (!rejectedActs.length) { onClose(); return; }
+        setBusy('apply');
+        try {
+            const r = await schemaApi.recommendReject(kbId, rec.id, rejectedActs, rec.actions.length);
+            onApplied(`반영 없이 거절 ${r.data.remembered?.rejected ?? 0}건을 기억했습니다 — 다음 추천에서 같은 안은 나오지 않습니다.`);
+            onClose();
+        } catch (e: any) { setError('거절 기록 실패: ' + errMsg(e)); } finally { setBusy(''); }
+    };
+    // 추천 기억 (거절·확정) 보기·지우기
+    const [mem, setMem] = useState<any>(null);
+    const loadMem = () => schemaApi.recommendMemory(kbId).then((r) => setMem(r.data)).catch(() => setMem({ rejected: [], decided: {} }));
+    const forget = async (body: { sig?: string; decided_key?: string }) => { await schemaApi.recommendForget(kbId, body); await loadMem(); };
 
     const toggle = (id: string) => setChecked((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
     const btn: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.8rem', padding: '0.3rem 0.6rem' };
@@ -151,6 +170,25 @@ export default function RecommendPanel({ kbId, triples, gaps, onClose, onApplied
                     먼저 <b>효과 미리보기</b>로 문제 청크를 재추출해 결과를 확인한 뒤 <b>승인하고 반영</b>하세요 (미리보기는 저장하지 않습니다).
                 </p>
                 {error && <div style={{ color: '#b91c1c', fontSize: '0.85rem', marginBottom: '0.4rem' }}>{error}</div>}
+                {rec?.dropped?.length > 0 && (
+                    <details style={{ fontSize: '0.74rem', color: '#64748b', marginBottom: '0.3rem' }}>
+                        <summary style={{ cursor: 'pointer' }}>검증에서 뺀 것 {rec.dropped.length} (없는 이름·이전에 거절한 안·확정한 결정 번복)</summary>
+                        {rec.dropped.map((d: string, i: number) => <div key={i}>· {d}</div>)}
+                    </details>
+                )}
+                <details style={{ fontSize: '0.74rem', color: '#64748b', marginBottom: '0.3rem' }} onToggle={(e) => (e.target as HTMLDetailsElement).open && !mem && loadMem()}>
+                    <summary style={{ cursor: 'pointer' }}>추천 기억 — 사람이 거절한 안·확정한 결정은 다음 추천에서 다시 나오지 않습니다</summary>
+                    {!mem && <div>불러오는 중…</div>}
+                    {mem && Object.entries(mem.decided || {}).map(([k, v]: [string, any]) => (
+                        <div key={k}>· 확정: {k.split(':')[1]} 의 {k.split(':')[0]} = {v.value || '(값)'}{' '}
+                            <button className="btn btn-secondary" style={{ padding: '0 0.3rem', fontSize: '0.68rem' }} onClick={() => forget({ decided_key: k })}>풀기</button></div>
+                    ))}
+                    {mem && (mem.rejected || []).slice(0, 60).map((r: any) => (
+                        <div key={r.sig}>· 거절: {r.text}{' '}
+                            <button className="btn btn-secondary" style={{ padding: '0 0.3rem', fontSize: '0.68rem' }} onClick={() => forget({ sig: r.sig })}>지우기</button></div>
+                    ))}
+                    {mem && !(mem.rejected || []).length && !Object.keys(mem.decided || {}).length && <div>아직 기억이 없습니다.</div>}
+                </details>
                 {busy === 'rec' && <div>스키마와 문제 트리플을 분석하는 중… (30초 안팎)</div>}
                 {rec && <div style={{ overflowY: 'auto', flex: 1 }}>
                     {rec.actions.length === 0 && <div>제안할 처리안이 없습니다.</div>}
@@ -215,7 +253,11 @@ export default function RecommendPanel({ kbId, triples, gaps, onClose, onApplied
                         <button className="btn btn-secondary" style={btn} disabled={!!busy || !chosen.length} onClick={doPreview}>
                             {busy === 'pv' ? '재추출로 효과 확인 중…' : '효과 미리보기 (재추출 테스트)'}
                         </button>
-                        <button className="btn btn-primary" style={{ ...btn, marginLeft: 'auto' }} disabled={!!busy || !chosen.length || !previewed}
+                        <button className="btn btn-secondary" style={{ ...btn, marginLeft: 'auto' }} disabled={!!busy}
+                            title="체크하지 않은 안을 거절로 기억하고 닫습니다 (아무것도 반영하지 않음)" onClick={doRejectClose}>
+                            거절 기록하고 닫기
+                        </button>
+                        <button className="btn btn-primary" style={btn} disabled={!!busy || !chosen.length || !previewed}
                             title={previewed ? '체크한 처리안을 반영합니다 (스키마 저장 + 규칙 + 리플레이)' : '먼저 효과 미리보기를 하세요'}
                             onClick={doApply}>
                             {busy === 'apply' ? '반영 중…' : `승인하고 반영 (${chosen.length})`}
