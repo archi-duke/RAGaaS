@@ -8,6 +8,7 @@ import DocumentsTab from '../components/DocumentsTab';
 import ChatInterface from '../components/ChatInterface';
 import ChunksModal from '../components/ChunksModal';
 import HorizontalConfig from '../components/HorizontalConfig';
+import SchemaEditor from '../components/SchemaEditor';
 import PipelineBuilder from '../components/PipelineBuilder';
 import type { PipelineConfig } from '../components/PipelineBuilder';
 import SearchResults from '../components/SearchResults';
@@ -597,6 +598,14 @@ export default function KnowledgeBaseDetail() {
                         Graph Data
                     </button>
                 )}
+                {kb.graph_backend === 'ontology' && kb.is_promoted && (
+                    <button
+                        className={clsx('tab', activeTab === 'schema' && 'active')}
+                        onClick={() => setActiveTab('schema')}
+                    >
+                        Schema
+                    </button>
+                )}
                 <button
                     className={clsx('tab', activeTab === 'chat' && 'active')}
                     onClick={() => setActiveTab('chat')}
@@ -656,6 +665,12 @@ export default function KnowledgeBaseDetail() {
                         kbId={id!}
                         backend={kb.graph_backend === 'ontology' ? 'fuseki' : (kb.graph_backend || 'neo4j')}
                     />
+                </div>
+            )}
+
+            {activeTab === 'schema' && (
+                <div style={{ flex: 1, overflow: 'auto' }}>
+                    <SchemaEditor kbId={id!} />
                 </div>
             )}
 

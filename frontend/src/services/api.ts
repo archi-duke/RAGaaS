@@ -175,6 +175,11 @@ export const schemaApi = {
         api.post(`knowledge-bases/${kbId}/schema/reextract`, { doc_ids: docIds, model }),
     reextractStatus: (kbId: string) => api.get(`knowledge-bases/${kbId}/schema/reextract/status`),
     reextractRevert: (kbId: string, docIds?: string[]) => api.post(`knowledge-bases/${kbId}/schema/reextract/revert`, { doc_ids: docIds }),
+    // 스키마 편집기 (docs/design-schema-editor.md)
+    getSpec: (kbId: string) => api.get(`knowledge-bases/${kbId}/schema/spec`),
+    validateSpec: (kbId: string, spec: any) => api.post(`knowledge-bases/${kbId}/schema/spec/validate`, spec),
+    saveSpec: (kbId: string, spec: any) => api.put(`knowledge-bases/${kbId}/schema/spec`, spec),
+    revertSpec: (kbId: string, version: number) => api.post(`knowledge-bases/${kbId}/schema/spec/revert`, { version }),
     reingest: (kbId: string, docId: string, file: File) => {
         const formData = new FormData();
         formData.append('file', file);

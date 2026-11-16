@@ -208,3 +208,66 @@ async def reingest(kb_id: str, doc_id: str, file: UploadFile = File(...)):
     doc.source_retained = True
     await doc.save()
     return await renormalize_documents(kb_id, [doc_id])
+
+
+# ---------------------------------------------------------------------------
+# 스키마 편집기 (사람 검수 1단계, docs/design-schema-editor.md)
+# ---------------------------------------------------------------------------
+
+class SchemaSpecBody(BaseModel):
+    classes: List[dict] = []
+    properties: List[dict] = []
+    base_version: Optional[int] = None
+    replay: bool = True
+    note: str = ""
+
+
+class SchemaRevertBody(BaseModel):
+    version: int
+
+
+def _edit_error(e):
+    raise HTTPException(status_code=e.status, detail={"errors": e.errors})
+
+
+@router.get("/{kb_id}/schema/spec")
+async def get_schema_spec(kb_id: str):
+    from app.services.schema_alignment import schema_editor as se
+    try:
+        return await se.get_spec(kb_id)
+    except se.SchemaEditError as e:
+        _edit_error(e)
+
+
+@router.post("/{kb_id}/schema/spec/validate")
+async def validate_schema_spec(kb_id: str, body: SchemaSpecBody):
+    """저장 전 미리보기: 오류·경고·변경 요약."""
+    from app.models.knowledge_base import KnowledgeBase
+    from app.services.schema_alignment import schema_editor as se
+    kb = await KnowledgeBase.get(kb_id)
+    if not kb:
+        raise HTTPException(status_code=404, detail="KB 없음")
+    spec = se._norm_spec(body.model_dump())
+    errors, warnings = se.validate_spec(spec)
+    ind = (kb.promotion_metadata or {}).get("induction") or {}
+    diff = se.diff_spec({"classes": ind.get("classes") or [], "properties": ind.get("properties") or []}, spec)
+    return {"errors": errors, "warnings": warnings, "diff": diff, "summary": se._summary_text(diff)}
+
+
+@router.put("/{kb_id}/schema/spec")
+async def save_schema_spec(kb_id: str, body: SchemaSpecBody):
+    from app.services.schema_alignment import schema_editor as se
+    try:
+        return await se.save_spec(kb_id, {"classes": body.classes, "properties": body.properties},
+                                  base_version=body.base_version, replay=body.replay, note=body.note)
+    except se.SchemaEditError as e:
+        _edit_error(e)
+
+
+@router.post("/{kb_id}/schema/spec/revert")
+async def revert_schema_spec(kb_id: str, body: SchemaRevertBody):
+    from app.services.schema_alignment import schema_editor as se
+    try:
+        return await se.revert_to(kb_id, body.version)
+    except se.SchemaEditError as e:
+        _edit_error(e)
