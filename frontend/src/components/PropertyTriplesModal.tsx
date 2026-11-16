@@ -22,11 +22,12 @@ const LABEL: Record<string, { text: string; color: string; bg: string; help: str
 // - 멤버 누락: range 멤버로 지정 / 새 클래스를 만들어 멤버로 / 삭제
 type Panel = null | 'move' | 'newclass' | 'delete';
 
-export default function PropertyTriplesModal({ kbId, property, onClose, onChanged, properties = [], classes = [], dirty = false, getSpec }: {
+export default function PropertyTriplesModal({ kbId, property, onClose, onChanged, properties = [], classes = [], dirty = false, getSpec, onRecommend }: {
     kbId: string; property: string; onClose: () => void; onChanged?: (msg: string) => void;
     properties?: { name: string; domain?: string; range?: string }[]; classes?: string[];
     dirty?: boolean;   // 편집기에 저장 안 한 변경이 있음 — 편집 동작 뒤 다시 불러오면 사라지므로 막는다
     getSpec?: () => { classes: any[]; properties: any[] };   // 편집 중인(저장 전) 스키마 — 재추출 테스트용
+    onRecommend?: (triples: any[]) => void;                  // 선택 트리플로 AI 추천
 }) {
     const [data, setData] = useState<any>(null);
     const [error, setError] = useState('');
@@ -155,6 +156,13 @@ export default function PropertyTriplesModal({ kbId, property, onClose, onChange
                                             : `편집 중인(저장 전) 스키마로 선택 트리플의 근거 청크 ${chunkCount}개만 다시 추출해 사라지는지 봅니다. 저장하지 않으며 청크당 LLM 1회.`}
                                         onClick={doPreview}>
                                         {previewing ? '재추출 테스트 중…' : `재추출 테스트 (청크 ${chunkCount})`}
+                                    </button>
+                                )}
+                                {onRecommend && (
+                                    <button className="btn btn-secondary" style={sbtn} disabled={busy || dirty || selected.length > 14}
+                                        title={selected.length > 14 ? '한 번에 14개까지' : '선택한 트리플과 근거 청크를 AI 가 분석해 처리안을 제시합니다'}
+                                        onClick={() => onRecommend(selected.map((x) => ({ ...x, predicate: x.predicate || property })))}>
+                                        AI 추천
                                     </button>
                                 )}
                                 <button className={`btn ${panel === 'move' ? 'btn-primary' : 'btn-secondary'}`} style={sbtn} disabled={busy || dirty}

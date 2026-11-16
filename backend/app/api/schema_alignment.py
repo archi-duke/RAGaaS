@@ -387,3 +387,49 @@ async def schema_reextract_preview(kb_id: str, body: ReextractPreviewBody):
         return await se.reextract_preview(kb_id, {"classes": body.classes, "properties": body.properties}, body.triples)
     except se.SchemaEditError as e:
         _edit_error(e)
+
+
+# ---------------------------------------------------------------------------
+# AI 추천 (docs/design-schema-editor.md §14) — 추천 → 체크 → 효과 미리보기 → 승인 반영
+# ---------------------------------------------------------------------------
+
+class RecommendBody(BaseModel):
+    triples: Optional[List[dict]] = None      # 트리플 창에서 호출하면 그 트리플만 대상으로
+
+
+class RecommendActionsBody(BaseModel):
+    actions: List[dict]
+    problems: List[dict] = []
+    base_version: Optional[int] = None
+
+
+@router.post("/{kb_id}/schema/recommend")
+async def schema_recommend(kb_id: str, body: RecommendBody):
+    from app.services.schema_alignment import recommend as rc
+    from app.services.schema_alignment.schema_editor import SchemaEditError
+    try:
+        return await rc.recommend(kb_id, {"triples": body.triples} if body.triples else None)
+    except SchemaEditError as e:
+        _edit_error(e)
+
+
+@router.post("/{kb_id}/schema/recommend/preview")
+async def schema_recommend_preview(kb_id: str, body: RecommendActionsBody):
+    """체크한 처리안을 가상 적용해 문제 청크를 재추출 — 저장 없음."""
+    from app.services.schema_alignment import recommend as rc
+    from app.services.schema_alignment.schema_editor import SchemaEditError
+    try:
+        return await rc.preview(kb_id, body.actions, body.problems)
+    except SchemaEditError as e:
+        _edit_error(e)
+
+
+@router.post("/{kb_id}/schema/recommend/apply")
+async def schema_recommend_apply(kb_id: str, body: RecommendActionsBody):
+    """승인한 처리안 반영: 스키마 저장 + 규칙 + 리플레이."""
+    from app.services.schema_alignment import recommend as rc
+    from app.services.schema_alignment.schema_editor import SchemaEditError
+    try:
+        return await rc.apply(kb_id, body.actions, body.base_version)
+    except SchemaEditError as e:
+        _edit_error(e)

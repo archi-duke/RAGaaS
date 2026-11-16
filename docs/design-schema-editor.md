@@ -246,6 +246,22 @@ LLM 병합 제안을 사람이 확인해야 하는 이유다.
 - 모델은 전체 재추출과 같은 KB 추출 모델 (test-ontology2 는 gpt-4o-mini)
 - 남은 과제: 삭제 규칙을 원본(raw) 트리플·근거 청크 기준으로 매칭(이름 변경·병합에 견딤), 재추출 프롬프트에 청크별 삭제 목록 전달
 
+## 14. AI 추천 (2026-11-16)
+
+`services/schema_alignment/recommend.py` — recommend → (사람 체크) → preview → (사람 승인) → apply.
+
+- **입력**: 스키마(클래스·관계·정의·일치율), 멤버 누락·range 위반·스키마 밖 관계, 문제 트리플 ≤14 + 근거 청크 본문(Milvus).
+  범위 = 스키마 전체(일치율 낮은 관계 4개의 위반·누락) 또는 트리플 창에서 선택한 트리플.
+- **처리안**(9종)은 기존 편집 동작에만 대응: set_definition / set_range / set_domain / add_property / add_class /
+  assign_members / merge_entities / move_triples / delete_triples. "같은 오류가 반복되면 정의 수정 먼저" 를 프롬프트로 유도.
+- **검증**(`validate_actions`): 없는 관계·클래스 이름 제거, 트리플 참조(T0…)를 실제 트리플로, 같은 응답에서 만든 클래스·관계는 참조 허용,
+  포함 관계 이름의 병합은 확신도 ≤0.4 + 경고 (프롬프트로 금지해도 GLM 이 '확장성 ← 확장성 요구' 를 냈다).
+- **preview**: 스키마 안 덧씌우기(`build_schema_spec(override)`) + 가상 규칙(class/entity/triple)을 현재 규칙 뒤에 붙여 문제 청크(≤10) 재추출.
+  저장 없음. 결과 = 문제 트리플 gone/moved/kept, 재추출 트리플의 range 일치 수.
+- **apply**: 추천 당시 버전과 다르면 409. 스키마 안은 `save_spec` 1회(이력), 데이터 안은 규칙(origin `schema_editor:ai`) + 리플레이 1회.
+  병합은 대표 이름을 되바꾸는 기존 규칙을 끈다(§11 과 같은 처리).
+- test-ontology2 (glm-5.2 추천 34초, gpt-4o-mini 미리보기 28초, 반영 4초): 위 설명서 §2.9 예.
+
 ## 6. 남은 것
 
 - 재추출 후 결과 비교(전/후 트리플 차이)를 편집기 안에서 보여 주기

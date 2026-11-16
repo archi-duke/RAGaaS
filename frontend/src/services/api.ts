@@ -193,6 +193,12 @@ export const schemaApi = {
         api.post(`knowledge-bases/${kbId}/schema/spec/classes`, { name, description, members }),
     reextractPreview: (kbId: string, body: { classes: any[]; properties: any[]; triples: any[] }) =>
         api.post(`knowledge-bases/${kbId}/schema/spec/reextract-preview`, body, { timeout: 900000 }),
+    recommend: (kbId: string, triples?: any[]) =>
+        api.post(`knowledge-bases/${kbId}/schema/recommend`, triples ? { triples } : {}, { timeout: 900000 }),
+    recommendPreview: (kbId: string, actions: any[], problems: any[]) =>
+        api.post(`knowledge-bases/${kbId}/schema/recommend/preview`, { actions, problems }, { timeout: 900000 }),
+    recommendApply: (kbId: string, actions: any[], baseVersion?: number) =>
+        api.post(`knowledge-bases/${kbId}/schema/recommend/apply`, { actions, base_version: baseVersion }, { timeout: 900000 }),
     mergeEntities: (kbId: string, canonical: string, aliases: string[]) =>
         api.post(`knowledge-bases/${kbId}/schema/spec/merge`, { canonical, aliases }),
     reingest: (kbId: string, docId: string, file: File) => {

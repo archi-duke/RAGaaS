@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Plus, Trash2, RefreshCw, Save, RotateCcw, AlertTriangle, Share2 } from 'lucide-react';
+import { Plus, Trash2, RefreshCw, Save, RotateCcw, AlertTriangle, Share2, Sparkles } from 'lucide-react';
 import { schemaApi } from '../services/api';
 import ReextractModal from './ReextractModal';
 import SchemaGraph from './SchemaGraph';
 import SchemaChecks from './SchemaChecks';
 import PropertyTriplesModal from './PropertyTriplesModal';
+import RecommendPanel from './RecommendPanel';
 
 // 스키마 편집기 — 승격된 텍스트 KB 의 클래스·속성을 사람이 직접 고친다 (docs/design-schema-editor.md)
 // 저장 시: 검증 → 이전 버전 이력 보관 → TBox 재생성. 이름 변경은 규칙 + 리플레이로 기존 그래프에 반영.
@@ -46,6 +47,7 @@ export default function SchemaEditor({ kbId }: { kbId: string }) {
     const [showReextract, setShowReextract] = useState(false);
     const [view, setView] = useState<'table' | 'graph'>('table');
     const [triplesFor, setTriplesFor] = useState<string | null>(null);
+    const [recFor, setRecFor] = useState<null | { triples?: any[] }>(null);   // AI 추천 (스키마 전체 또는 선택 트리플)
 
     const load = useCallback(async () => {
         const r = await schemaApi.getSpec(kbId);
@@ -159,6 +161,11 @@ export default function SchemaEditor({ kbId }: { kbId: string }) {
                         <Share2 size={14} /> 뷰어에서 열기
                     </button>
                     <button className="btn btn-secondary" style={btn} disabled={busy} onClick={() => load()}><RefreshCw size={14} /> 다시 불러오기</button>
+                    {!structured && <button className="btn btn-secondary" style={btn} disabled={busy || dirty}
+                        title={dirty ? '저장하지 않은 편집이 있습니다 — 먼저 저장하세요' : '스키마·데이터 검증·문제 트리플을 AI 가 분석해 처리안을 제시합니다'}
+                        onClick={() => setRecFor({})}>
+                        <Sparkles size={14} /> AI 추천
+                    </button>}
                     {!structured && <button className="btn btn-secondary" style={btn} disabled={busy} onClick={openReextract}>스키마 기준 재추출…</button>}
                     <button className="btn btn-primary" style={btn} disabled={busy || !dirty || !!check?.errors?.length} onClick={save}><Save size={14} /> 저장</button>
                 </div>
@@ -374,7 +381,13 @@ export default function SchemaEditor({ kbId }: { kbId: string }) {
                     properties={props.filter((p) => orig.p[p.key]).map((p) => ({ name: orig.p[p.key], domain: p.domain, range: p.range }))}
                     classes={classes.map((c) => orig.c[c.key] || c.name).filter(Boolean)}
                     dirty={dirty}
+                    onRecommend={structured ? undefined : (tr) => setRecFor({ triples: tr })}
                     getSpec={structured ? undefined : () => { const b = body(); return { classes: b.classes, properties: b.properties }; }} />
+            )}
+
+            {recFor && (
+                <RecommendPanel kbId={kbId} triples={recFor.triples} onClose={() => setRecFor(null)}
+                    onApplied={(m) => { setMessage(m); setTriplesFor(null); load(); }} />
             )}
 
             {showReextract && (
