@@ -1,4 +1,5 @@
 from motor.motor_asyncio import AsyncIOMotorClient
+from app.models.chat_trace import ChatTrace
 from beanie import init_beanie
 from app.core.config import settings
 from app.models.knowledge_base import KnowledgeBase
@@ -25,6 +26,7 @@ async def init_db():
             BuiltinProviderConfig,
             SchemaMappingRule,
             SchemaMappingProposal,
+            ChatTrace,
         ]
     )
 
