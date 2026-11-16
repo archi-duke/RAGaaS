@@ -34,9 +34,9 @@ MAX_RESULT_ENTITIES = 50
 MAX_PATHS_FOR_LLM = 150
 
 OPS_BY_TYPE = {
-    "enum": {"eq", "ne", "in", "exists", "not_exists"},
+    "enum": {"eq", "ne", "in", "contains", "exists", "not_exists"},   # contains: 외부 계획용 ('노벨' → 노벨 물리학상 (1933년) 등)
     "number": {"eq", "ne", "in", "gt", "gte", "lt", "lte", "exists", "not_exists"},
-    "text": {"eq", "contains", "exists", "not_exists"},
+    "text": {"eq", "in", "contains", "exists", "not_exists"},   # in: 외부 계획용 (내부 LLM 프롬프트는 eq/contains 만 안내)
 }
 _NUM_OPS = {"gt": ">", "gte": ">=", "lt": "<", "lte": "<="}
 _NUM_RE = re.compile(r"^-?\d+(\.\d+)?$")
@@ -422,8 +422,12 @@ JSON 만 출력: {{"mode": "...", "kind": "...", "filters": [...], "return": [..
     ]
 
 
-def resolve_value(raw: Any, path: Dict[str, Any], value_hints_uris: Sequence[str] = ()) -> Tuple[Optional[List[Dict[str, Any]]], str]:
-    """계획의 값 → 경로 값 목록의 항목들. (해석된 값들 | None, 매칭 설명)"""
+def resolve_value(raw: Any, path: Dict[str, Any], value_hints_uris: Sequence[str] = (),
+                  strict: bool = False) -> Tuple[Optional[List[Dict[str, Any]]], str]:
+    """계획의 값 → 경로 값 목록의 항목들. (해석된 값들 | None, 매칭 설명)
+
+    strict=True (외부 계획): 느슨한 '라벨 유사' 일치를 하지 않는다 — 추측 대신 zero.
+    """
     items = raw if isinstance(raw, list) else [raw]
     out: List[Dict[str, Any]] = []
     notes = []
@@ -455,7 +459,7 @@ def resolve_value(raw: Any, path: Dict[str, Any], value_hints_uris: Sequence[str
                     best = (t, v)
             if best:
                 hit, how = best[1], "어간일치"
-        if hit is None and path["type"] == "text":
+        if hit is None and path["type"] == "text" and not strict:
             scored = [(score_candidate(s, v["label"]), v) for v in path["values"]]
             scored = [x for x in scored if x[0] >= 25]
             if scored:
@@ -473,8 +477,11 @@ def validate_plan(
     kinds: List[Dict[str, Any]],
     catalogs: Dict[str, List[Dict[str, Any]]],
     value_hints_uris: Sequence[str] = (),
+    strict: bool = False,
 ) -> Dict[str, Any]:
     """계획 검증 → {"status": ok|reject|zero|unsupported|none, "plan": 정규화된 계획, "message", "adjustments"}
+
+    strict=True: 외부 계획(query_plan) — 값은 완전·동의어·어간 일치만, 필터 수 초과는 반려(잘라내지 않음).
 
     - 무효 필터(경로/연산자/값 종류 불일치)는 계획 전체 반려 (필터를 버리면 결과가 넓어져 오답)
     - enum 경로에 없는 값은 zero (Strict 빈 결과 확정)
@@ -497,6 +504,9 @@ def validate_plan(
     by_key = {c["key"]: c for c in full_catalog}
 
     def _one(idx) -> Optional[Dict[str, Any]]:
+        # 외부 계약(query_plan, docs/design-mcp-agent-query.md §4.4)은 경로 key 문자열 — 전체 카탈로그에서 찾는다
+        if isinstance(idx, str) and not idx.strip().lstrip("-").isdigit():
+            return by_key.get(idx.strip())
         try:
             i = int(idx)
         except (TypeError, ValueError):
@@ -567,7 +577,10 @@ def validate_plan(
 
     adjustments: List[str] = []
     filters = []
-    for f in (data.get("filters") or [])[:MAX_FILTERS]:
+    raw_filters = data.get("filters") or []
+    if strict and len(raw_filters) > MAX_FILTERS:
+        return {"status": "reject", "message": f"필터 {len(raw_filters)}개 — 최대 {MAX_FILTERS}개"}
+    for f in raw_filters[:MAX_FILTERS]:
         if not isinstance(f, dict):
             return {"status": "reject", "message": f"필터 형식 오류: {f}"}
         p = path_at(f.get("path"))
@@ -592,7 +605,7 @@ def validate_plan(
             if not nf["text"]:
                 return {"status": "reject", "message": f"{p['key']} contains 값 없음"}
         else:
-            resolved, note = resolve_value(f.get("value"), p, value_hints_uris)
+            resolved, note = resolve_value(f.get("value"), p, value_hints_uris, strict=strict)
             if resolved is None:
                 return {"status": "zero", "message": note, "kind": kind}
             resolved, added = expand_values(p, resolved)
@@ -633,7 +646,7 @@ def validate_plan(
                 return {"status": "reject", "message": f"{fn} 는 number 경로만 가능 ({p['key']} 는 {p['type']})"}
             aggregate = {"fn": fn, "path": p, "order": order, "limit": limit}
             if fn == "count" and agg.get("value") not in (None, "", []):
-                resolved, note = resolve_value(agg.get("value"), p, value_hints_uris)
+                resolved, note = resolve_value(agg.get("value"), p, value_hints_uris, strict=strict)
                 if resolved is None:
                     return {"status": "zero", "message": note, "kind": kind}
                 resolved, added = expand_values(p, resolved)

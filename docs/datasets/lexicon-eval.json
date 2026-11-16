@@ -1,0 +1,523 @@
+{
+ "_doc": "KB 용어 사전 평가 세트 (docs/design-kb-lexicon.md §6). expect: 일치 목록에 하나라도 있으면 정답. narrower: 상위 개념 펼침에 하나라도 있으면 정답. expect=[] 이고 narrower 없음 = negative (아무것도 일치하지 않아야 함).",
+ "kbs": {
+  "test-ontology2": "f220990a-25a5-47a8-8562-7c4c7264c9eb",
+  "test-ontology": "406b0eeb-8002-4a3f-8368-c580d397fa89",
+  "test-ontology3": "4ec88353-f9fb-4142-93bb-9f08bbfa77b9"
+ },
+ "items": [
+  {
+   "kb": "test-ontology2",
+   "type": "translit",
+   "term": "마이크로서비스",
+   "expect": [
+    "Microservices"
+   ]
+  },
+  {
+   "kb": "test-ontology2",
+   "type": "translit",
+   "term": "헥사고날",
+   "expect": [
+    "Hexagonal 아키텍처"
+   ]
+  },
+  {
+   "kb": "test-ontology2",
+   "type": "translit",
+   "term": "레이어드",
+   "expect": [
+    "Layered 스타일"
+   ]
+  },
+  {
+   "kb": "test-ontology2",
+   "type": "translit",
+   "term": "클린 아키텍처",
+   "expect": [
+    "Clean Architecture"
+   ]
+  },
+  {
+   "kb": "test-ontology2",
+   "type": "translit",
+   "term": "서버리스",
+   "expect": [
+    "Serverless"
+   ]
+  },
+  {
+   "kb": "test-ontology2",
+   "type": "translit",
+   "term": "모듈러 모놀리스",
+   "expect": [
+    "Modular Monolith"
+   ]
+  },
+  {
+   "kb": "test-ontology2",
+   "type": "translit",
+   "term": "이벤트 드리븐",
+   "expect": [
+    "Event Driven Architecture",
+    "Event-Driven Architecture"
+   ]
+  },
+  {
+   "kb": "test-ontology2",
+   "type": "translit",
+   "term": "마이크로 프론트엔드",
+   "expect": [
+    "Micro-Frontend",
+    "Micro Frontend"
+   ]
+  },
+  {
+   "kb": "test-ontology2",
+   "type": "translit",
+   "term": "서비스 메시",
+   "expect": [
+    "Service Mesh"
+   ]
+  },
+  {
+   "kb": "test-ontology2",
+   "type": "ko-en",
+   "term": "가용성",
+   "expect": [
+    "Availability"
+   ]
+  },
+  {
+   "kb": "test-ontology2",
+   "type": "ko-en",
+   "term": "성능",
+   "expect": [
+    "performance"
+   ]
+  },
+  {
+   "kb": "test-ontology2",
+   "type": "en-ko",
+   "term": "scalability",
+   "expect": [
+    "확장성"
+   ]
+  },
+  {
+   "kb": "test-ontology2",
+   "type": "en-ko",
+   "term": "testability",
+   "expect": [
+    "테스트 용이성"
+   ]
+  },
+  {
+   "kb": "test-ontology2",
+   "type": "synonym",
+   "term": "수정 용이성",
+   "expect": [
+    "변경 용이성"
+   ]
+  },
+  {
+   "kb": "test-ontology2",
+   "type": "synonym",
+   "term": "modifiability",
+   "expect": [
+    "변경 용이성"
+   ]
+  },
+  {
+   "kb": "test-ontology2",
+   "type": "synonym",
+   "term": "포트와 어댑터",
+   "expect": [
+    "Hexagonal 아키텍처"
+   ]
+  },
+  {
+   "kb": "test-ontology2",
+   "type": "synonym",
+   "term": "EDA",
+   "expect": [
+    "Event Driven Architecture",
+    "Event-Driven Architecture"
+   ]
+  },
+  {
+   "kb": "test-ontology2",
+   "type": "synonym",
+   "term": "계층형 아키텍처",
+   "expect": [
+    "Layered 스타일"
+   ]
+  },
+  {
+   "kb": "test-ontology2",
+   "type": "hypernym",
+   "term": "유지보수성",
+   "expect": [],
+   "narrower": [
+    "변경 용이성",
+    "테스트 용이성",
+    "관리 용이성"
+   ]
+  },
+  {
+   "kb": "test-ontology2",
+   "type": "hypernym",
+   "term": "maintainability",
+   "expect": [],
+   "narrower": [
+    "변경 용이성",
+    "테스트 용이성",
+    "관리 용이성"
+   ]
+  },
+  {
+   "kb": "test-ontology2",
+   "type": "negative",
+   "term": "블록체인",
+   "expect": []
+  },
+  {
+   "kb": "test-ontology2",
+   "type": "negative",
+   "term": "머신러닝",
+   "expect": []
+  },
+  {
+   "kb": "test-ontology",
+   "type": "translit",
+   "term": "헥사고날",
+   "expect": [
+    "hexagonal",
+    "Hexagonal (Ports & Adapters)"
+   ]
+  },
+  {
+   "kb": "test-ontology",
+   "type": "translit",
+   "term": "마이크로서비스",
+   "expect": [
+    "microservices",
+    "Microservices"
+   ]
+  },
+  {
+   "kb": "test-ontology",
+   "type": "translit",
+   "term": "서버리스",
+   "expect": [
+    "serverless",
+    "Serverless (FaaS)"
+   ]
+  },
+  {
+   "kb": "test-ontology",
+   "type": "translit",
+   "term": "서킷 브레이커",
+   "expect": [
+    "circuit_breaker"
+   ]
+  },
+  {
+   "kb": "test-ontology",
+   "type": "translit",
+   "term": "사가",
+   "expect": [
+    "saga"
+   ]
+  },
+  {
+   "kb": "test-ontology",
+   "type": "translit",
+   "term": "아웃박스 패턴",
+   "expect": [
+    "outbox_pattern"
+   ]
+  },
+  {
+   "kb": "test-ontology",
+   "type": "ko-en",
+   "term": "테스트 용이성",
+   "expect": [
+    "testability"
+   ]
+  },
+  {
+   "kb": "test-ontology",
+   "type": "ko-en",
+   "term": "변경 용이성",
+   "expect": [
+    "modifiability"
+   ]
+  },
+  {
+   "kb": "test-ontology",
+   "type": "ko-en",
+   "term": "가용성",
+   "expect": [
+    "availability"
+   ]
+  },
+  {
+   "kb": "test-ontology",
+   "type": "ko-en",
+   "term": "관측성",
+   "expect": [
+    "observability"
+   ]
+  },
+  {
+   "kb": "test-ontology",
+   "type": "ko-en",
+   "term": "배포 용이성",
+   "expect": [
+    "deployability"
+   ]
+  },
+  {
+   "kb": "test-ontology",
+   "type": "ko-en",
+   "term": "멱등성",
+   "expect": [
+    "idempotency"
+   ]
+  },
+  {
+   "kb": "test-ontology",
+   "type": "ko-en",
+   "term": "분산 추적",
+   "expect": [
+    "distributed_tracing"
+   ]
+  },
+  {
+   "kb": "test-ontology",
+   "type": "ko-en",
+   "term": "결과적 일관성",
+   "expect": [
+    "eventual"
+   ]
+  },
+  {
+   "kb": "test-ontology",
+   "type": "synonym",
+   "term": "수정 용이성",
+   "expect": [
+    "modifiability"
+   ]
+  },
+  {
+   "kb": "test-ontology",
+   "type": "hypernym",
+   "term": "유지보수성",
+   "expect": [],
+   "narrower": [
+    "modifiability",
+    "testability"
+   ]
+  },
+  {
+   "kb": "test-ontology",
+   "type": "negative",
+   "term": "양자역학",
+   "expect": []
+  },
+  {
+   "kb": "test-ontology3",
+   "type": "en-ko",
+   "term": "Einstein",
+   "expect": [
+    "아인슈타인"
+   ]
+  },
+  {
+   "kb": "test-ontology3",
+   "type": "en-ko",
+   "term": "Albert Einstein",
+   "expect": [
+    "아인슈타인"
+   ]
+  },
+  {
+   "kb": "test-ontology3",
+   "type": "fullname",
+   "term": "알베르트 아인슈타인",
+   "expect": [
+    "아인슈타인"
+   ]
+  },
+  {
+   "kb": "test-ontology3",
+   "type": "en-ko",
+   "term": "Feynman",
+   "expect": [
+    "파인만"
+   ]
+  },
+  {
+   "kb": "test-ontology3",
+   "type": "fullname",
+   "term": "리처드 파인만",
+   "expect": [
+    "파인만"
+   ]
+  },
+  {
+   "kb": "test-ontology3",
+   "type": "en-ko",
+   "term": "Heisenberg",
+   "expect": [
+    "하이젠베르크"
+   ]
+  },
+  {
+   "kb": "test-ontology3",
+   "type": "en-ko",
+   "term": "Schrödinger",
+   "expect": [
+    "슈뢰딩거"
+   ]
+  },
+  {
+   "kb": "test-ontology3",
+   "type": "fullname",
+   "term": "아이작 뉴턴",
+   "expect": [
+    "뉴턴"
+   ]
+  },
+  {
+   "kb": "test-ontology3",
+   "type": "en-ko",
+   "term": "Niels Bohr",
+   "expect": [
+    "보어"
+   ]
+  },
+  {
+   "kb": "test-ontology3",
+   "type": "en-ko",
+   "term": "Maxwell",
+   "expect": [
+    "맥스웰",
+    "J C 맥스웰"
+   ]
+  },
+  {
+   "kb": "test-ontology3",
+   "type": "en-ko",
+   "term": "photoelectric effect",
+   "expect": [
+    "광전 효과",
+    "광전효과",
+    "광전 효과 실험"
+   ]
+  },
+  {
+   "kb": "test-ontology3",
+   "type": "en-ko",
+   "term": "uncertainty principle",
+   "expect": [
+    "불확정성 원리"
+   ]
+  },
+  {
+   "kb": "test-ontology3",
+   "type": "en-ko",
+   "term": "special relativity",
+   "expect": [
+    "특수 상대론"
+   ]
+  },
+  {
+   "kb": "test-ontology3",
+   "type": "synonym",
+   "term": "특수 상대성 이론",
+   "expect": [
+    "특수 상대론"
+   ]
+  },
+  {
+   "kb": "test-ontology3",
+   "type": "synonym",
+   "term": "일반 상대성 이론",
+   "expect": [
+    "일반 상대론"
+   ]
+  },
+  {
+   "kb": "test-ontology3",
+   "type": "en-ko",
+   "term": "Michelson-Morley experiment",
+   "expect": [
+    "마이컬슨 몰리 실험",
+    "마이컬슨-몰리 실험"
+   ]
+  },
+  {
+   "kb": "test-ontology3",
+   "type": "en-ko",
+   "term": "double-slit experiment",
+   "expect": [
+    "이중 슬릿 실험"
+   ]
+  },
+  {
+   "kb": "test-ontology3",
+   "type": "synonym",
+   "term": "양자 전기역학",
+   "expect": [
+    "QED",
+    "양자 전기역학"
+   ]
+  },
+  {
+   "kb": "test-ontology3",
+   "type": "en-ko",
+   "term": "Copenhagen interpretation",
+   "expect": [
+    "코펜하겐 해석"
+   ]
+  },
+  {
+   "kb": "test-ontology3",
+   "type": "en-ko",
+   "term": "matrix mechanics",
+   "expect": [
+    "행렬역학"
+   ]
+  },
+  {
+   "kb": "test-ontology3",
+   "type": "synonym",
+   "term": "파울리 배타 원리",
+   "expect": [
+    "배타 원리"
+   ]
+  },
+  {
+   "kb": "test-ontology3",
+   "type": "en-ko",
+   "term": "Nobel Prize in Physics",
+   "expect": [
+    "노벨 물리학상"
+   ]
+  },
+  {
+   "kb": "test-ontology3",
+   "type": "negative",
+   "term": "다윈",
+   "expect": []
+  },
+  {
+   "kb": "test-ontology3",
+   "type": "negative",
+   "term": "마이크로서비스",
+   "expect": []
+  }
+ ]
+}

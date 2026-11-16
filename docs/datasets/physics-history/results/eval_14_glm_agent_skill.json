@@ -1,0 +1,611 @@
+{
+ "label": "14. GLM 에이전트(glm-5.2→집계상 GLM-5.3, thinking off) + ragaas-query 스킬 + agent 도구, 질문마다 새 대화, 스키마 캐시, 2026-11-16",
+ "score": "31/39 (채점기) — 의미상 35/39 (Q14·Q31 짧은 이름, Q37·Q38 '찾지 못했다/받지 않았다' 를 정답으로 볼 때)",
+ "by_type": {
+  "single": "6/6",
+  "multi_hop": "9/10",
+  "lineage": "5/6",
+  "temporal": "4/5",
+  "aggregate": "3/5",
+  "fictional": "3/4",
+  "negative": "1/3"
+ },
+ "tokens": {
+  "prompt_total": 1559319,
+  "completion_total": 17734,
+  "per_question_avg": 40437,
+  "median": 33600,
+  "max": 113512
+ },
+ "sec_per_question": 17.0,
+ "avg_tool_calls": 3.0,
+ "zai_5h_quota": "25% → 54%",
+ "answers": [
+  {
+   "id": "Q01",
+   "answer": "『알마게스트』는 2세기 천문학자 **프톨레마이오스**가 저술했습니다. 그래프에서도 (프톨레마이오스, 저술함, 알마게스트) 관계로 확인되며, 원문(debate_heliocentrism.md)에도 \"2세기의 천문학자 프톨레마이오스가 『알마게스트』에서 제시한 체계\"라는 문장이 근거로 나옵니다. 이 책은 지구중심설(천동설)의 가장 완성된 형태를 담고 있습니다.",
+   "tool_calls": 2,
+   "tools": [
+    "describe_entity",
+    "get_chunks"
+   ],
+   "turns": 3,
+   "prompt_tokens": 30666,
+   "completion_tokens": 219,
+   "sec": 16.8,
+   "used_chat_fallback": false
+  },
+  {
+   "id": "Q02",
+   "answer": "패러데이가 전자기 유도를 발견한 해는 **1831년**입니다. 그는 \"전기가 자기를 만든다면 자기도 전기를 만들 수 있지 않을까\"라는 질문을 품다가 그 해에 마침내 답을 찾았으며, 이 발견은 발전기와 변압기의 원리가 되어 전기 문명의 토대를 놓았습니다 (출처: bio_faraday.md, era_classical.md).",
+   "tool_calls": 2,
+   "tools": [
+    "describe_entity",
+    "get_chunks"
+   ],
+   "turns": 3,
+   "prompt_tokens": 32580,
+   "completion_tokens": 206,
+   "sec": 21.5,
+   "used_chat_fallback": false
+  },
+  {
+   "id": "Q03",
+   "answer": "1919년 일식 관측을 이끈 천체물리학자는 **아서 에딩턴**입니다. 그는 서아프리카 프린시페섬 탐사대를 이끌었고(다른 팀은 브라질 소브랄로 파견), 이 관측으로 아인슈타인의 일반 상대론(별빛이 태양 중력에 의해 휘는 현상)이 확인되었습니다. (출처: exp_eclipse_1919.md)",
+   "tool_calls": 2,
+   "tools": [
+    "describe_entity",
+    "get_chunks"
+   ],
+   "turns": 3,
+   "prompt_tokens": 30345,
+   "completion_tokens": 193,
+   "sec": 17.1,
+   "used_chat_fallback": false
+  },
+  {
+   "id": "Q04",
+   "answer": "드브로이가 물질파 가설을 제안한 해는 **1924년**입니다. 그는 이 해에 박사 학위 논문에서 전자 같은 물질 입자도 파동의 성질을 가진다는 가설을 내놓았습니다(출처: theory_quantum_mechanics.md, era_modern.md).",
+   "tool_calls": 2,
+   "tools": [
+    "describe_entity",
+    "get_chunks"
+   ],
+   "turns": 3,
+   "prompt_tokens": 30463,
+   "completion_tokens": 180,
+   "sec": 14.3,
+   "used_chat_fallback": false
+  },
+  {
+   "id": "Q05",
+   "answer": "리처드 파인만의 박사 지도교수는 **존 휠러(John Wheeler)** 입니다. 휠러는 1942년 파인만의 학위 논문 「양자역학에서의 최소 작용의 원리」를 지도했고, 이 논문에서 훗날 '경로 적분'이라 불리는 착상이 발전했습니다 (출처: bio_feynman.md).",
+   "tool_calls": 2,
+   "tools": [
+    "describe_entity",
+    "get_chunks"
+   ],
+   "turns": 3,
+   "prompt_tokens": 33437,
+   "completion_tokens": 163,
+   "sec": 12.9,
+   "used_chat_fallback": false
+  },
+  {
+   "id": "Q06",
+   "answer": "루트비히 볼츠만은 **빈 대학**을 비롯해 오스트리아와 독일의 대학들에서 생애 대부분을 보내며 활동했습니다 (출처: theory_thermodynamics.md). 그래프에는 구체적 대학명으로는 '빈 대학'만 기록되어 있습니다.",
+   "tool_calls": 2,
+   "tools": [
+    "describe_entity",
+    "get_chunks"
+   ],
+   "turns": 3,
+   "prompt_tokens": 31438,
+   "completion_tokens": 144,
+   "sec": 19.2,
+   "used_chat_fallback": false
+  },
+  {
+   "id": "Q07",
+   "answer": "**민코프스키 시공간**입니다. 아인슈타인이 학생으로 다녔던 취리히 연방공과대학(ETH)에서 수학을 가르친 헤르만 민코프스키가 1908년 쾰른 강연에서 공간과 시간을 하나로 묶은 4차원 연连续体인 민코프스키 시공간을 제안했으며, 이는 특수 상대론을 기하학의 언어로 발전시킨 것입니다 (출처: theory_relativity.md). 참고로 원문에는 민코프스키가 수업에 자주 빠지던 아인슈타인을 \"게으른 개\"라고 불렀다는 일화도 전해집니다.",
+   "tool_calls": 3,
+   "tools": [
+    "describe_entity",
+    "describe_entity",
+    "get_chunks"
+   ],
+   "turns": 3,
+   "prompt_tokens": 38950,
+   "completion_tokens": 357,
+   "sec": 21.5,
+   "used_chat_fallback": false
+  },
+  {
+   "id": "Q08",
+   "answer": "**요제프 슈테판**입니다. 패러데이는 맥스웰에게 영향을 주었고(근거 chunk: 0fdca2a6), 맥스웰의 1860년 기체 분자 속도 분포 연구는 오스트리아 물리학자 볼츠만에게 큰 영향을 주었으며, 볼츠만은 빈 대학에서 요제프 슈테판의 지도로 1866년 박사 학위를 받았습니다(출처: theory_thermodynamics.md).",
+   "tool_calls": 3,
+   "tools": [
+    "describe_entity",
+    "describe_entity",
+    "get_chunks"
+   ],
+   "turns": 3,
+   "prompt_tokens": 34676,
+   "completion_tokens": 399,
+   "sec": 16.5,
+   "used_chat_fallback": false
+  },
+  {
+   "id": "Q09",
+   "answer": "답은 **케임브리지 대학**입니다.\n\n- 헤르츠 전자기파 실험 → 확인함: **맥스웰 방정식** (출처: exp_hertz.md — \"맥스웰 방정식이 예측한 전자기파가 실제로 존재함을 확인\")\n- 맥스웰 방정식을 제안한 사람: **J. C. 맥스웰** (1865년 전자기장의 동역학 이론 발표, theory_electromagnetism.md)\n- J. C. 맥스웰의 소속: **케임브리지 대학** (그래프 관계 기준)\n\n참고: 지식 그래프에는 \"초대 소장\"이라는 표현 자체는 없어 소속 관계로만 확인했습니다. 일반 지식으로는 그가 케임브리지의 캐번디시 연구소 초대 소장이었다는 점을 덧붙입니다.",
+   "tool_calls": 4,
+   "tools": [
+    "query_plan",
+    "describe_entity",
+    "describe_entity",
+    "get_chunks"
+   ],
+   "turns": 5,
+   "prompt_tokens": 51389,
+   "completion_tokens": 636,
+   "sec": 26.1,
+   "used_chat_fallback": false
+  },
+  {
+   "id": "Q10",
+   "answer": "**아서 에딩턴(Arthur Eddington)**입니다. 뉴턴의 소속 대학인 케임브리지 대학에 소속되어 있었고, 1919년 개기일식 관측(별빛의 휘어짐 측정)을 수행해 일반 상대성이론을 확인한 인물로 지식 그래프에 기록되어 있습니다.",
+   "tool_calls": 1,
+   "tools": [
+    "query_plan"
+   ],
+   "turns": 2,
+   "prompt_tokens": 19793,
+   "completion_tokens": 385,
+   "sec": 12.5,
+   "used_chat_fallback": false
+  },
+  {
+   "id": "Q11",
+   "answer": "하이젠베르크의 박사 지도교수는 **아르놀드 조머펠트**이며, 그가 지도한 또 다른 제자는 **파울리**입니다. 파울리는 **배타 원리**를 제안했고, 이 업적으로 **1945년 노벨 물리학상**을 받았습니다 (출처: theory_quantum_mechanics.md). 참고로 그래프에는 조머펠트의 제자로 하이젠베르크·파울리가 함께 나옵니다.",
+   "tool_calls": 4,
+   "tools": [
+    "query_plan",
+    "describe_entity",
+    "describe_entity",
+    "get_chunks"
+   ],
+   "turns": 4,
+   "prompt_tokens": 52316,
+   "completion_tokens": 495,
+   "sec": 17.0,
+   "used_chat_fallback": false
+  },
+  {
+   "id": "Q12",
+   "answer": "광전효과를 처음 발견한 사람은 하인리히 헤르츠이며, 그의 박사 지도교수는 헤르만 폰 헬름홀츠입니다(exp_hertz.md). 헬름홀츠는 1847년 「힘의 보존에 관하여」 논문에서 **에너지 보존 법칙**(오늘날의 열역학 제1법칙)을 일반 원리로 제안했습니다(theory_thermodynamics.md).",
+   "tool_calls": 5,
+   "tools": [
+    "query_plan",
+    "describe_entity",
+    "get_chunks",
+    "describe_entity",
+    "get_chunks"
+   ],
+   "turns": 6,
+   "prompt_tokens": 81685,
+   "completion_tokens": 462,
+   "sec": 20.3,
+   "used_chat_fallback": false
+  },
+  {
+   "id": "Q13",
+   "answer": "**보어 원자 모형**은 스승 러더퍼드의 원자 모형(러더퍼드 원자 모형)을 계승·발전시킨 것으로, 그래프상 **'에너지 양자 개념'**에 기반하며, 이 개념(에너지 양자 가설)을 처음 제안한 사람은 **막스 플랑크**입니다.\n\n근거: 보어의 스승은 어니스트 러더퍼드(1912년 맨체스터 대학 연구실, `bio_bohr.md`)이고, 보어 원자 모형의 '기반함' 경로 값이 \"에너지 양자 개념\"이며, \"에너지 양자 가설\"을 제안한 인물 조회 결과 플랑크가 유일하게 나왔습니다.",
+   "tool_calls": 7,
+   "tools": [
+    "describe_entity",
+    "query_plan",
+    "query_plan",
+    "describe_entity",
+    "describe_entity",
+    "get_chunks",
+    "query_plan"
+   ],
+   "turns": 6,
+   "prompt_tokens": 71733,
+   "completion_tokens": 1208,
+   "sec": 39.0,
+   "used_chat_fallback": false
+  },
+  {
+   "id": "Q14",
+   "answer": "**뉴턴**입니다.\n\n- 슈뢰딩거와 같은 해(1933년) 노벨 물리학상을 받은 사람은 **디랙**으로, 디랙은 케임브리지 대학의 **루카스 석좌교수**였습니다 (근거: 소속 \"케임브리지 대학\", \"루카스 석좌교수\").\n- 케임브리지 대학 소속이면서 \"과학혁명\"에 소속된 인물은 **뉴턴**뿐이었습니다 (소속: 케임브리지 대학, 과학혁명, 왕립학회 등).",
+   "tool_calls": 3,
+   "tools": [
+    "query_plan",
+    "query_plan",
+    "query_plan"
+   ],
+   "turns": 3,
+   "prompt_tokens": 31594,
+   "completion_tokens": 611,
+   "sec": 17.1,
+   "used_chat_fallback": false
+  },
+  {
+   "id": "Q15",
+   "answer": "**맥스웰 방정식**입니다. 광전효과를 처음 발견한 사람은 헤르츠인데, 그가 수행한 **헤르츠 전자기파 실험**은 전자기파의 실재와 빛과 같은 성질(반사·굴절·편광, 전파 속도 = 빛의 속도)을 확인하여 맥스웰 방정식의 예측을 입증했습니다(출처: exp_hertz.md).\n\n참고로, 그래프에는 헤르츠가 광전효과(불꽃 방전이 쉬워지는 현상)를 \"발견\"한 기록과 함께, 그가 아인슈타인에게 영향을 줬다는 트리플도 있으나 방향이 뒤집혀 있을 수 있어 원문 기준으로는 실험 확인 이론이 맥스웰 방정식입니다.",
+   "tool_calls": 3,
+   "tools": [
+    "describe_entity",
+    "describe_entity",
+    "get_chunks"
+   ],
+   "turns": 4,
+   "prompt_tokens": 45710,
+   "completion_tokens": 344,
+   "sec": 18.4,
+   "used_chat_fallback": false
+  },
+  {
+   "id": "Q16",
+   "answer": "프린스턴 고등연구소입니다.\n\n만유인력의 법칙(뉴턴 역학)을 약한 중력장 근사로 포함하는 이론은 **일반 상대론**(그래프의 `근사_극한` 경로에서 \"뉴턴의 법칙\" 확인)이며, 이를 제안·완성한 사람은 **아인슈타인**입니다. 원문 근거(debate_bohr_einstein.md)에 따르면 아인슈타인은 나치를 피해 1933년경 미국 **프린스턴 고등연구소**에 자리 잡았고, 이후 1955년 사망 시까지 그곳에 소속되어 있었습니다.",
+   "tool_calls": 3,
+   "tools": [
+    "query_plan",
+    "describe_entity",
+    "get_chunks"
+   ],
+   "turns": 4,
+   "prompt_tokens": 48543,
+   "completion_tokens": 553,
+   "sec": 15.6,
+   "used_chat_fallback": false
+  },
+  {
+   "id": "Q17",
+   "answer": "그래프와 원문(theory_relativity.md)에 따르면 방향이 질문과 조금 다릅니다:\n\n- **뉴턴 역학을 저속·약한 중력 근사로 포함하는 이론 = 일반 상대론**(1915) — \"중력이 약하고 물체가 느리게 움직이는 경우 일반 상대론의 방정식은 뉴턴의 만유인력의 법칙으로 환원된다\".\n- 그리고 **일반 상대론은 특수 상대론을 일반화한 이론**입니다(즉 \"일반화하는 쪽\"이 일반 상대론, 일반화되는 쪽이 특수 상대론).\n\n즉 순서대로는 **특수 상대론 → 일반 상대론(→ 저속 극한에서 뉴턴 역학)**이며, \"일반 상대론을 다시 일반화한 이론\"은 지식 그래프에서 찾지 못했습니다.",
+   "tool_calls": 4,
+   "tools": [
+    "query_plan",
+    "get_chunks",
+    "query_plan",
+    "query_plan"
+   ],
+   "turns": 5,
+   "prompt_tokens": 50662,
+   "completion_tokens": 1345,
+   "sec": 31.6,
+   "used_chat_fallback": false
+  },
+  {
+   "id": "Q18",
+   "answer": "아인슈타인의 광양자 가설을 계승·발전시킨 것은 **드브로이의 물질파 가설**(입자에도 파동성이 있다는 파동-입자 이중성의 확장, 1927년 데이비슨-저머 실험으로 확인)이고, 다시 물질파 가설을 계승·발전시킨 방정식은 **슈뢰딩거 방정식**(1926년, 물질파가 따라야 할 파동 방정식)입니다 (출처: theory_quantum_mechanics.md).",
+   "tool_calls": 3,
+   "tools": [
+    "query_plan",
+    "query_plan",
+    "get_chunks"
+   ],
+   "turns": 4,
+   "prompt_tokens": 40348,
+   "completion_tokens": 367,
+   "sec": 15.8,
+   "used_chat_fallback": false
+  },
+  {
+   "id": "Q19",
+   "answer": "플랑크 복사 법칙의 두 극한 근사는 **빈 복사 법칙**(짧은 파장·높은 진동수 극한)과 **레일리-진스 법칙**(긴 파장 극한)입니다 (출처: exp_blackbody_photoelectric.md).",
+   "tool_calls": 2,
+   "tools": [
+    "describe_entity",
+    "get_chunks"
+   ],
+   "turns": 3,
+   "prompt_tokens": 30659,
+   "completion_tokens": 145,
+   "sec": 5.9,
+   "used_chat_fallback": false
+  },
+  {
+   "id": "Q20",
+   "answer": "디랙 방정식을 계승·발전시킨 이론은 **양자 전기역학(QED)**입니다. 원문(theory_qed.md)에 \"디랙 방정식을 계승하여 전자와 전자기장의 상호작용 전체를 양자론으로 다루려는 이론이 양자 전기역학, 곧 QED다\"라고 명시되어 있고, 슈윙거·파인만·도모나가가 완성했습니다(era_modern.md). QED는 **재규격화**, 즉 무한대를 체계적으로 처리하는 기법에 기반하여 완성된 이론으로, 파인만의 \"재규격화된 양자 전기역학\" 제안과 경로 적분·파인만 도형 등이 그 근거입니다.\n\n다만 그래프상 QED의 '기반함' 경로에는 \"현대물리학\"만 연결되어 있어, 재규격화 기반은 파인만 관계와 원문(무한대를 체계적으로 처리하는 방법으로 QED를 완성했다는 서술)에서 종합한 해석임을 밝힙니다.",
+   "tool_calls": 10,
+   "tools": [
+    "query_plan",
+    "query_plan",
+    "describe_entity",
+    "describe_entity",
+    "query_plan",
+    "query_plan",
+    "get_chunks",
+    "query_plan",
+    "lookup_values",
+    "query_plan"
+   ],
+   "turns": 10,
+   "prompt_tokens": 112440,
+   "completion_tokens": 1072,
+   "sec": 40.8,
+   "used_chat_fallback": false
+  },
+  {
+   "id": "Q21",
+   "answer": "- **카르노 순환을 계승·발전시킨 법칙**: **열역학 제2법칙**입니다. 클라우지우스(1850년경 제안) 등이 카르노 순환 분석을 계승·발전시켜 카르노의 효율 한계를 열역학 제2법칙의 귀결로 이해하게 되었다고 합니다 (출처: theory_thermodynamics.md).\n- **클라우지우스가 1865년에 제안한 개념은 엔트로피**이며, 이를 계승한 공식은 **볼츠만 엔트로피 공식(S = k log W, 1877년)**입니다 — 볼츠만이 엔트로피를 미시 상태의 수와 연결하여 제안했습니다 (출처: theory_thermodynamics.md, era_classical.md).",
+   "tool_calls": 6,
+   "tools": [
+    "lookup_values",
+    "describe_entity",
+    "query_plan",
+    "query_plan",
+    "describe_entity",
+    "get_chunks"
+   ],
+   "turns": 4,
+   "prompt_tokens": 50280,
+   "completion_tokens": 845,
+   "sec": 28.2,
+   "used_chat_fallback": false
+  },
+  {
+   "id": "Q22",
+   "answer": "특수상대성이론이 계승·발전시킨 두 선행 개념은 **갈릴레이 상대성 원리**(원리)와 **로렌츠 변환**(1904년 로렌츠가 제안, 특수 상대론의 수학적 뼈대로 계승됨)입니다. 또 특수 상대론을 기하학적으로 계승·발전시킨 개념은 1908년 민코프스키가 제안한 **민코프스키 시공간**(4차원 연속체)입니다. (출처: theory_relativity.md)",
+   "tool_calls": 3,
+   "tools": [
+    "query_plan",
+    "describe_entity",
+    "get_chunks"
+   ],
+   "turns": 4,
+   "prompt_tokens": 42692,
+   "completion_tokens": 438,
+   "sec": 20.2,
+   "used_chat_fallback": false
+  },
+  {
+   "id": "Q23",
+   "answer": "**약 144년** 걸렸습니다 (1687 − 1543 = 144). 코페르니쿠스의 『천구의 회전에 관하여』는 1543년(debate_heliocentrism.md), 뉴턴의 『프린키피아』는 1687년(era_scientific_revolution.md)에 출간된 것이 지식 그래프 원문에 확인됩니다.",
+   "tool_calls": 3,
+   "tools": [
+    "describe_entity",
+    "describe_entity",
+    "get_chunks"
+   ],
+   "turns": 3,
+   "prompt_tokens": 37075,
+   "completion_tokens": 338,
+   "sec": 16.9,
+   "used_chat_fallback": false
+  },
+  {
+   "id": "Q24",
+   "answer": "하이젠베르크의 행렬역학(1925년)이 슈뢰딩거 방정식(1926년)보다 약 1년 먼저 제안되었습니다 (출처: theory_quantum_mechanics.md).",
+   "tool_calls": 3,
+   "tools": [
+    "describe_entity",
+    "describe_entity",
+    "get_chunks"
+   ],
+   "turns": 3,
+   "prompt_tokens": 31034,
+   "completion_tokens": 224,
+   "sec": 13.2,
+   "used_chat_fallback": false
+  },
+  {
+   "id": "Q25",
+   "answer": "열역학 제2법칙을 정식화한 두 사람은 **루돌프 클라우지우스**와 **윌리엄 톰슨(켈빈 경)**이며, 먼저 발표한 사람은 **클라우지우스로 1850년** 논문에서 \"열은 저절로 차가운 물체에서 뜨거운 물체로 흐르지 않는다\"는 형태로 제안했습니다. 켈빈은 이듬해인 1851년에 독자적으로 같은 법칙을 정식화했습니다. (출처: theory_thermodynamics.md)",
+   "tool_calls": 2,
+   "tools": [
+    "query_plan",
+    "get_chunks"
+   ],
+   "turns": 3,
+   "prompt_tokens": 31975,
+   "completion_tokens": 436,
+   "sec": 9.6,
+   "used_chat_fallback": false
+  },
+  {
+   "id": "Q26",
+   "answer": "두 실험 모두 원문(exp_michelson_morley.md, exp_hertz.md)으로 확인했습니다.\n\n- **마이컬슨-몰리 실험**: 마이컬슨의 첫 시도는 1881년(독일 체류 중, 정밀도 부족), 이후 몰리와 공동 실험이 이루어졌는데 공동 실험의 정확한 연도는 지식 그래프 원문에 명시되어 있지 않습니다(일반 지식으로는 1887년입니다).\n- **헤르츠 전자기파 실험**: **1886–1888년** 카를스루에에서 수행되었습니다.\n\n따라서 헤르츠의 실험(1886–1888)과 마이컬슨 단독 첫 시도(1881)는 다른 해이며, 몰리와의 공동 실험(추정 1887년)은 헤르츠 실험 기간과 겹칠 수 있지만 그래프에서 확정할 수 없습니다.",
+   "tool_calls": 3,
+   "tools": [
+    "describe_entity",
+    "describe_entity",
+    "get_chunks"
+   ],
+   "turns": 3,
+   "prompt_tokens": 32035,
+   "completion_tokens": 599,
+   "sec": 13.8,
+   "used_chat_fallback": false
+  },
+  {
+   "id": "Q27",
+   "answer": "아인슈타인의 이동 경로를 시간 순으로 나열하면 다음과 같습니다 (출처: bio_einstein.md).\n\n1. **학생 시절**: 1896~1900년 스위스 **취리히 연방공과대학(ETH)** — 물리학·수학 교사 과정 재학\n2. **기술 심사관**: 1902년 베른의 **스위스 특허청** — 3급 기술 심사관으로 채용 (1909년까지)\n3. **1933년 이후**: 나치 정권 수립 후 독일로 돌아가지 않고 벨기에·영국을 거쳐 미국에 정착, 같은 해 뉴저지주 **프린스턴 고등연구소**에 소속되어 1955년 세상을 떠날 때까지 머물렀습니다.\n\n(참고: 그 사이 학계 시절로 취리히 대학(1909) → 프라하(1911) → 취리히 연방공과대학(1912) → 베를린(1914)을 거쳤습니다.)",
+   "tool_calls": 2,
+   "tools": [
+    "describe_entity",
+    "get_chunks"
+   ],
+   "turns": 3,
+   "prompt_tokens": 38636,
+   "completion_tokens": 438,
+   "sec": 10.5,
+   "used_chat_fallback": false
+  },
+  {
+   "id": "Q28",
+   "answer": "양자전기역학(QED)을 완성한 사람은 **슈윙거, 파인만, 도모나가** 세 사람입니다. 원문(era_modern.md)에 따르면 미국의 줄리언 슈윙거와 리처드 파인만, 그리고 전쟁 중 일본에서 독자적으로 연구한 도모나가 신이치로가 각기 다른 방법으로 무한대를 체계적으로 처리(재규격화)하는 QED를 완성했습니다. 또한 파인만은 재규격화된 양자전기역학과 파인만 도형·경로 적분 등을 제안한 것으로도 기록되어 있습니다.",
+   "tool_calls": 2,
+   "tools": [
+    "query_plan",
+    "get_chunks"
+   ],
+   "turns": 3,
+   "prompt_tokens": 30515,
+   "completion_tokens": 319,
+   "sec": 12.6,
+   "used_chat_fallback": false
+  },
+  {
+   "id": "Q29",
+   "answer": "아르놀트 조머펠트가 지도한 제자로 문서에 언급된 인물은 **베르너 하이젠베르크**와 **볼프강 파울리** 두 사람입니다.\n\n- **하이젠베르크**: 1920년 뮌헨 대학에서 조머펠트의 문하에 들어갔다는 기록 (bio_heisenberg.md)\n- **파울리**: 하이젠베르크와 마찬가지로 뮌헨에서 조머펠트의 지도를 받은 제자라는 기록 (theory_quantum_mechanics.md)",
+   "tool_calls": 2,
+   "tools": [
+    "query_plan",
+    "get_chunks"
+   ],
+   "turns": 3,
+   "prompt_tokens": 30337,
+   "completion_tokens": 407,
+   "sec": 8.3,
+   "used_chat_fallback": false
+  },
+  {
+   "id": "Q30",
+   "answer": "길이 수축 가설을 독립적으로 제안한 사람은 **2명**입니다.\n\n1. **조지 피츠제럴드**(George FitzGerald) — 아일랜드, 1889년 짧은 글에서 마이컬슨-몰리 실험의 널 결과를 설명하며 제안\n2. **헨드릭 로렌츠**(Hendrik Lorentz) — 네덜란드, 1892년 독립적으로 같은 가설 제안\n\n(출처: exp_michelson_morley.md, \"이론적 대응: 길이 수축과 로렌츠 변환\")",
+   "tool_calls": 2,
+   "tools": [
+    "query_plan",
+    "get_chunks"
+   ],
+   "turns": 3,
+   "prompt_tokens": 29891,
+   "completion_tokens": 258,
+   "sec": 6.6,
+   "used_chat_fallback": false
+  },
+  {
+   "id": "Q31",
+   "answer": "1930년대(1930~1939) 노벨 물리학상 수상자는 **3명**입니다:\n\n1. **하이젠베르크** — 1932년 (양자역학, `bio` 문서)\n2. **디랙** — 1933년 (그래프에 \"노벨 물리학상 (1933년)\"으로 기록)\n3. **슈뢰딩거** — 1933년 (슈뢰딩거 방정식, theory_quantum_mechanics.md)\n\n다른 수상자들은 연도가 원문에서 확인되어 모두 제외했습니다: 플랑크(1918), 아인슈타인(광전효과), 보어(1922), 드브로이(1929), 파울리(1945), 보른(1954), 도모나가·슈윙거·파인만(1965), 아스페(2022) 등. 참고로 맥스웰의 경우 원문에 수상 연도가 없어 노벨상(1865년 사망 이전 창설)과는 무관한 추출 오류로 보입니다.",
+   "tool_calls": 2,
+   "tools": [
+    "query_plan",
+    "get_chunks"
+   ],
+   "turns": 3,
+   "prompt_tokens": 36473,
+   "completion_tokens": 1053,
+   "sec": 27.0,
+   "used_chat_fallback": false
+  },
+  {
+   "id": "Q32",
+   "answer": "플랑크의 에너지 양자 개념에 기반한다고 서술된 이론·가설·모형은 세 가지입니다.\n\n1. **광양자 가설** (아인슈타인, 1905) — \"플랑크의 에너지 양자 개념에 기반하되 그것을 빛 자체로 확장\" (출처: exp_blackbody_photoelectric.md)\n2. **보어 원자 모형** (보어, 1913) — \"플랑크가 도입한 에너지 양자 개념에 기반\" (출처: bio_bohr.md)\n3. **양자역학** — 1900년 플랑크의 에너지 양자 가설에서 시작되어 발전한 이론 체계 (출처: theory_quantum_mechanics.md)\n\n원문 청크로 근거를 확인한 결과입니다.",
+   "tool_calls": 2,
+   "tools": [
+    "query_plan",
+    "get_chunks"
+   ],
+   "turns": 3,
+   "prompt_tokens": 30576,
+   "completion_tokens": 389,
+   "sec": 11.6,
+   "used_chat_fallback": false
+  },
+  {
+   "id": "Q33",
+   "answer": "할스테트 정밀물리연구소 소속의 **요하네스 크뢰벨**이 1868년에 회전원판 실험을 수행했으며, 이 실험은 **에너지 보존 법칙**을 확인했습니다. 크뢰벨은 줄의 회전날개 실험에서 지적된 열 손실에 따른 체계적 오차를 보정해, 서로 다른 장치에서도 줄의 열의 일당량과 거의 같은 값을 얻어내 에너지가 사라지지 않는다는 법칙을 뒷받침했습니다 (출처: exp_heat_work.md).",
+   "tool_calls": 3,
+   "tools": [
+    "query_plan",
+    "describe_entity",
+    "get_chunks"
+   ],
+   "turns": 3,
+   "prompt_tokens": 31770,
+   "completion_tokens": 380,
+   "sec": 12.3,
+   "used_chat_fallback": false
+  },
+  {
+   "id": "Q34",
+   "answer": "크뢰벨의 제자 피르나우가 수행한 저온 흑체 측정(1903년)은 **플랑크 복사 법칙**이 낮은 온도에서도 성립함을 확인했고, 같은 조건에서 **빈 복사 법칙**의 예측값이 측정값과 어긋남을 보여 이를 반박했습니다. 피르나우는 스승 크뢰벨에게 배운 크뢰벨 보정을 적용해 열 손실을 바로잡았다고 합니다(출처: exp_blackbody_photoelectric.md).",
+   "tool_calls": 3,
+   "tools": [
+    "query_plan",
+    "describe_entity",
+    "get_chunks"
+   ],
+   "turns": 4,
+   "prompt_tokens": 40845,
+   "completion_tokens": 419,
+   "sec": 13.7,
+   "used_chat_fallback": false
+  },
+  {
+   "id": "Q35",
+   "answer": "**크뢰벨**이 그 인물입니다. 크뢰벨은 할스테트 정밀물리연구소 소속으로 줄의 영향을 받았으며, 1872년에 저술한 책은 **『열과 일의 정밀측정』**입니다 (출처: bio_kroebel.md — 정밀 열량 측정 방법론을 다룬 교과서로 독일어권 실험실의 참고서가 되었습니다).",
+   "tool_calls": 5,
+   "tools": [
+    "query_plan",
+    "lookup_values",
+    "query_plan",
+    "query_plan",
+    "get_chunks"
+   ],
+   "turns": 5,
+   "prompt_tokens": 51969,
+   "completion_tokens": 737,
+   "sec": 18.5,
+   "used_chat_fallback": false
+  },
+  {
+   "id": "Q36",
+   "answer": "피르나우 저온 흑체 측정(1903, 할스테트 정밀물리연구소의 아델하이트 피르나우 수행)은 **크뢰벨 보정**에 기반한 측정이었으며, 이 보정법은 피르나우의 스승인 **크뢰벨**이 제안한 것입니다. 크뢰벨 보정으로 저온에서의 열 손실을 체계적으로 바로잡은 결과, 저온에서도 플랑크 복사 법칙과 잘 일치함을 확인했습니다. 다만 크뢰벨 보정의 제안 연도는 지식 그래프와 원문(exp_blackbody_photoelectric.md)에서 찾지 못했습니다.",
+   "tool_calls": 4,
+   "tools": [
+    "describe_entity",
+    "get_chunks",
+    "describe_entity",
+    "get_chunks"
+   ],
+   "turns": 5,
+   "prompt_tokens": 53362,
+   "completion_tokens": 409,
+   "sec": 17.7,
+   "used_chat_fallback": false
+  },
+  {
+   "id": "Q37",
+   "answer": "지식 그래프에서 '엔리코 페르미'와 '베타 붕괴 이론' 모두 찾지 못했습니다. 이 KB에는 페르미나 베타 붕괴 이론 관련 엔티티가 없는 것으로 보입니다. (일반 지식으로는 페르미의 베타 붕괴 이론은 1933~1934년에 발표되었으나, 그래프 근거로는 확인되지 않습니다.)",
+   "tool_calls": 2,
+   "tools": [
+    "resolve_entities",
+    "lookup_values"
+   ],
+   "turns": 2,
+   "prompt_tokens": 19557,
+   "completion_tokens": 235,
+   "sec": 9.0,
+   "used_chat_fallback": false
+  },
+  {
+   "id": "Q38",
+   "answer": "볼츠만은 노벨 물리학상을 받지 않았습니다. 지식 그래프에는 그의 수상 기록으로 '박사 학위'만 있으며, 그는 1906년에 사망했기 때문에 (노벨상은 1901년 시작) 수상 가능 시기도 아니었습니다. 그는 엔트로피의 원자론적 해석과 볼츠만 엔트로피 공식을 제안한 물리학자입니다.",
+   "tool_calls": 1,
+   "tools": [
+    "describe_entity"
+   ],
+   "turns": 2,
+   "prompt_tokens": 20345,
+   "completion_tokens": 152,
+   "sec": 8.6,
+   "used_chat_fallback": false
+  },
+  {
+   "id": "Q39",
+   "answer": "지식 그래프에서 피르나우의 관계를 모두 확인했지만, 수상(受賞) 기록은 찾지 못했습니다. 그래프에는 그가 할스테트 정밀물리연구소 소속으로 저온 흑체 복사 측정을 수행하고 플랑크 복사 법칙을 확인했으며, 크뢰벨의 지도교수였다는 사실만 있을 뿐, 받은 상에 대한 정보는 없습니다.",
+   "tool_calls": 1,
+   "tools": [
+    "describe_entity"
+   ],
+   "turns": 2,
+   "prompt_tokens": 20525,
+   "completion_tokens": 174,
+   "sec": 4.4,
+   "used_chat_fallback": false
+  }
+ ]
+}
