@@ -176,7 +176,8 @@ def _contains(term: str, label: str) -> bool:
 
 
 async def lookup_values(kb_id: str, terms: Sequence[str], kind: Optional[str] = None,
-                        limit: int = 8) -> Dict[str, Any]:
+                        limit: int = 8, terms_en: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+    """terms_en: 클라이언트가 보낸 영어 표기 (오탈자 교정 포함). 사전에 없을 때만 쓴다 (§5.1)."""
     from app.services.agent_query import lexicon as lx
     _kb_, kinds, catalogs, version = await load_catalog(kb_id)
     idx = await lx.get_index(kb_id)
@@ -197,6 +198,8 @@ async def lookup_values(kb_id: str, terms: Sequence[str], kind: Optional[str] = 
     matches: Dict[str, List[Dict[str, Any]]] = {}
     related: Dict[str, List[Dict[str, Any]]] = {}
     narrower: Dict[str, List[Dict[str, Any]]] = {}
+    suggestions: Dict[str, List[Dict[str, Any]]] = {}
+    await _prefetch_fallback(kb_id, idx, terms, terms_en)
     for term in terms:
         hits, rel = [], []
         # 용어 사전 (한영·음역·동의어) — docs/design-kb-lexicon.md §5
@@ -227,14 +230,42 @@ async def lookup_values(kb_id: str, terms: Sequence[str], kind: Optional[str] = 
                     for e in ((p.get("value_equiv") or {}).get(v.get("uri")) or []):
                         if _score(term, e.get("label", "")) >= 100:
                             hits.append({**base, "score": 95.0, "via": f"equiv:{e['label']}"})
+        # 사전·링킹으로 못 찾았고 영어 표기가 오면 → 번역 대체 단계
+        en = (terms_en or {}).get(term)
+        if en and not any(h["score"] >= lx.SCORE_STRIPPED for h in hits):
+            tr = await lx.match_translated(kb_id, idx, en)
+            for m in tr["matches"]:
+                for w in where.get(m["label"], []):
+                    hits.append({**w, "score": m["score"], "via": m["via"], "similarity": m.get("similarity")})
+            sug = []
+            for c in tr["candidates"]:
+                for w in where.get(c["label"], []):
+                    sug.append({**w, "similarity": c["similarity"], "via": c["via"]})
+            if sug:
+                suggestions[term] = _dedupe(sug)[:limit]
         hits.sort(key=lambda h: (-h["score"], -h["members"]))
         rel.sort(key=lambda h: -h["members"])
         matches[term] = _dedupe(hits)[:limit]
         related[term] = _dedupe(rel)[:limit]
     return {"schema_version": version, "matches": matches, "related": related, "narrower": narrower,
+            "suggestions": suggestions,
             "lexicon_entries": idx["entries"],
             "note": "matches 가 비면 그래프에 그 값이 없다는 뜻. narrower 는 상위 개념을 하위 값으로 푼 후보 "
-                    "(reviewed=false 는 사람 검토 전) — 푼 방식을 답변에 밝힐 것."}
+                    "(reviewed=false 는 사람 검토 전) — 푼 방식을 답변에 밝힐 것. via=translated:* 는 영어 표기 유사도로 찾은 것 "
+                    "(오탈자·처음 보는 표기). suggestions 는 확정 못 한 후보 — 질문 맥락으로 골라 쓸 것."}
+
+
+async def _prefetch_fallback(kb_id: str, idx: Dict[str, Any], terms: Sequence[str],
+                             terms_en: Optional[Dict[str, str]]) -> None:
+    """사전에 없을 것 같은 말의 영어 표기를 한 번에 임베딩 (용어별 호출 대신 1회)."""
+    from app.services.agent_query import lexicon as lx
+    if not terms_en:
+        return
+    need = [terms_en[t] for t in terms if terms_en.get(t)
+            and not any(m["score"] >= lx.SCORE_STRIPPED for m in lx.match_term(idx, t))
+            and not any(m["score"] >= lx.SCORE_STRIPPED for m in lx.match_term(idx, terms_en[t]))]
+    if need:
+        await lx.prefetch_query_vectors(kb_id, need)
 
 
 def _dedupe(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -263,7 +294,7 @@ SELECT DISTINCT ?e ?l ?alt FROM <urn:x-arq:UnionGraph> WHERE {{
 
 
 async def resolve_entities(kb_id: str, names: Sequence[str], kind: Optional[str] = None,
-                           limit: int = 5) -> Dict[str, Any]:
+                           limit: int = 5, names_en: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     from app.services.retrieval.graph_backends.fuseki import FusekiBackend
     _kb_, kinds, _cat, version = await load_catalog(kb_id)
     fb = FusekiBackend()
@@ -290,6 +321,8 @@ async def resolve_entities(kb_id: str, names: Sequence[str], kind: Optional[str]
         for l in ent["labels"]:
             label_to_uri[l] = u
     out: Dict[str, List[Dict[str, Any]]] = {}
+    suggestions: Dict[str, List[Dict[str, Any]]] = {}
+    await _prefetch_fallback(kb_id, idx, names, names_en)
     for name in [n.strip() for n in (names or []) if n and n.strip()][:20]:
         cands = []
         for m in lx.match_term(idx, name):
@@ -312,12 +345,26 @@ async def resolve_entities(kb_id: str, names: Sequence[str], kind: Optional[str]
             if best >= 60:
                 cands.append({"label": label, "kind": ent["kind"], "score": round(best, 1), "via": via,
                               "aliases": sorted(ent["aliases"])[:5]})
+        en = (names_en or {}).get(name)
+        if en and not any(c["score"] >= lx.SCORE_STRIPPED for c in cands):
+            tr = await lx.match_translated(kb_id, idx, en)
+            for m in tr["matches"]:
+                u = label_to_uri.get(m["label"])
+                if u:
+                    cands.append({"label": m["label"], "kind": by_uri[u]["kind"], "score": m["score"],
+                                  "via": m["via"], "similarity": m.get("similarity"),
+                                  "aliases": sorted(by_uri[u]["aliases"])[:5]})
+            sug = [{"label": c["label"], "kind": by_uri[label_to_uri[c["label"]]]["kind"],
+                    "similarity": c["similarity"], "via": c["via"]}
+                   for c in tr["candidates"] if c["label"] in label_to_uri]
+            if sug:
+                suggestions[name] = sug
         best: Dict[str, Dict[str, Any]] = {}
         for c in cands:
             if c["label"] not in best or c["score"] > best[c["label"]]["score"]:
                 best[c["label"]] = c
         out[name] = sorted(best.values(), key=lambda c: -c["score"])[:limit]
-    return {"schema_version": version, "entities": out,
+    return {"schema_version": version, "entities": out, "suggestions": suggestions,
             "note": "비어 있으면 그 이름의 엔티티가 그래프에 없다. 영문·한글 표기를 바꿔 다시 시도하거나 search 를 쓴다."}
 
 

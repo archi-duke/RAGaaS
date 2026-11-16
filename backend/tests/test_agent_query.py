@@ -116,3 +116,20 @@ def test_rejected_broader_ignored():
     e = _e("변경 용이성", broader=["유지보수성"])
     e.broader[0]["status"] = "rejected"
     assert lx.narrower_of(lx.build_index([e]), "유지보수성") == []
+
+
+def test_english_forms_for_translated_fallback():
+    fm = lx.english_forms([
+        _e("하이젠베르크", en=["Heisenberg", "Werner Heisenberg"]),
+        _e("Microservices", ko=["마이크로서비스"], syn=["MSA", "마이크로서비스 아키텍처"]),
+        _e("circuit_breaker", en=["circuit breaker"]),
+        _e("단순 CRUD에 포트/어댑터 도입은 과설계", en=["over-engineering for simple CRUD"]),
+        _e("deployability", ko=["배포 가능성"]),
+        _e("배포성", en=["deployability", "ease of deployment"], concept_only=True),
+    ])
+    assert fm["Heisenberg"] == {"하이젠베르크"} and fm["Werner Heisenberg"] == {"하이젠베르크"}
+    assert fm["Microservices"] == {"Microservices"} and fm["MSA"] == {"Microservices"}
+    assert "마이크로서비스 아키텍처" not in fm                       # 한글 동의어는 영어 표기 아님
+    assert fm["circuit breaker"] == {"circuit_breaker"}               # snake_case → 띄어쓰기
+    assert not any("CRUD" in f for f in fm)                           # 설명형 라벨 제외
+    assert fm["ease of deployment"] == {"deployability"}              # 상위 개념 항목이 빌려준 영어 표기

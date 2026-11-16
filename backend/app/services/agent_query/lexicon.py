@@ -229,6 +229,10 @@ async def build_lexicon(kb_id: str, rebuild: bool = False) -> Dict[str, Any]:
         cb = [concepts[i:i + BATCH] for i in range(0, len(concepts), BATCH)]
         await asyncio.gather(*(run(b, True) for b in cb))
         invalidate(kb_id)
+        try:
+            await _en_matrix(kb_id)         # 번역 대체 단계용 영어 표기 벡터를 미리 (첫 검색이 느리지 않게)
+        except Exception as e:
+            logger.warning("lexicon en vectors prewarm failed: %s", e)
         st.update(state="done", finished_at=time.time(), labels=len(labels), generated=len(todo), concepts=len(concepts))
         return dict(st)
     except Exception as e:
@@ -247,6 +251,7 @@ def build_status(kb_id: str) -> Dict[str, Any]:
 
 def invalidate(kb_id: str) -> None:
     _INDEX_CACHE.pop(kb_id, None)
+    _EN_CACHE.pop(kb_id, None)
 
 
 async def get_index(kb_id: str) -> Dict[str, Any]:
@@ -344,3 +349,140 @@ async def duplicates(kb_id: str) -> List[Dict[str, Any]]:
         if len(strong) >= 2:
             groups.setdefault(tuple(strong), set()).add(norm)
     return [{"labels": list(k), "shared": sorted(v)[:5]} for k, v in sorted(groups.items(), key=lambda x: -len(x[1]))]
+
+
+# ---------------------------------------------------------------------------
+# 번역 대체 단계 — 사전에 없을 때, 클라이언트가 보낸 영어 표기(term_en)를 영어 표기 임베딩과 비교
+# docs/design-kb-lexicon.md §5.1
+# ---------------------------------------------------------------------------
+
+EN_SIM_THRESHOLD = 0.80     # 이 이상이면 후보 (홀드아웃·negative 로 정함)
+EN_SIM_MARGIN = 0.03        # 1위 라벨이 2위 라벨보다 이만큼 높아야 확정 (아니면 후보만)
+SCORE_TRANSLATED = 80.0
+
+_EN_CACHE: Dict[str, Tuple[float, Any]] = {}
+
+
+def _is_ascii_word(s: str) -> bool:
+    t = (s or "").strip()
+    return bool(t) and all(ord(c) < 0x250 for c in t) and any(c.isalpha() for c in t)
+
+
+def english_forms(entries: Sequence[Any]) -> Dict[str, Set[str]]:
+    """영어 표기 → 라벨 집합. 영문 라벨 자체 + en 별칭 + 영문 동의어 (+ 상위 개념 항목이 빌려준 영어 표기)."""
+    real = {e.norm: e for e in entries if not e.concept_only}
+    forms: Dict[str, Set[str]] = {}
+
+    def add(f: str, lab: str):
+        f = (f or "").strip().replace("_", " ")
+        if _is_ascii_word(f) and len(f) <= 60:
+            forms.setdefault(f, set()).add(lab)
+
+    for e in entries:
+        if e.concept_only:
+            continue
+        if len((e.label or "").split()) >= 4:      # 설명형 라벨은 제외 (색인 규칙과 같음)
+            continue
+        for lab in [e.label] + list(e.variants or []):
+            add(lab, lab)
+            if e.skip:
+                continue
+            for x in list(e.en) + [s for s in e.syn if _is_ascii_word(s)]:
+                add(x, lab)
+    for e in entries:
+        if not e.concept_only:
+            continue
+        all_forms = [e.label] + e.ko + e.en + e.syn
+        for a in all_forms:
+            tgt = real.get(_compact(a))
+            if tgt is not None:
+                for x in all_forms:
+                    add(x, tgt.label)
+    return forms
+
+
+async def _en_matrix(kb_id: str):
+    """(forms, labels_per_form, 정규화된 임베딩 행렬) — 사전 빌드 후 첫 사용 때 계산해 캐시."""
+    import numpy as np
+    cached = _EN_CACHE.get(kb_id)
+    if cached and time.time() - cached[0] < 24 * 3600:     # 사전 빌드·편집 때 invalidate 로 비움
+        return cached[1]
+    from app.models.lexicon import KbLexiconEntry
+    from app.services.agent_query.catalog import _kb
+    from app.services.embedding import get_embedding_service
+    entries = await KbLexiconEntry.find({"kb_id": kb_id}).to_list()
+    fm = english_forms(entries)
+    forms = sorted(fm)
+    if not forms:
+        val = ([], [], None)
+    else:
+        emb = await get_embedding_service(await _kb(kb_id))
+        vecs = []
+        for i in range(0, len(forms), 500):
+            vecs.extend(await emb.get_embeddings(forms[i:i + 500]))
+        m = np.array(vecs, dtype="float32")
+        m /= np.linalg.norm(m, axis=1, keepdims=True) + 1e-9
+        val = (forms, [sorted(fm[f]) for f in forms], m)
+    _EN_CACHE[kb_id] = (time.time(), val)
+    return val
+
+
+_QVEC: Dict[Tuple[str, str], Tuple[float, Any]] = {}
+
+
+async def prefetch_query_vectors(kb_id: str, texts: Sequence[str]) -> None:
+    """번역 대체 단계에 쓸 질의 벡터를 한 번에 계산해 둔다 (용어마다 따로 부르면 용어 수 × 0.2~0.3초)."""
+    import numpy as np
+    now = time.time()
+    need = [t for t in dict.fromkeys(x.strip() for x in texts if x and x.strip())
+            if not ((kb_id, t) in _QVEC and now - _QVEC[(kb_id, t)][0] < 600)]
+    if not need:
+        return
+    from app.services.agent_query.catalog import _kb
+    from app.services.embedding import get_embedding_service
+    emb = await get_embedding_service(await _kb(kb_id))
+    vecs = await emb.get_embeddings(need)
+    for t, v in zip(need, vecs):
+        q = np.array(v, dtype="float32")
+        _QVEC[(kb_id, t)] = (now, q / (np.linalg.norm(q) + 1e-9))
+    if len(_QVEC) > 5000:
+        for k in sorted(_QVEC, key=lambda k: _QVEC[k][0])[:1000]:
+            _QVEC.pop(k, None)
+
+
+async def match_translated(kb_id: str, idx: Dict[str, Any], term_en: str, top: int = 3) -> Dict[str, Any]:
+    """영어 표기로 찾기: ① 사전 정확 일치 → ② 영어 표기 임베딩 유사도.
+
+    반환 {"matches": [...확정...], "candidates": [...후보...]} — 확정은 기준·차이를 모두 넘을 때만.
+    """
+    import numpy as np
+    term_en = (term_en or "").strip()
+    if not term_en:
+        return {"matches": [], "candidates": []}
+    exact = [m for m in match_term(idx, term_en) if m["score"] >= SCORE_STRIPPED]
+    if exact:
+        return {"matches": [{**m, "score": min(m["score"], 95.0), "via": f"en:{m['via']}"} for m in exact],
+                "candidates": []}
+    forms, labs, m = await _en_matrix(kb_id)
+    if m is None:
+        return {"matches": [], "candidates": []}
+    await prefetch_query_vectors(kb_id, [term_en])
+    q = _QVEC[(kb_id, term_en)][1]
+    sims = m @ q
+    # 라벨별 최고 유사도
+    best: Dict[str, Tuple[float, str]] = {}
+    for j in np.argsort(-sims)[:50]:
+        for lab in labs[j]:
+            if lab not in best:
+                best[lab] = (float(sims[j]), forms[j])
+    ranked = sorted(best.items(), key=lambda x: -x[1][0])
+    cands = [{"label": l, "similarity": round(s, 3), "via": f"translated:{f}"} for l, (s, f) in ranked[:top]
+             if s >= EN_SIM_THRESHOLD - 0.1]
+    if ranked and ranked[0][1][0] >= EN_SIM_THRESHOLD:
+        s1 = ranked[0][1][0]
+        s2 = ranked[1][1][0] if len(ranked) > 1 else 0.0
+        if s1 - s2 >= EN_SIM_MARGIN:
+            l, (s, f) = ranked[0]
+            return {"matches": [{"label": l, "score": SCORE_TRANSLATED, "similarity": round(s, 3),
+                                 "via": f"translated:{f}"}], "candidates": cands}
+    return {"matches": [], "candidates": cands}

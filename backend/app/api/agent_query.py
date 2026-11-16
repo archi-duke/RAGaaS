@@ -7,7 +7,7 @@ import asyncio
 import os
 import re
 import time
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -19,12 +19,15 @@ router = APIRouter()
 
 class ValuesRequest(BaseModel):
     terms: List[str] = Field(..., description="질문 속 말 (예: ['수정 용이성', '유지보수성'])")
+    terms_en: Dict[str, str] = Field(default_factory=dict,
+                                     description="말 → 영어 표기 (클라이언트가 오탈자를 고쳐 번역). 사전에 없을 때만 쓰임")
     kind: Optional[str] = None
     limit: int = 8
 
 
 class EntitiesRequest(BaseModel):
     names: List[str]
+    names_en: Dict[str, str] = Field(default_factory=dict, description="이름 → 영어 표기 (사전에 없을 때만 쓰임)")
     kind: Optional[str] = None
     limit: int = 5
 
@@ -53,7 +56,7 @@ async def agent_describe(kb_id: str, kinds: Optional[str] = None, max_values: in
 async def agent_values(kb_id: str, req: ValuesRequest):
     """② 말 → 경로별 값 후보."""
     t = time.time()
-    out = await catalog.lookup_values(kb_id, req.terms, req.kind, max(1, min(req.limit, 30)))
+    out = await catalog.lookup_values(kb_id, req.terms, req.kind, max(1, min(req.limit, 30)), req.terms_en)
     out["elapsed_ms"] = int((time.time() - t) * 1000)
     return out
 
@@ -62,7 +65,7 @@ async def agent_values(kb_id: str, req: ValuesRequest):
 async def agent_entities(kb_id: str, req: EntitiesRequest):
     """② 이름 → 유형 멤버 엔티티."""
     t = time.time()
-    out = await catalog.resolve_entities(kb_id, req.names, req.kind, max(1, min(req.limit, 20)))
+    out = await catalog.resolve_entities(kb_id, req.names, req.kind, max(1, min(req.limit, 20)), req.names_en)
     out["elapsed_ms"] = int((time.time() - t) * 1000)
     return out
 

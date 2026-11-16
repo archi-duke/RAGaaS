@@ -24,7 +24,7 @@ def main():
     ap.add_argument("--base", default="http://localhost:44300/ragaas/api/v2")
     ap.add_argument("--kb", default=None)
     ap.add_argument("--data", default=DATA, help="평가 세트 (기본 lexicon-eval.json, 홀드아웃은 lexicon-eval-holdout.json)")
-    ap.add_argument("--min-score", type=float, default=90.0, help="이 점수 이상만 '일치' 로 셈")
+    ap.add_argument("--min-score", type=float, default=80.0, help="이 점수 이상만 '일치' 로 셈 (번역 대체 단계 80 포함)")
     a = ap.parse_args()
     data = json.load(open(a.data))
     by_kb = defaultdict(list)
@@ -42,8 +42,9 @@ def main():
         ents = {"entities": {}, "elapsed_ms": 0}
         for i in range(0, len(terms), 20):
             part = terms[i:i + 20]
-            v = post(f"{base}/values", {"terms": part, "limit": 20})
-            e = post(f"{base}/entities", {"names": part, "limit": 10})
+            en = {it["term"]: it["term_en"] for it in items if it.get("term_en") and it["term"] in part}
+            v = post(f"{base}/values", {"terms": part, "limit": 20, "terms_en": en})
+            e = post(f"{base}/entities", {"names": part, "limit": 10, "names_en": en})
             vals["matches"].update(v["matches"]); vals["narrower"].update(v.get("narrower", {}))
             vals["elapsed_ms"] = max(vals["elapsed_ms"], v["elapsed_ms"]); vals["lexicon_entries"] = v.get("lexicon_entries")
             ents["entities"].update(e["entities"]); ents["elapsed_ms"] = max(ents["elapsed_ms"], e["elapsed_ms"])

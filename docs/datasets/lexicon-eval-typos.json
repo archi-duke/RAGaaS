@@ -1,0 +1,330 @@
+{
+ "_doc": "오탈자·번역 대체 단계 평가 (docs/design-kb-lexicon.md §5.1). term_en 은 클라이언트 에이전트가 보낼 영어 표기(오탈자 교정 포함). negative 는 영어 표기를 줘도 아무것도 확정되면 안 됨.",
+ "kbs": {
+  "test-ontology2": "f220990a-25a5-47a8-8562-7c4c7264c9eb",
+  "test-ontology": "406b0eeb-8002-4a3f-8368-c580d397fa89",
+  "test-ontology3": "4ec88353-f9fb-4142-93bb-9f08bbfa77b9"
+ },
+ "items": [
+  {
+   "kb": "test-ontology2",
+   "type": "typo",
+   "term": "헥사고널",
+   "term_en": "Hexagonal",
+   "expect": [
+    "Hexagonal 아키텍처"
+   ]
+  },
+  {
+   "kb": "test-ontology2",
+   "type": "typo",
+   "term": "마이크로써비스",
+   "term_en": "Microservices",
+   "expect": [
+    "Microservices"
+   ]
+  },
+  {
+   "kb": "test-ontology2",
+   "type": "typo",
+   "term": "가용썽",
+   "term_en": "Availability",
+   "expect": [
+    "Availability"
+   ]
+  },
+  {
+   "kb": "test-ontology2",
+   "type": "typo",
+   "term": "변경 용의성",
+   "term_en": "Modifiability",
+   "expect": [
+    "변경 용이성"
+   ]
+  },
+  {
+   "kb": "test-ontology2",
+   "type": "typo",
+   "term": "Mircoservices",
+   "term_en": "Microservices",
+   "expect": [
+    "Microservices"
+   ]
+  },
+  {
+   "kb": "test-ontology2",
+   "type": "typo",
+   "term": "Serverles",
+   "term_en": "Serverless",
+   "expect": [
+    "Serverless"
+   ]
+  },
+  {
+   "kb": "test-ontology2",
+   "type": "typo",
+   "term": "레이어드 스탈",
+   "term_en": "Layered style",
+   "expect": [
+    "Layered 스타일"
+   ]
+  },
+  {
+   "kb": "test-ontology2",
+   "type": "typo",
+   "term": "관측썽",
+   "term_en": "Observability",
+   "expect": [
+    "관측성"
+   ]
+  },
+  {
+   "kb": "test-ontology2",
+   "type": "typo",
+   "term": "클린 아키텍쳐",
+   "term_en": "Clean Architecture",
+   "expect": [
+    "Clean Architecture",
+    "clean-architecture"
+   ]
+  },
+  {
+   "kb": "test-ontology2",
+   "type": "typo",
+   "term": "이밴트 드리븐",
+   "term_en": "Event-Driven",
+   "expect": [
+    "Event Driven Architecture",
+    "Event-Driven Architecture"
+   ]
+  },
+  {
+   "kb": "test-ontology2",
+   "type": "typo",
+   "term": "모듈라 모놀리스",
+   "term_en": "Modular Monolith",
+   "expect": [
+    "Modular Monolith"
+   ]
+  },
+  {
+   "kb": "test-ontology2",
+   "type": "typo",
+   "term": "확장썽",
+   "term_en": "Scalability",
+   "expect": [
+    "확장성"
+   ]
+  },
+  {
+   "kb": "test-ontology",
+   "type": "typo",
+   "term": "써킷 브레이커",
+   "term_en": "Circuit breaker",
+   "expect": [
+    "circuit_breaker"
+   ]
+  },
+  {
+   "kb": "test-ontology",
+   "type": "typo",
+   "term": "테스트 용의성",
+   "term_en": "Testability",
+   "expect": [
+    "testability"
+   ]
+  },
+  {
+   "kb": "test-ontology",
+   "type": "typo",
+   "term": "아웃바운드 패턴",
+   "term_en": "Outbox pattern",
+   "expect": [
+    "outbox_pattern"
+   ]
+  },
+  {
+   "kb": "test-ontology",
+   "type": "typo",
+   "term": "멱등썽",
+   "term_en": "Idempotency",
+   "expect": [
+    "idempotency"
+   ]
+  },
+  {
+   "kb": "test-ontology",
+   "type": "typo",
+   "term": "서버리쓰",
+   "term_en": "Serverless",
+   "expect": [
+    "serverless",
+    "Serverless (FaaS)"
+   ]
+  },
+  {
+   "kb": "test-ontology",
+   "type": "typo",
+   "term": "분산 트레이씽",
+   "term_en": "Distributed tracing",
+   "expect": [
+    "distributed_tracing"
+   ]
+  },
+  {
+   "kb": "test-ontology3",
+   "type": "typo",
+   "term": "아인슈타잉",
+   "term_en": "Albert Einstein",
+   "expect": [
+    "아인슈타인"
+   ]
+  },
+  {
+   "kb": "test-ontology3",
+   "type": "typo",
+   "term": "하이젠베르그",
+   "term_en": "Heisenberg",
+   "expect": [
+    "하이젠베르크"
+   ]
+  },
+  {
+   "kb": "test-ontology3",
+   "type": "typo",
+   "term": "Einstien",
+   "term_en": "Einstein",
+   "expect": [
+    "아인슈타인"
+   ]
+  },
+  {
+   "kb": "test-ontology3",
+   "type": "typo",
+   "term": "Heisenburg",
+   "term_en": "Heisenberg",
+   "expect": [
+    "하이젠베르크"
+   ]
+  },
+  {
+   "kb": "test-ontology3",
+   "type": "typo",
+   "term": "슈레딩거",
+   "term_en": "Schrödinger",
+   "expect": [
+    "슈뢰딩거"
+   ]
+  },
+  {
+   "kb": "test-ontology3",
+   "type": "typo",
+   "term": "광전 효가",
+   "term_en": "Photoelectric effect",
+   "expect": [
+    "광전 효과",
+    "광전효과",
+    "광전 효과 실험"
+   ]
+  },
+  {
+   "kb": "test-ontology3",
+   "type": "typo",
+   "term": "플랑그",
+   "term_en": "Planck",
+   "expect": [
+    "플랑크"
+   ]
+  },
+  {
+   "kb": "test-ontology3",
+   "type": "typo",
+   "term": "맥스엘 방정식",
+   "term_en": "Maxwell's equations",
+   "expect": [
+    "맥스웰 방정식"
+   ]
+  },
+  {
+   "kb": "test-ontology3",
+   "type": "typo",
+   "term": "불확졍성 원리",
+   "term_en": "Uncertainty principle",
+   "expect": [
+    "불확정성 원리"
+   ]
+  },
+  {
+   "kb": "test-ontology3",
+   "type": "typo",
+   "term": "코펜하겐 헤석",
+   "term_en": "Copenhagen interpretation",
+   "expect": [
+    "코펜하겐 해석"
+   ]
+  },
+  {
+   "kb": "test-ontology2",
+   "type": "negative",
+   "term": "블록체인",
+   "term_en": "Blockchain",
+   "expect": []
+  },
+  {
+   "kb": "test-ontology2",
+   "type": "negative",
+   "term": "머신러닝",
+   "term_en": "Machine learning",
+   "expect": []
+  },
+  {
+   "kb": "test-ontology2",
+   "type": "negative",
+   "term": "데이터 레이크",
+   "term_en": "Data lake",
+   "expect": []
+  },
+  {
+   "kb": "test-ontology",
+   "type": "negative",
+   "term": "양자역학",
+   "term_en": "Quantum mechanics",
+   "expect": []
+  },
+  {
+   "kb": "test-ontology",
+   "type": "negative",
+   "term": "쿠버네티스 오퍼레이터",
+   "term_en": "Kubernetes operator",
+   "expect": []
+  },
+  {
+   "kb": "test-ontology3",
+   "type": "negative",
+   "term": "다윈",
+   "term_en": "Darwin",
+   "expect": []
+  },
+  {
+   "kb": "test-ontology3",
+   "type": "negative",
+   "term": "도커",
+   "term_en": "Docker",
+   "expect": []
+  },
+  {
+   "kb": "test-ontology3",
+   "type": "negative",
+   "term": "마이크로서비스",
+   "term_en": "Microservices",
+   "expect": []
+  },
+  {
+   "kb": "test-ontology3",
+   "type": "negative",
+   "term": "진화론",
+   "term_en": "Theory of evolution",
+   "expect": []
+  }
+ ]
+}
