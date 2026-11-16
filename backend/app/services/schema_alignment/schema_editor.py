@@ -1054,7 +1054,10 @@ async def edit_triples(kb_id: str, action: str, triples: List[Dict[str, str]],
                        target_property: Optional[str] = None,
                        new_property: Optional[Dict[str, Any]] = None,
                        origin: Optional[str] = None) -> Dict[str, Any]:
-    """선택한 트리플을 다른 관계로 이동(move), 삭제(delete), 방향 뒤집기(flip). new_property 를 주면 그 관계를 스키마에 만들고 이동.
+    """선택한 트리플을 다른 관계로 이동(move), 삭제(delete), 방향 뒤집기(flip), 추가(add). new_property 를 주면 그 관계를 스키마에 만들고 이동.
+
+    add: 원문에 있는데 추출이 놓친 사실을 고정한다 — 트리플마다 source(근거 청크 ID)·doc_id 필수, year 선택.
+    규칙으로 남아 리플레이·재추출 뒤에도 유지된다 (target_path="@add").
 
     triple 규칙: pair=[주어, 관계, 목적어](그래프 표기), target_path=이동할 관계 (삭제면 None). 같은 트리플의 기존 규칙은 덮는다.
     """
@@ -1063,7 +1066,7 @@ async def edit_triples(kb_id: str, action: str, triples: List[Dict[str, str]],
     kb = await KnowledgeBase.get(kb_id)
     if not kb or kb.schema_source not in EDITABLE_SOURCES:
         raise SchemaEditError(["텍스트(승격) KB 에서만 트리플을 편집할 수 있습니다 — 구조화 KB 는 YAML 원본에서"])
-    if action not in ("move", "delete", "flip"):
+    if action not in ("move", "delete", "flip", "add"):
         raise SchemaEditError([f"알 수 없는 동작: {action}"])
     ind = (kb.promotion_metadata or {}).get("induction") or {}
     names = {p["name"] for p in ind.get("properties") or []}
@@ -1085,6 +1088,12 @@ async def edit_triples(kb_id: str, action: str, triples: List[Dict[str, str]],
     rows = [t for t in triples if t.get("subject") and t.get("predicate") and t.get("object")]
     if not rows:
         raise SchemaEditError(["선택한 트리플이 없습니다"])
+    if action == "add":
+        errs = [f"'{t['predicate']}' 은 스키마 관계가 아닙니다" for t in rows if t["predicate"] not in names]
+        errs += [f"근거 청크(source)·문서(doc_id)가 필요합니다: {t['subject']} {t['predicate']} {t['object']}"
+                 for t in rows if not (t.get("source") and t.get("doc_id"))]
+        if errs:
+            raise SchemaEditError(errs[:5])
     n = 0
     for t in rows:
         pair = [t["subject"], t["predicate"], t["object"]]
@@ -1092,13 +1101,19 @@ async def edit_triples(kb_id: str, action: str, triples: List[Dict[str, str]],
             continue
         r = await SchemaMappingRule.find_one(SchemaMappingRule.kb_id == kb_id, SchemaMappingRule.rule_type == "triple",
                                              SchemaMappingRule.pair == pair)
-        tgt = target_property if action == "move" else ("@flip" if action == "flip" else None)
+        tgt = {"move": target_property, "flip": "@flip", "add": "@add"}.get(action)
+        extra = {}
+        if action == "add":
+            extra = {"source_value": t["source"], "scope_paths": [t["doc_id"]],
+                     "target_value": str(int(t["year"])) if str(t.get("year") or "").isdigit() else None}
         if r:
             r.target_path, r.status = tgt, "active"
+            for k, v in extra.items():
+                setattr(r, k, v)
             await r.save()
         else:
             await SchemaMappingRule(kb_id=kb_id, rule_type="triple", pair=pair, target_path=tgt,
-                                    origin=origin or f"schema_editor:triple_{action}").insert()
+                                    origin=origin or f"schema_editor:triple_{action}", **extra).insert()
         n += 1
     kb = await KnowledgeBase.get(kb_id)
     kb.schema_rules_version = (kb.schema_rules_version or 0) + 1

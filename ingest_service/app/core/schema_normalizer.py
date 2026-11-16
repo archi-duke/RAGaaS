@@ -372,8 +372,33 @@ def apply_year_split(t: Dict[str, Any]) -> bool:
 # 트리플 리플레이 (텍스트/LLM 추출 그래프의 ABox 재구성 — docs/design-graph-promotion.md §3(c))
 # ---------------------------------------------------------------------------
 
+def _added_triples(rules: List[Dict[str, Any]], triples: List[Dict[str, Any]],
+                   doc_id: Optional[str]) -> List[Dict[str, Any]]:
+    """'트리플 추가' 규칙(@add) → 이 문서에 넣을 트리플. 사람이 원문(청크)을 확인해 고정한 사실이라
+    추출 편차·도메인 검사로 빠져도 리플레이·재추출 뒤에 다시 들어간다.
+    규칙: pair=[주어, 관계, 목적어], source_value=근거 청크 ID, scope_paths=[문서 ID], target_value=연도(선택)."""
+    chunks = {t.get("source_node_id") for t in triples}
+    out = []
+    for r in rules:
+        if r.get("rule_type") != "triple" or r.get("target_path") != "@add" or not r.get("pair") or len(r["pair"]) != 3:
+            continue
+        scope = [x for x in (r.get("scope_paths") or []) if x and x != "*"]
+        if doc_id is not None and scope:
+            if doc_id not in scope:
+                continue
+        elif r.get("source_value") not in chunks:
+            continue
+        s_, p_, o_ = r["pair"]
+        t = {"subject": s_, "predicate": p_, "object": o_, "source_node_id": r.get("source_value"),
+             "confidence": 1.0, "out_of_schema": False, "extraction": "user_added", "edited": "added"}
+        if str(r.get("target_value") or "").isdigit():
+            t["year"] = int(r["target_value"])
+        out.append(t)
+    return out
+
+
 def apply_rules_to_triples(
-    triples: List[Dict[str, Any]], rules: Optional[List[Dict[str, Any]]]
+    triples: List[Dict[str, Any]], rules: Optional[List[Dict[str, Any]]], doc_id: Optional[str] = None
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """평면 트리플(LLM 추출)에 KB 규칙을 결정적으로 적용한 새 목록과 보고서.
 
@@ -414,14 +439,16 @@ def apply_rules_to_triples(
     # "@flip" 이면 같은 관계로 주어·목적어를 뒤집는다.
     triple_map = {}
     for r in active:
-        if r.get("rule_type") == "triple" and r.get("pair") and len(r["pair"]) == 3:
+        if r.get("rule_type") == "triple" and r.get("pair") and len(r["pair"]) == 3 and r.get("target_path") != "@add":
             s_, p_, o_ = r["pair"]
             # 트리플 규칙의 주어·목적어도 이름 규칙을 거친 표기로 맞춘다 — 나중에 병합이 생겨도
             # 앞서 한 뒤집기·이동·삭제가 조용히 풀리지 않게 (예: 뒤집기 규칙 '파울리|지도교수_of|조머펠트' 뒤에
             # '조머펠트 → 아르놀드 조머펠트' 병합)
             triple_map[(compact(_resolve(s_)), compact(p_), compact(_resolve(o_)))] = r.get("target_path") or None
 
-    counts = {"year": 0, "entity": 0, "key": 0, "value": 0, "class": 0, "triple_moved": 0, "triple_deleted": 0, "triple_flipped": 0}
+    added = _added_triples(active, triples, doc_id)
+    triples = list(triples) + added
+    counts = {"added": len(added), "year": 0, "entity": 0, "key": 0, "value": 0, "class": 0, "triple_moved": 0, "triple_deleted": 0, "triple_flipped": 0}
     out: List[Dict[str, Any]] = []
     seen = set()
     for t in triples:

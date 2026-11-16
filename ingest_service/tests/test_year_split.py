@@ -50,3 +50,20 @@ def test_extraction_year_grounding():
     out = parse_response({"triples": [{"subject": "크뢰벨", "predicate": "저술함", "object": "『열과 일의 정밀측정』", "year": 1872}]},
                          "c1", {"저술함"}, None, text)
     assert out[0]["year"] == 1872
+
+
+def test_add_rule_survives_replay_and_scopes_to_doc():
+    raw = [{"subject": "피르나우", "predicate": "수행함", "object": "피르나우 저온 흑체 측정", "source_node_id": "c9"}]
+    rules = [{"rule_type": "triple", "pair": ["피르나우 저온 흑체 측정", "기반함", "크뢰벨 보정"], "target_path": "@add",
+              "source_value": "c9", "scope_paths": ["docA"], "target_value": None},
+             {"rule_type": "class", "source_value": "크뢰벨 보정", "target_value": "TheoryOrConcept"}]
+    out, rep = apply_rules_to_triples(raw, rules, "docA")
+    add = [t for t in out if t.get("edited") == "added"]
+    assert rep["counts"]["added"] == 1 and add[0]["source_node_id"] == "c9" and add[0]["object_type"] == "TheoryOrConcept"
+    assert apply_rules_to_triples(raw, rules, "docB")[1]["counts"]["added"] == 0     # 다른 문서엔 안 넣음
+    # 추출이 같은 트리플을 이미 냈으면 중복으로 넣지 않는다
+    dup = raw + [{"subject": "피르나우 저온 흑체 측정", "predicate": "기반함", "object": "크뢰벨 보정", "source_node_id": "c9"}]
+    out2, _ = apply_rules_to_triples(dup, rules, "docA")
+    assert sum(1 for t in out2 if t["predicate"] == "기반함") == 1
+    # @add 규칙은 이동 규칙으로 오해하지 않는다
+    assert all(t["predicate"] != "@add" for t in out)

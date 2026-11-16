@@ -552,7 +552,7 @@ async def replay_triples(request: ReplayRequest):
         _shutil.copyfile(cur_path, raw_path)   # 최초 1회 불변 사본
     with open(raw_path, encoding="utf-8") as f:
         raw = _json.load(f)
-    triples, report = apply_rules_to_triples(raw, request.schema_rules)
+    triples, report = apply_rules_to_triples(raw, request.schema_rules, request.doc_id)
 
     if request.graph_store == "fuseki":
         await fuseki_connector.delete_by_doc_id(request.kb_id, request.doc_id)
@@ -606,7 +606,7 @@ async def reextract(request: ReextractRequest):
     with open(raw, "w", encoding="utf-8") as f:
         _json.dump(triples, f, ensure_ascii=False)
 
-    applied, report = apply_rules_to_triples(triples, request.schema_rules)
+    applied, report = apply_rules_to_triples(triples, request.schema_rules, request.doc_id)
     if request.graph_store == "fuseki":
         await fuseki_connector.delete_by_doc_id(request.kb_id, request.doc_id)
         await fuseki_connector.insert_triples(request.kb_id, request.doc_id, applied, generate_inverse=False)
@@ -646,7 +646,7 @@ async def reextract_preview(request: ReextractPreviewRequest):
     if not chunks:
         raise HTTPException(status_code=404, detail="해당 청크를 찾지 못했습니다")
     triples, stats = await reextract_chunks(chunks, request.schema_spec, request.llm)
-    applied, report = apply_rules_to_triples(triples, request.schema_rules)
+    applied, report = apply_rules_to_triples(triples, request.schema_rules, request.doc_id)
     return {"doc_id": request.doc_id, "chunks": [c.get("node_id") for c in chunks], "triples": applied,
             "stats": stats, "after_rules": report}
 
