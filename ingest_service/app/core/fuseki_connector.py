@@ -88,6 +88,9 @@ class FusekiConnector:
                 # 트리플을 고유하게 식별할 수 있는 URI 생성
                 import hashlib
                 triple_key = f"{t.get('subject', '')}|{t.get('predicate', '')}|{t.get('object', '')}"
+                year = t.get("year")
+                if year is not None:
+                    triple_key += f"|{int(year)}"   # 연도가 다르면 진술 노드를 따로 둔다 (D4 §3.1)
                 triple_hash = hashlib.sha256(triple_key.encode()).hexdigest()[:16]
                 stmt_uri = f"<http://rag.local/stmt/{triple_hash}>"
                 
@@ -102,6 +105,12 @@ class FusekiConnector:
                 rdf_lines.append(f'{stmt_uri} <http://rag.local/meta/sourceNodeId> {source_node_id_literal} .')
                 rdf_lines.append(f'{stmt_uri} <http://rag.local/meta/docId> "{doc_id}" .')
                 
+                # 진술 연도 (D4): 정수 연도 + 원문 표기
+                if year is not None:
+                    rdf_lines.append(f'{stmt_uri} <http://rag.local/meta/year> "{int(year)}"^^<http://www.w3.org/2001/XMLSchema#integer> .')
+                    if t.get("year_text"):
+                        rdf_lines.append(f'{stmt_uri} <http://rag.local/meta/yearText> {json.dumps(str(t["year_text"]), ensure_ascii=False)} .')
+
                 # Confidence 추가
                 confidence = t.get("confidence")
                 if confidence is not None:

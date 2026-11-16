@@ -344,6 +344,13 @@ async def process_ingest_job(job_id: str, request: IngestRequest):
                 result.setdefault("schema_report", {"applied": [], "auto": [], "merged": []})["applied"].append(
                     {"rule_id": None, "count": n_pred, "source": "predicate", "target": "rules"})
 
+        # 4.91 텍스트 문서: 값에 붙은 연도를 진술 연도로 분리 (D4 Y1, 결정적 — 규칙 유무와 무관)
+        if not _is_structured_file(request.file_path) and result.get("triples"):
+            from app.core.schema_normalizer import apply_year_split
+            n_year = sum(1 for t in result["triples"] if apply_year_split(t))
+            if n_year:
+                print(f"[IngestJob] 연도 분리 {n_year}건")
+
         # 4.95 재정규화(텍스트 문서): 추출이 성공한 뒤에 기존 데이터를 지운다 (실패 시 기존 데이터 유지)
         if request.replace_existing and not _is_structured_file(request.file_path):
             await _delete_existing_doc_data(request)

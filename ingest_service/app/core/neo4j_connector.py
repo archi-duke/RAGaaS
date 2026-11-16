@@ -76,7 +76,7 @@ class Neo4jConnector:
                 WITH _s AS s, o
                 CALL apoc.create.addLabels(o, $obj_labels) YIELD node AS _o
                 WITH s, _o AS o
-                CALL apoc.merge.relationship(s, $pred, {}, $props, o, $props) YIELD rel
+                CALL apoc.merge.relationship(s, $pred, $ident, $props, o, $props) YIELD rel
                 SET rel.source_node_id = $source_node_id
                 SET rel.doc_id = $doc_id
                 RETURN rel
@@ -88,6 +88,13 @@ class Neo4jConnector:
                     "is_inverse": triple.get("is_inverse", False),
                     "source_node_id": source_node_id,
                 }
+                # 진술 연도 (D4): 연도가 다르면 다른 관계로 둔다 (같은 상을 두 번 수상)
+                ident = {}
+                if triple.get("year") is not None:
+                    ident = {"year": int(triple["year"])}
+                    props["year"] = int(triple["year"])
+                    if triple.get("year_text"):
+                        props["year_text"] = triple["year_text"]
 
                 self.execute_query(query, {
                     "subj": subject,
@@ -95,6 +102,7 @@ class Neo4jConnector:
                     "pred": predicate,
                     "kb_id": kb_id,
                     "props": props,
+                    "ident": ident,
                     "source_node_id": source_node_id,
                     "doc_id": doc_id,
                     "subj_labels": subj_labels,

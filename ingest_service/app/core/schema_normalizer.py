@@ -315,6 +315,60 @@ def apply_to_triples(triples: List[Dict[str, Any]], rules: Optional[List[Dict[st
 
 
 # ---------------------------------------------------------------------------
+# 연도 분리 (데이터 품질 D4 Y1 — docs/design-year-attributes.md §3.2)
+# ---------------------------------------------------------------------------
+
+_YEAR_MIN, _YEAR_MAX = 1000, 2100
+# 'X (1933년)', 'X(1939)', '『…』 (1638년 출간)', '프린시페섬(1919년 일식)'
+_RE_YEAR_PAREN = re.compile(r"^(?P<base>.+?)\s*\((?P<text>(?P<y>\d{4})년?(?:\s*[가-힣]{1,4})?)\)$")
+# '기체 분자 속도 분포, 1860년'
+_RE_YEAR_COMMA = re.compile(r"^(?P<base>.+?),\s*(?P<text>(?P<y>\d{4})년)$")
+# '1908년 쾰른 강연', '1919년 11월 런던 …', '1900년 12월 14일 …'
+_RE_YEAR_LEAD = re.compile(r"^(?P<text>(?P<y>\d{4})년(?:\s+\d{1,2}월(?:\s+\d{1,2}일)?)?)\s+(?P<base>.+)$")
+# 앞 연도 뒤의 나머지가 시점 표현이면 떼지 않는다 ('1919년 발표 이후' → '발표 이후' 는 값이 아니다)
+_LEAD_STOP = re.compile(r"(이후|이전|무렵|전후|경|부터|까지)$|^[(（]")
+# 남는 값이 날짜·시점 조각뿐이면 값 전체가 시점이다 ('1900년 10월', '1610년 초', '1900년 12월 14일') → 떼지 않는다
+_DATE_ONLY = re.compile(r"^(\d{1,2}월(\s*\d{1,2}일)?|\d{1,2}일|초|초반|중반|중순|말|말경|후반|하반기|상반기|봄|여름|가을|겨울)$")
+
+
+def split_year(value: Any) -> Optional[Tuple[str, int, str]]:
+    """값 끝·앞에 붙은 연도를 떼어 (기본값, 연도, 원문 연도 표기) 로 돌려준다. 해당 없으면 None.
+
+    결정적 규칙만 쓴다 (LLM 없음). 연도 하나짜리 정확한 표기만 다룬다 — '1850년대', '1801~1803년',
+    '1665년부터 1666년' 같은 범위·대략값은 건드리지 않는다 (Y2 범위).
+    """
+    if not isinstance(value, str):
+        return None
+    v = value.strip()
+    for rx in (_RE_YEAR_PAREN, _RE_YEAR_COMMA, _RE_YEAR_LEAD):
+        m = rx.match(v)
+        if not m:
+            continue
+        base, y = m.group("base").strip(), int(m.group("y"))
+        if not (_YEAR_MIN <= y <= _YEAR_MAX) or not base or re.search(r"\d{4}", base):
+            return None
+        if _DATE_ONLY.match(base):
+            return None
+        if rx is _RE_YEAR_LEAD and _LEAD_STOP.search(base):
+            return None
+        return base, y, m.group("text").strip()
+    return None
+
+
+def apply_year_split(t: Dict[str, Any]) -> bool:
+    """트리플의 목적어에서 연도를 떼어 진술 연도(year·year_text)로 옮긴다. 이미 year 가 있으면 값만 정리한다."""
+    r = split_year(t.get("object"))
+    if not r:
+        return False
+    base, y, text = r
+    if t.get("year") not in (None, y):
+        return False   # 추출이 낸 연도와 다르면 손대지 않는다
+    t["object_raw"] = t.get("object")
+    t["object"], t["year"], t["year_text"] = base, y, text
+    return True
+
+
+# ---------------------------------------------------------------------------
 # 트리플 리플레이 (텍스트/LLM 추출 그래프의 ABox 재구성 — docs/design-graph-promotion.md §3(c))
 # ---------------------------------------------------------------------------
 
@@ -323,7 +377,7 @@ def apply_rules_to_triples(
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """평면 트리플(LLM 추출)에 KB 규칙을 결정적으로 적용한 새 목록과 보고서.
 
-    적용 순서: entity(엔티티 병합, 주어·목적어) → key(predicate, 마지막 세그먼트)
+    적용 순서: year(값에서 연도 분리) → entity(엔티티 병합, 주어·목적어) → key(predicate, 마지막 세그먼트)
               → value(목적어 전체 일치, scope) → class(엔티티 → 클래스, subject_type/object_type)
     입력은 변경하지 않는다 (raw 사본에서 항상 다시 계산 → 멱등).
     """
@@ -367,11 +421,14 @@ def apply_rules_to_triples(
             # '조머펠트 → 아르놀드 조머펠트' 병합)
             triple_map[(compact(_resolve(s_)), compact(p_), compact(_resolve(o_)))] = r.get("target_path") or None
 
-    counts = {"entity": 0, "key": 0, "value": 0, "class": 0, "triple_moved": 0, "triple_deleted": 0, "triple_flipped": 0}
+    counts = {"year": 0, "entity": 0, "key": 0, "value": 0, "class": 0, "triple_moved": 0, "triple_deleted": 0, "triple_flipped": 0}
     out: List[Dict[str, Any]] = []
     seen = set()
     for t in triples:
         n = dict(t)
+        # 연도 분리가 가장 먼저 (값 규칙·병합 대상 이름에 연도가 섞이지 않게 — 설계 D4 §5)
+        if apply_year_split(n):
+            counts["year"] += 1
         orig_names = {"subject": n.get("subject"), "object": n.get("object")}
         for side in ("subject", "object"):
             tgt = _resolve(n.get(side)) if compact(n.get(side)) in entity_map else None
@@ -391,6 +448,9 @@ def apply_rules_to_triples(
                 break
         if triple_map:
             tk = (compact(n.get("subject")), compact(n.get("predicate")), compact(n.get("object")))
+            if tk not in triple_map and n.get("object_raw"):
+                # 연도 분리 전 표기로 만든 트리플 규칙 ('… | 수상함 | 노벨 물리학상 (1933년)') 도 계속 맞춘다
+                tk = (tk[0], tk[1], compact(_resolve(n["object_raw"])))
             if tk in triple_map:
                 tgt = triple_map[tk]
                 if tgt is None:
@@ -417,7 +477,7 @@ def apply_rules_to_triples(
                 counts["class"] += 1
         if compact(n.get("subject")) and compact(n.get("subject")) == compact(n.get("object")):
             continue  # 병합으로 생긴 자기 루프 제거
-        key = (n.get("subject"), n.get("predicate"), n.get("object"), n.get("source_node_id"))
+        key = (n.get("subject"), n.get("predicate"), n.get("object"), n.get("source_node_id"), n.get("year"))
         if key in seen:
             continue
         seen.add(key)
