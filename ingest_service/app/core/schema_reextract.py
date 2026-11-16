@@ -60,11 +60,16 @@ def build_messages(schema_text: str, text: str) -> List[Dict[str, str]]:
 5. 위 속성으로 표현할 수 없는 사실은 out_of_schema 에 넣는다 (predicate 는 짧은 명사구로 지어도 된다). 버리지 마라.
 6. 텍스트에 없는 사실을 만들지 마라. 속성에 억지로 맞추지 마라 — 예: "1931년 세상을 떠났다" 는 수상이 아니다.
    텍스트가 그 속성의 의미를 직접 말할 때만 그 속성을 쓰고, 아니면 out_of_schema 로.
+7. 그 사실을 말하는 **같은 문장**에 연도가 숫자로 있으면 트리플에 "year": 정수 를 붙인다. 연도는 object 에 섞지 않는다.
+   예: "1872년 크뢰벨은 『열과 일의 정밀측정』을 저술했다" → {{"subject": "크뢰벨", "predicate": "저술함", "object": "『열과 일의 정밀측정』", "year": 1872}}
+   예: "1933년 노벨 물리학상을 받았다" → object 는 "노벨 물리학상", "year": 1933 ("노벨 물리학상 (1933년)" 이 아니다)
+   연도를 object 로 쓰지 마라 ('저술함 → 1855년' 은 틀림) — 연도 자체가 사실인 속성(출생 연도 등)만 예외.
+   문장에 연도가 없으면 year 를 넣지 마라. 앞 문장의 연도·'같은 해' 같은 표현으로 짐작하지 마라. 범위('1920년대')는 넣지 마라.
 
 텍스트:
 {text[:MAX_CHUNK_CHARS]}
 
-JSON 만 출력: {{"triples": [{{"subject": "...", "predicate": "...", "object": "..."}}], "out_of_schema": [{{"subject": "...", "predicate": "...", "object": "..."}}]}}"""
+JSON 만 출력: {{"triples": [{{"subject": "...", "predicate": "...", "object": "...", "year": 1900}}], "out_of_schema": [{{"subject": "...", "predicate": "...", "object": "..."}}]}}"""
     return [
         {"role": "system", "content": "You extract knowledge-graph triples that conform to a given schema. Output JSON only."},
         {"role": "user", "content": user},
@@ -154,6 +159,27 @@ def is_grounded(obj: str, text: str, allowed_values: Optional[set] = None) -> bo
     return hit * 2 >= len(toks)
 
 
+_SENT_SPLIT = re.compile(r"(?<=[.!?。])\s+|(?<=다\.)|\n+")
+
+
+def grounded_year(year: Any, text: Optional[str], subj: str, obj: str) -> Optional[int]:
+    """추출이 낸 연도를 받을지 (D4 Y2). 1000~2100 정수이고, 원문의 한 문장에 그 연도와 주어·목적어 중 하나가
+    함께 있을 때만 받는다 (지어낸 연도·다른 문장 연도 차단). 원문이 없으면(미리보기 등) 범위만 본다."""
+    try:
+        y = int(str(year).strip().rstrip("년"))
+    except (TypeError, ValueError):
+        return None
+    if not (1000 <= y <= 2100):
+        return None
+    if text is None:
+        return y
+    keys = [k for k in (_ck(subj)[:3], _ck(obj)[:3]) if len(k) >= 2]
+    for sent in _SENT_SPLIT.split(text):
+        if sent and str(y) in sent and any(k in _ck(sent) for k in keys):
+            return y
+    return None
+
+
 def parse_response(data: Optional[Dict[str, Any]], node_id: str, allowed: set,
                    type_index: Optional[Tuple[Dict[str, str], Dict[str, Tuple[str, str]]]] = None,
                    text: Optional[str] = None, allowed_values: Optional[set] = None
@@ -171,9 +197,13 @@ def parse_response(data: Optional[Dict[str, Any]], node_id: str, allowed: set,
                 continue
             # 스키마 속성이라고 했는데 목록에 없으면 스키마 밖으로 분류
             is_oos = oos or p not in allowed
+            year_in = t.get("year")
             t = {"subject": s, "predicate": p, "object": o, "source_node_id": node_id,
                  "confidence": 0.9 if not is_oos else 0.7, "out_of_schema": is_oos,
                  "extraction": "schema_reextract"}
+            y = grounded_year(year_in, text, s, o)
+            if y is not None:
+                t["year"] = y
             if _ABSENT_RE.match(o):
                 t = {**t, "drop": "absent"}
                 out.append(t)

@@ -37,3 +37,16 @@ def test_replay_merges_prize_and_keeps_old_triple_rule():
     assert raw[0]["object"] == "노벨 물리학상 (1933년)"
     out2, _ = apply_rules_to_triples(raw, rules)
     assert out2 == out
+
+
+def test_extraction_year_grounding():
+    from app.core.schema_reextract import grounded_year, parse_response
+    text = "크뢰벨은 열을 연구했다. 1872년 크뢰벨은 『열과 일의 정밀측정』을 저술했다. 같은 해 그는 교수가 되었다."
+    assert grounded_year(1872, text, "크뢰벨", "『열과 일의 정밀측정』") == 1872
+    assert grounded_year("1872년", text, "크뢰벨", "교수") == 1872          # 주어가 같은 문장에 있으면 받는다
+    assert grounded_year(1873, text, "크뢰벨", "교수") is None             # 원문에 없는 연도
+    assert grounded_year(1872, "1872년 일이 있었다. 크뢰벨은 교수가 되었다.", "크뢰벨", "교수") is None  # 다른 문장
+    assert grounded_year(99999, text, "크뢰벨", "교수") is None
+    out = parse_response({"triples": [{"subject": "크뢰벨", "predicate": "저술함", "object": "『열과 일의 정밀측정』", "year": 1872}]},
+                         "c1", {"저술함"}, None, text)
+    assert out[0]["year"] == 1872
