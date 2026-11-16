@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Plus, Trash2, RefreshCw, Save, RotateCcw, AlertTriangle, Share2 } from 'lucide-react';
 import { schemaApi } from '../services/api';
 import ReextractModal from './ReextractModal';
+import SchemaGraph from './SchemaGraph';
 
 // 스키마 편집기 — 승격된 텍스트 KB 의 클래스·속성을 사람이 직접 고친다 (docs/design-schema-editor.md)
 // 저장 시: 검증 → 이전 버전 이력 보관 → TBox 재생성. 이름 변경은 규칙 + 리플레이로 기존 그래프에 반영.
@@ -37,6 +38,7 @@ export default function SchemaEditor({ kbId }: { kbId: string }) {
     const [busy, setBusy] = useState(false);
     const [filter, setFilter] = useState('');
     const [showReextract, setShowReextract] = useState(false);
+    const [view, setView] = useState<'table' | 'graph'>('table');
 
     const load = useCallback(async () => {
         const r = await schemaApi.getSpec(kbId);
@@ -144,9 +146,9 @@ export default function SchemaEditor({ kbId }: { kbId: string }) {
                 </span>
                 <div style={{ marginLeft: 'auto', display: 'flex', gap: '0.5rem' }}>
                     <button className="btn btn-secondary" style={btn}
-                        title="클래스(유형)와 관계를 그래프로 봅니다 — 새 탭. 클래스를 누르면 인스턴스가 펼쳐집니다."
+                        title="저장된 스키마를 그래프 뷰어(새 탭)로 — 클래스를 누르면 실제 인스턴스가 펼쳐집니다."
                         onClick={() => window.open(`${import.meta.env.BASE_URL}graph-viewer?kb_id=${kbId}&backend=ontology&mode=schema`, '_blank')}>
-                        <Share2 size={14} /> 그래프로 보기
+                        <Share2 size={14} /> 뷰어에서 열기
                     </button>
                     <button className="btn btn-secondary" style={btn} disabled={busy} onClick={() => load()}><RefreshCw size={14} /> 다시 불러오기</button>
                     {!structured && <button className="btn btn-secondary" style={btn} disabled={busy} onClick={openReextract}>스키마 기준 재추출…</button>}
@@ -172,7 +174,24 @@ export default function SchemaEditor({ kbId }: { kbId: string }) {
             )}
             {message && <div style={{ fontSize: '0.85rem', color: '#1e40af' }}>{message}</div>}
 
+            <div style={{ display: 'flex', gap: 0 }}>
+                {(['table', 'graph'] as const).map((v) => (
+                    <button key={v} className={`btn ${view === v ? 'btn-primary' : 'btn-secondary'}`}
+                        style={{ ...btn, borderRadius: v === 'table' ? '6px 0 0 6px' : '0 6px 6px 0' }}
+                        onClick={() => setView(v)}>{v === 'table' ? '표' : '그래프'}</button>
+                ))}
+            </div>
+
+            {view === 'graph' && (
+                <SchemaGraph
+                    structured={structured}
+                    classes={classes}
+                    props={props}
+                />
+            )}
+
             {/* 클래스 */}
+            {view === 'table' && <>
             <div className="card" style={{ padding: '0.75rem' }}>
                 <div style={{ display: 'flex', alignItems: 'center', marginBottom: '0.4rem' }}>
                     <h4 style={{ margin: 0 }}>{structured ? '유형' : '클래스'}</h4>
@@ -266,6 +285,7 @@ export default function SchemaEditor({ kbId }: { kbId: string }) {
                 </table>
                 <datalist id={`ranges-${kbId}`}>{classNames.map((n) => <option key={n} value={n} />)}</datalist>
             </div>
+            </>}
 
             {/* 스키마 밖 관계 — 그래프에 있으나 스키마에 없는 술어 */}
             {spec.out_of_schema?.length > 0 && (
