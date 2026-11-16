@@ -362,6 +362,45 @@ async def edit_schema_triples(kb_id: str, body: TripleEditBody):
         _edit_error(e)
 
 
+# ---------------------------------------------------------------------------
+# 관계 방향 검증 (데이터 품질 D1) — 판정만 저장, 적용은 triples/edit(action=flip|delete) 로 사람이
+# ---------------------------------------------------------------------------
+
+_AUDIT_STATE: dict = {}
+
+
+class DirectionAuditBody(BaseModel):
+    properties: Optional[List[str]] = None
+
+
+@router.post("/{kb_id}/schema/direction-audit")
+async def start_direction_audit(kb_id: str, body: DirectionAuditBody):
+    """같은 클래스끼리 잇는 관계의 트리플 방향을 원문으로 검증 (백그라운드, LLM). 결과는 GET 으로."""
+    import asyncio as _aio
+    from app.services.schema_alignment import direction_audit as da
+    if _AUDIT_STATE.get(kb_id, {}).get("state") == "running":
+        return _AUDIT_STATE[kb_id]
+
+    async def _run():
+        try:
+            r = await da.run_audit(kb_id, body.properties)
+            _AUDIT_STATE[kb_id] = {"state": "done", **r}
+        except Exception as e:      # noqa: BLE001
+            _AUDIT_STATE[kb_id] = {"state": "error", "error": str(e)[:300]}
+
+    _AUDIT_STATE[kb_id] = {"state": "running"}
+    _aio.create_task(_run())
+    return _AUDIT_STATE[kb_id]
+
+
+@router.get("/{kb_id}/schema/direction-audit")
+async def get_direction_audit(kb_id: str):
+    """마지막 방향 검증 결과 (판정·근거 문장 포함) + 실행 상태."""
+    from app.services.schema_alignment import direction_audit as da
+    out = await da.get_audit(kb_id)
+    return {**out, "run": _AUDIT_STATE.get(kb_id, {"state": "idle"})}
+
+
 @router.post("/{kb_id}/schema/spec/classes")
 async def create_schema_class(kb_id: str, body: NewClassBody):
     """새 클래스 추가 + 멤버 지정."""

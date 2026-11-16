@@ -340,13 +340,14 @@ def apply_rules_to_triples(
     class_map = {compact(r["source_value"]): r["target_value"] for r in active
                  if r.get("rule_type") == "class" and r.get("source_value") and r.get("target_value")}
     # triple 규칙: 사람이 트리플 단위로 고친 것 (스키마 편집기 트리플 목록) — pair=[주어, 관계, 목적어] 는
-    # entity·key·value 적용 뒤의 표기(화면에 보이는 그래프 표기)로 맞춘다. target_path=새 관계(이동), 없으면 삭제.
+    # entity·key·value 적용 뒤의 표기(화면에 보이는 그래프 표기)로 맞춘다. target_path=새 관계(이동), 없으면 삭제,
+    # "@flip" 이면 같은 관계로 주어·목적어를 뒤집는다.
     triple_map = {}
     for r in active:
         if r.get("rule_type") == "triple" and r.get("pair") and len(r["pair"]) == 3:
             triple_map[tuple(compact(x) for x in r["pair"])] = r.get("target_path") or None
 
-    counts = {"entity": 0, "key": 0, "value": 0, "class": 0, "triple_moved": 0, "triple_deleted": 0}
+    counts = {"entity": 0, "key": 0, "value": 0, "class": 0, "triple_moved": 0, "triple_deleted": 0, "triple_flipped": 0}
     out: List[Dict[str, Any]] = []
     seen = set()
     for t in triples:
@@ -374,9 +375,16 @@ def apply_rules_to_triples(
                 if tgt is None:
                     counts["triple_deleted"] += 1
                     continue
-                n["predicate"] = tgt
-                n["edited"] = "moved"
-                counts["triple_moved"] += 1
+                if tgt == "@flip":
+                    # 방향 뒤집기 (관계는 그대로, 주어·목적어 교환) — 방향 검증(D1)에서 사람이 승인한 것
+                    n["subject"], n["object"] = n.get("object"), n.get("subject")
+                    n["subject_type"], n["object_type"] = n.get("object_type"), n.get("subject_type")
+                    n["edited"] = "flipped"
+                    counts["triple_flipped"] += 1
+                else:
+                    n["predicate"] = tgt
+                    n["edited"] = "moved"
+                    counts["triple_moved"] += 1
         for side, tkey in (("subject", "subject_type"), ("object", "object_type")):
             cls = class_map.get(compact(n.get(side)))
             if cls:

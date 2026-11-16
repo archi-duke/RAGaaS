@@ -41,3 +41,17 @@ def test_reextract_drops_absence_objects_and_prompt_requires_member_names():
     assert [t.get("drop") for t in out] == ["absent", "absent", None]
     msg = build_messages("[클래스]", "text")[1]["content"]
     assert "번역도 대표 이름으로" in msg and "없음" in msg
+
+
+def test_triple_rule_flip_swaps_subject_object_and_types():
+    """방향 검증(D1)에서 승인한 뒤집기: 관계는 그대로, 주어·목적어와 타입을 교환."""
+    rules = [{"rule_type": "triple", "pair": ["아인슈타인", "영향_줌", "뉴턴"], "target_path": "@flip", "status": "active"}]
+    triples = [{"subject": "아인슈타인", "predicate": "영향_줌", "object": "뉴턴",
+                "subject_type": "Person", "object_type": "Scientist"},
+               {"subject": "패러데이", "predicate": "영향_줌", "object": "맥스웰"}]
+    out, rep = apply_rules_to_triples(triples, rules)
+    assert (out[0]["subject"], out[0]["predicate"], out[0]["object"]) == ("뉴턴", "영향_줌", "아인슈타인")
+    assert out[0]["subject_type"] == "Scientist" and out[0]["object_type"] == "Person"
+    assert out[0]["edited"] == "flipped"
+    assert (out[1]["subject"], out[1]["object"]) == ("패러데이", "맥스웰")      # 다른 트리플은 그대로
+    assert rep["counts"]["triple_flipped"] == 1

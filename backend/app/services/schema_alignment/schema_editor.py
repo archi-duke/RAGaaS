@@ -1033,7 +1033,7 @@ async def _add_to_schema(kb_id: str, new_class: Optional[Dict[str, Any]] = None,
 async def edit_triples(kb_id: str, action: str, triples: List[Dict[str, str]],
                        target_property: Optional[str] = None,
                        new_property: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """선택한 트리플을 다른 관계로 이동(move) 또는 삭제(delete). new_property 를 주면 그 관계를 스키마에 만들고 이동.
+    """선택한 트리플을 다른 관계로 이동(move), 삭제(delete), 방향 뒤집기(flip). new_property 를 주면 그 관계를 스키마에 만들고 이동.
 
     triple 규칙: pair=[주어, 관계, 목적어](그래프 표기), target_path=이동할 관계 (삭제면 None). 같은 트리플의 기존 규칙은 덮는다.
     """
@@ -1042,7 +1042,7 @@ async def edit_triples(kb_id: str, action: str, triples: List[Dict[str, str]],
     kb = await KnowledgeBase.get(kb_id)
     if not kb or kb.schema_source not in EDITABLE_SOURCES:
         raise SchemaEditError(["텍스트(승격) KB 에서만 트리플을 편집할 수 있습니다 — 구조화 KB 는 YAML 원본에서"])
-    if action not in ("move", "delete"):
+    if action not in ("move", "delete", "flip"):
         raise SchemaEditError([f"알 수 없는 동작: {action}"])
     ind = (kb.promotion_metadata or {}).get("induction") or {}
     names = {p["name"] for p in ind.get("properties") or []}
@@ -1071,7 +1071,7 @@ async def edit_triples(kb_id: str, action: str, triples: List[Dict[str, str]],
             continue
         r = await SchemaMappingRule.find_one(SchemaMappingRule.kb_id == kb_id, SchemaMappingRule.rule_type == "triple",
                                              SchemaMappingRule.pair == pair)
-        tgt = target_property if action == "move" else None
+        tgt = target_property if action == "move" else ("@flip" if action == "flip" else None)
         if r:
             r.target_path, r.status = tgt, "active"
             await r.save()

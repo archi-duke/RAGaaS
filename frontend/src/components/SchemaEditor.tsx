@@ -7,6 +7,7 @@ import SchemaChecks from './SchemaChecks';
 import PropertyTriplesModal from './PropertyTriplesModal';
 import RecommendPanel from './RecommendPanel';
 import LexiconPanel from './LexiconPanel';
+import DirectionAuditPanel from './DirectionAuditPanel';
 
 // 스키마 편집기 — 승격된 텍스트 KB 의 클래스·속성을 사람이 직접 고친다 (docs/design-schema-editor.md)
 // 저장 시: 검증 → 이전 버전 이력 보관 → TBox 재생성. 이름 변경은 규칙 + 리플레이로 기존 그래프에 반영.
@@ -46,7 +47,7 @@ export default function SchemaEditor({ kbId }: { kbId: string }) {
     const [busy, setBusy] = useState(false);
     const [filter, setFilter] = useState('');
     const [showReextract, setShowReextract] = useState(false);
-    const [view, setView] = useState<'table' | 'graph' | 'lexicon'>('table');
+    const [view, setView] = useState<'table' | 'graph' | 'lexicon' | 'direction'>('table');
     const [triplesFor, setTriplesFor] = useState<string | null>(null);
     const [mismatchFor, setMismatchFor] = useState<null | { status: 'violation' | 'gap'; className?: string }>(null);
     const [recFor, setRecFor] = useState<null | { triples?: any[]; gaps?: Record<string, string[]> }>(null);   // AI 추천 (스키마 전체·선택 트리플·재추출 뒤 새 누락)
@@ -227,14 +228,15 @@ export default function SchemaEditor({ kbId }: { kbId: string }) {
             )}
 
             <div style={{ display: 'flex', gap: 0 }}>
-                {(['table', 'graph', 'lexicon'] as const).map((v) => (
+                {((structured ? ['table', 'graph', 'lexicon'] : ['table', 'graph', 'lexicon', 'direction']) as ('table' | 'graph' | 'lexicon' | 'direction')[]).map((v, i, arr) => (
                     <button key={v} className={`btn ${view === v ? 'btn-primary' : 'btn-secondary'}`}
-                        style={{ ...btn, borderRadius: v === 'table' ? '6px 0 0 6px' : v === 'lexicon' ? '0 6px 6px 0' : 0 }}
-                        onClick={() => setView(v)}>{v === 'table' ? '표' : v === 'graph' ? '그래프' : '용어 사전'}</button>
+                        style={{ ...btn, borderRadius: i === 0 ? '6px 0 0 6px' : i === arr.length - 1 ? '0 6px 6px 0' : 0 }}
+                        onClick={() => setView(v)}>{{ table: '표', graph: '그래프', lexicon: '용어 사전', direction: '방향 검증' }[v]}</button>
                 ))}
             </div>
 
             {view === 'lexicon' && <LexiconPanel kbId={kbId} structured={structured} />}
+            {view === 'direction' && !structured && <DirectionAuditPanel kbId={kbId} onChanged={(m) => { setMessage(m); load(); }} />}
 
             {view === 'graph' && (
                 <SchemaGraph
