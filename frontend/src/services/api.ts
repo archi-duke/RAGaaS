@@ -234,6 +234,9 @@ export const lexiconApi = {
         api.post(`knowledge-bases/${kbId}/lexicon/broader`, body),
     review: (kbId: string) => api.get(`knowledge-bases/${kbId}/lexicon/review`),
     duplicates: (kbId: string) => api.get(`knowledge-bases/${kbId}/lexicon/duplicates`),
+    duplicateReview: (kbId: string) => api.get(`knowledge-bases/${kbId}/lexicon/duplicates/review`),
+    duplicateReviewStart: (kbId: string) => api.post(`knowledge-bases/${kbId}/lexicon/duplicates/review`),
+    entry: (kbId: string, q: string) => api.get(`knowledge-bases/${kbId}/lexicon`, { params: { q, limit: 50 } }),
 };
 
 export const retrievalApi = {
