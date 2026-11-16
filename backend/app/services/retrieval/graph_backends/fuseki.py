@@ -1341,6 +1341,7 @@ class FusekiBackend(GraphBackend):
             k["equiv_groups"] = groups
             cq.apply_path_overlay(paths, overlay)
             catalogs[k["name"]] = paths
+        cq.attach_ref_kinds(kinds, catalogs)
         self._CLASS_CATALOG_CACHE[kb_id] = (fingerprint, _time.time(), kinds, catalogs)
         log_trace(f"[Fuseki] Class catalog built: {[(k['name'], len(k['members']), len(k['equiv_groups'])) for k in kinds]}")
         return kinds, catalogs

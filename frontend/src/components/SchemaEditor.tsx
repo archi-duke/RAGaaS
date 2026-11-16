@@ -12,7 +12,8 @@ interface ClassRow { key: string; name: string; description: string; member_coun
 interface PropRow {
     key: string; name: string; description: string; domain: string; range: string;
     aliases: string; seed?: boolean; triple_count?: number; renamed_from?: string;
-    kind?: string; type?: string; values?: string[]; value_count?: number;
+    kind?: string; type?: string; values?: string[]; value_count?: number; ref_kind?: string;
+    range_suggestion?: { class: string; ratio: number; n: number; hits: number };
 }
 interface Spec {
     editable: boolean; reason?: string; schema_source: string; version: number; updated_at?: string;
@@ -51,7 +52,8 @@ export default function SchemaEditor({ kbId }: { kbId: string }) {
         const p = (s.properties || []).map((x: any) => ({
             key: nextKey(), name: x.name, description: x.description || '', domain: x.domain || '', range: x.range || '',
             aliases: (x.aliases || []).join(', '), seed: x.seed, triple_count: x.triple_count,
-            kind: x.kind, type: x.type, values: x.values, value_count: x.value_count,
+            kind: x.kind, type: x.type, values: x.values, value_count: x.value_count, ref_kind: x.ref_kind,
+            range_suggestion: x.range_suggestion,
         }));
         setClasses(c);
         setProps(p);
@@ -229,7 +231,14 @@ export default function SchemaEditor({ kbId }: { kbId: string }) {
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.4rem' }}>
                     <h4 style={{ margin: 0 }}>{structured ? '속성 (YAML 필드 경로)' : '속성 (관계)'}</h4>
                     <input style={{ ...input, width: '220px' }} placeholder="이름·별칭·정의 검색" value={filter} onChange={(e) => setFilter(e.target.value)} />
-                    {!structured && <button className="btn btn-secondary" style={{ ...btn, marginLeft: 'auto' }}
+                    {!structured && props.some((p) => p.range_suggestion && !p.range) && (
+                        <button className="btn btn-secondary" style={{ ...btn, marginLeft: 'auto' }}
+                            title="range 가 빈 속성 중 목적어 60% 이상이 한 클래스인 것에 그 클래스를 넣습니다 (저장 전 확인 가능)"
+                            onClick={() => setProps(props.map((p) => (p.range_suggestion && !p.range) ? { ...p, range: p.range_suggestion.class } : p))}>
+                            range 추천 모두 적용 ({props.filter((p) => p.range_suggestion && !p.range).length})
+                        </button>
+                    )}
+                    {!structured && <button className="btn btn-secondary" style={{ ...btn, marginLeft: props.some((p) => p.range_suggestion && !p.range) ? 0 : 'auto' }}
                         onClick={() => setProps([...props, { key: nextKey(), name: '', description: '', domain: '', range: '', aliases: '' }])}><Plus size={14} /> 속성 추가</button>}
                 </div>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
@@ -253,7 +262,7 @@ export default function SchemaEditor({ kbId }: { kbId: string }) {
                                     </td>
                                     {structured ? (
                                         <td style={cell}>
-                                            <div style={{ fontSize: '0.72rem', color: '#475569' }}>{p.kind} · {p.type}{p.value_count ? ` · 값 ${p.value_count}종` : ''}</div>
+                                            <div style={{ fontSize: '0.72rem', color: '#475569' }}>{p.kind} · {p.ref_kind ? <b>→ {p.ref_kind} (다른 레코드 참조)</b> : p.type}{p.value_count ? ` · 값 ${p.value_count}종` : ''}</div>
                                             <div style={{ fontSize: '0.72rem', color: '#64748b', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '22rem' }}
                                                 title={(p.values || []).join(' | ')}>{(p.values || []).slice(0, 5).join(', ')}</div>
                                         </td>
@@ -267,6 +276,13 @@ export default function SchemaEditor({ kbId }: { kbId: string }) {
                                             <input style={input} list={`ranges-${kbId}`} value={p.range} placeholder="클래스 또는 값"
                                                 onChange={(e) => upd({ range: e.target.value })} />
                                         </div>
+                                        {p.range_suggestion && !p.range && (
+                                            <button className="btn btn-secondary" style={{ ...btn, padding: '0.1rem 0.4rem', marginTop: '0.2rem', fontSize: '0.7rem' }}
+                                                title={`목적어 ${p.range_suggestion.n}건 중 ${p.range_suggestion.hits}건이 ${p.range_suggestion.class} 멤버`}
+                                                onClick={() => upd({ range: p.range_suggestion!.class })}>
+                                                추천: → {p.range_suggestion.class} ({Math.round(p.range_suggestion.ratio * 100)}%)
+                                            </button>
+                                        )}
                                     </td>}
                                     <td style={cell}><textarea style={{ ...input, minHeight: '2.2rem', resize: 'vertical' }} value={p.description}
                                         onChange={(e) => upd({ description: e.target.value })} /></td>

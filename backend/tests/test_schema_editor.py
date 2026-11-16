@@ -94,3 +94,17 @@ def test_path_overlay_and_prompt_line():
     cq.apply_path_overlay(paths, {"properties": {"fit_signals.modifiability": {"description": "빠른 변경", "aliases": ["수정용이성"]}}})
     line = cq._path_line(0, paths[0])
     assert "정의: 빠른 변경" in line and "별칭: 수정용이성" in line
+
+
+def test_attach_ref_kinds_record_reference():
+    kinds = [{"name": "ArchitectureStyle", "members": [NS + "hexagonal", NS + "cqrs", NS + "layered"]}]
+    catalogs = {"ArchitectureStyle": [
+        {"key": "related_patterns", "values": [{"uri": NS + "hexagonal", "members": 2}, {"uri": NS + "cqrs", "members": 1}]},
+        {"key": "fit_signals.modifiability", "values": [{"uri": "lit:high", "members": 3}]},
+        {"key": "mixed", "values": [{"uri": NS + "cqrs", "members": 1}, {"uri": "lit:x", "members": 2}]},
+    ]}
+    cq.attach_ref_kinds(kinds, catalogs)
+    by = {p["key"]: p for p in catalogs["ArchitectureStyle"]}
+    assert by["related_patterns"]["ref_kind"] == "ArchitectureStyle"
+    assert "ref_kind" not in by["fit_signals.modifiability"]
+    assert "ref_kind" not in by["mixed"]  # 1/3 < 0.6

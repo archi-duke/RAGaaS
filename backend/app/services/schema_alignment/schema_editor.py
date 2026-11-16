@@ -157,6 +157,50 @@ def _usage_counts(kb_id: str) -> Dict[str, int]:
     return out
 
 
+RANGE_MIN_RATIO = 0.6
+RANGE_MIN_N = 3
+
+
+async def infer_ranges(kb_id: str, prop_names: List[str]) -> Dict[str, Dict[str, Any]]:
+    """데이터 기반 range 추정 (텍스트 KB): 속성 목적어가 어느 클래스 멤버인지 센다.
+
+    목적어의 60% 이상(최소 3건)이 한 클래스면 그 클래스를 range 로 추천. 나머지(문장·값)는 값 속성.
+    클래스 멤버는 class 규칙(엔티티 → 클래스)으로 판정. 반환: {속성: {class, ratio, n}}
+    """
+    from app.core.fuseki import fuseki_client
+    from app.services.retrieval.entity_linking import _compact
+    from app.services.schema_alignment.induction import REL_NS
+    from app.services.schema_alignment.service import active_rules
+    cls = {_compact(r.source_value): r.target_value for r in await active_rules(kb_id)
+           if r.rule_type == "class" and r.source_value and r.target_value}
+    if not cls:
+        return {}
+    out = {}
+    for name in prop_names:
+        q = f"""SELECT ?o (SAMPLE(?l) AS ?lab) WHERE {{ GRAPH ?g {{ ?s <{REL_NS}{name}> ?o
+                 OPTIONAL {{ ?o <http://www.w3.org/2000/01/rdf-schema#label> ?l }} }}
+                 FILTER(STRSTARTS(STR(?g), "urn:doc:")) }} GROUP BY ?o ?s LIMIT 1000"""
+        try:
+            rows = fuseki_client.query_sparql(kb_id, q).get("results", {}).get("bindings", [])
+        except Exception:
+            continue
+        counts: Dict[str, int] = {}
+        for b in rows:
+            o = b["o"]["value"]
+            lab = b.get("lab", {}).get("value") or o.rstrip("/").rsplit("/", 1)[-1]
+            c = cls.get(_compact(lab))
+            if c:
+                counts[c] = counts.get(c, 0) + 1
+        n = len(rows)
+        if not counts or n < RANGE_MIN_N:
+            continue
+        best = max(counts, key=counts.get)
+        ratio = counts[best] / n
+        if ratio >= RANGE_MIN_RATIO:
+            out[name] = {"class": best, "ratio": round(ratio, 2), "n": n, "hits": counts[best]}
+    return out
+
+
 async def get_spec(kb_id: str) -> Dict[str, Any]:
     from app.models.knowledge_base import KnowledgeBase
     from app.services.schema_alignment.service import active_rules
@@ -173,13 +217,16 @@ async def get_spec(kb_id: str) -> Dict[str, Any]:
         if r.rule_type == "class" and r.target_value:
             members[r.target_value] = members.get(r.target_value, 0) + 1
     usage = _usage_counts(kb_id) if editable else {}
+    suggest = await infer_ranges(kb_id, [p["name"] for p in ind.get("properties") or []
+                                         if not p.get("range")]) if editable else {}
     classes = [{"name": c["name"], "description": c.get("description", ""), "member_count": members.get(c["name"], 0)}
                for c in ind.get("classes") or []]
     props = []
     for p in ind.get("properties") or []:
         props.append({"name": p["name"], "description": p.get("description", ""), "domain": p.get("domain", ""),
                       "range": p.get("range", ""), "aliases": [a for a in p.get("members") or [] if a != p["name"]],
-                      "seed": bool(p.get("seed")), "triple_count": usage.get(p["name"], 0)})
+                      "seed": bool(p.get("seed")), "triple_count": usage.get(p["name"], 0),
+                      **({"range_suggestion": suggest[p["name"]]} if p["name"] in suggest else {})})
     known = {p["name"] for p in props}
     out_of_schema = sorted(((k, v) for k, v in usage.items() if k not in known), key=lambda x: -x[1])[:30]
     hist = meta.get("schema_history") or []
@@ -411,7 +458,8 @@ async def _get_structured_spec(kb) -> Dict[str, Any]:
             props.append({"name": p["key"], "kind": k["name"], "type": p.get("type"),
                           "values": [str(v["label"])[:40] for v in (p.get("values") or [])[:10]],
                           "value_count": p.get("dv", 0), "description": p.get("description", ""),
-                          "aliases": p.get("aliases") or [], "triple_count": _path_count(p)})
+                          "aliases": p.get("aliases") or [], "triple_count": _path_count(p),
+                          **({"ref_kind": p["ref_kind"]} if p.get("ref_kind") else {})})
     hist = meta.get("schema_history") or []
     return {
         "kb_id": kb_id, "editable": True, "mode": "structured", "schema_source": kb.schema_source,

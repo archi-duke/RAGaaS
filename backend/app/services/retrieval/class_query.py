@@ -173,6 +173,29 @@ def apply_kind_overlay(kinds: List[Dict[str, Any]], overlay: Optional[Dict[str, 
                 k["description"] = oc["description"]
 
 
+def attach_ref_kinds(kinds: List[Dict[str, Any]], catalogs: Dict[str, List[Dict[str, Any]]],
+                     min_ratio: float = 0.6) -> None:
+    """값이 다른 레코드(유형 멤버)를 가리키는 경로에 ref_kind 를 붙인다 (제자리).
+
+    예: 구조화 KB 의 related_patterns 값 = 다른 스타일 레코드 → ref_kind=ArchitectureStyle.
+    스키마 그래프에서 유형 간 관계로 그리고, TBox range 로 쓴다. 비율은 값을 가진 멤버 수 기준.
+    """
+    owner = {m: k["name"] for k in kinds for m in k.get("members") or []}
+    for k in kinds:
+        for p in catalogs.get(k["name"]) or []:
+            tot, hit = 0, {}
+            for v in p.get("values") or []:
+                n = int(v.get("members") or 1)
+                tot += n
+                o = owner.get(v.get("uri"))
+                if o:
+                    hit[o] = hit.get(o, 0) + n
+            if tot and hit:
+                best = max(hit, key=hit.get)
+                if hit[best] / tot >= min_ratio:
+                    p["ref_kind"] = best
+
+
 def apply_path_overlay(paths: List[Dict[str, Any]], overlay: Optional[Dict[str, Any]]) -> None:
     """경로(속성) 정의·별칭 덧씌우기 (제자리)."""
     props = (overlay or {}).get("properties") or {}

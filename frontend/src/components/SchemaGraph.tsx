@@ -8,7 +8,7 @@ import ForceGraph2D from 'react-force-graph-2d';
 export interface GraphClass { name: string; description?: string; member_count?: number; }
 export interface GraphProp {
     name: string; description?: string; domain?: string; range?: string; aliases?: string;
-    kind?: string; type?: string; triple_count?: number; values?: string[];
+    kind?: string; type?: string; triple_count?: number; values?: string[]; ref_kind?: string;
 }
 interface Attr { name: string; full: string; description?: string; aliases?: string; count?: number; values?: string[]; }
 interface GNode { id: string; label: string; kind: 'class' | 'struct' | 'attr' | 'none'; description?: string; attrs: Attr[]; count?: number; }
@@ -16,7 +16,7 @@ interface GLink { source: string; target: string; label: string; description?: s
 
 const COLORS = { class: '#2563eb', struct: '#0d9488', attr: '#94a3b8', none: '#f59e0b' };
 
-function build(structured: boolean, classes: GraphClass[], props: GraphProp[], showAttrs: boolean) {
+function build(structured: boolean, classes: GraphClass[], props: GraphProp[], showAttrs: boolean, nested: boolean) {
     const nodes = new Map<string, GNode>();
     const links: GLink[] = [];
     const add = (id: string, label: string, kind: GNode['kind'], extra: Partial<GNode> = {}) => {
@@ -25,7 +25,20 @@ function build(structured: boolean, classes: GraphClass[], props: GraphProp[], s
     };
     classes.filter((c) => c.name).forEach((c) => add(`c:${c.name}`, c.name, 'class', { description: c.description, count: c.member_count }));
 
-    if (structured) {
+    if (structured && !nested) {
+        // 기본: 중첩 블록은 유형 안의 값 속성(경로)으로 접고, 다른 레코드를 가리키는 경로만 유형 간 링크로
+        for (const p of props) {
+            if (!p.kind || !p.name) continue;
+            const owner = add(`c:${p.kind}`, p.kind, 'class');
+            if (p.ref_kind) {
+                add(`c:${p.ref_kind}`, p.ref_kind, 'class');
+                links.push({ source: owner.id, target: `c:${p.ref_kind}`, label: p.name, description: p.description });
+            } else {
+                owner.attrs.push({ name: p.name, full: p.name, description: p.description, aliases: p.aliases,
+                    count: p.triple_count, values: p.values });
+            }
+        }
+    } else if (structured) {
         for (const p of props) {
             const segs = p.name.split('.').filter(Boolean);
             if (!segs.length || !p.kind) continue;
@@ -70,7 +83,11 @@ function build(structured: boolean, classes: GraphClass[], props: GraphProp[], s
     for (const l of links) {
         const k = [l.source, l.target].sort().join('|');
         const i = pairCount[k] = (pairCount[k] || 0) + 1;
-        l.curvature = i === 1 ? 0 : (i % 2 === 0 ? 1 : -1) * Math.ceil((i - 1) / 2) * 0.25;
+        if (l.source === l.target) {
+            l.curvature = 0.5 + (i - 1) * 0.25;   // 자기 관계는 고리로 (겹치지 않게 크기를 달리)
+        } else {
+            l.curvature = i === 1 ? 0 : (i % 2 === 0 ? 1 : -1) * Math.ceil((i - 1) / 2) * 0.25;
+        }
     }
     return { nodes: Array.from(nodes.values()), links };
 }
@@ -80,8 +97,9 @@ export default function SchemaGraph({ structured, classes, props }: { structured
     const fg = useRef<any>(null);
     const [width, setWidth] = useState(800);
     const [showAttrs, setShowAttrs] = useState(false);
+    const [nested, setNested] = useState(false);   // 구조화 KB: 중첩 블록 펼치기
     const [sel, setSel] = useState<{ node?: GNode; link?: GLink } | null>(null);
-    const data = useMemo(() => build(structured, classes, props, showAttrs), [structured, classes, props, showAttrs]);
+    const data = useMemo(() => build(structured, classes, props, showAttrs, nested), [structured, classes, props, showAttrs, nested]);
 
     useEffect(() => {
         const el = wrap.current;
@@ -108,6 +126,9 @@ export default function SchemaGraph({ structured, classes, props }: { structured
                 {structured && <span><span style={{ color: COLORS.struct }}>●</span> 중첩 필드</span>}
                 {showAttrs && <span><span style={{ color: COLORS.attr }}>●</span> 값 속성</span>}
                 {!structured && data.nodes.some((n) => n.kind === 'none') && <span><span style={{ color: COLORS.none }}>●</span> domain 미지정 속성</span>}
+                {structured && <label style={{ cursor: 'pointer' }} title="YAML 중첩 블록(fit_signals 등)을 별도 노드로 펼칩니다 — 클래스가 아니라 레코드에 붙은 속성 묶음입니다">
+                    <input type="checkbox" checked={nested} onChange={(e) => setNested(e.target.checked)} /> 중첩 블록 펼치기
+                </label>}
                 <label style={{ cursor: 'pointer' }}>
                     <input type="checkbox" checked={showAttrs} onChange={(e) => setShowAttrs(e.target.checked)} /> 값 속성도 노드로
                 </label>
@@ -154,6 +175,17 @@ export default function SchemaGraph({ structured, classes, props }: { structured
                         if (!l.label || scale < 0.6) return;
                         const s = l.source, t = l.target;
                         if (typeof s !== 'object' || typeof t !== 'object') return;
+                        if (s === t) {
+                            // 자기 관계 고리: 노드 위쪽에 라벨
+                            const fsz = 10 / scale;
+                            ctx.font = `${fsz}px sans-serif`;
+                            ctx.fillStyle = '#475569';
+                            ctx.textAlign = 'center';
+                            ctx.textBaseline = 'middle';
+                            const idx = data.links.filter((x: any) => x.source === s && x.target === s).indexOf(l);
+                            ctx.fillText(l.label, s.x, s.y - (34 + idx * 12) / scale * (scale > 1 ? 1 : 1));
+                            return;
+                        }
                         // 곡선 링크의 중간점
                         const mx = (s.x + t.x) / 2, my = (s.y + t.y) / 2;
                         const dx = t.x - s.x, dy = t.y - s.y;

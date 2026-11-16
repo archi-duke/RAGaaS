@@ -143,6 +143,35 @@ KB 상세의 **Schema** 탭 (온톨로지로 승격된 KB 에만 보임, `compon
 결과: test-ontology3 클래스 8·관계 10, test-ontology 유형 12·관계 11. Person 클릭 시 인스턴스가 펼쳐지는데,
 '암', '빛' 같은 잘못 분류된 엔티티가 보인다 — 2단계(트리플·엔티티 검토)에서 다룰 대상.
 
+## 9. 스키마가 데이터 구조와 어긋나던 문제 (2026-11-16)
+
+**텍스트 KB — range 누락** (test-ontology2): 시드 없이 유도한 스키마는 속성 36개 모두 range 가 비어 있어 클래스 간 관계가
+하나도 그려지지 않았다. 데이터에는 관계가 있다 — 속성 목적어가 어느 클래스 멤버인지(class 규칙) 세면:
+
+| 속성 | 목적어 클래스 | 비율 |
+|---|---|---|
+| 관련_패턴 | ArchitectureStyle | 26/27 |
+| is_derived_from | ArchitectureStyle | 5/5 |
+| is_centered_around | SoftwareComponent | 6/10 |
+| has_positive_effect_on | QualityAttribute | 22/35 |
+
+- `schema_editor.infer_ranges`: 목적어의 60% 이상(최소 3건)이 한 클래스면 range 로 추천. 나머지(장점 문장·값)는 값 속성이 맞다.
+- 승격 적용(`apply_induction`) 때 빈 range 를 자동으로 채운다 (`range_inferred` 로 근거 기록).
+- 편집기: 빈 range 옆에 "추천: → 클래스 (비율)" 버튼, "range 추천 모두 적용". test-ontology2 에 4건 적용(v2) → 관계 4개 표시.
+- test-ontology2 속성 36개는 정의도 모두 비어 있다 — 재추출 정확도를 위해 채울 대상.
+
+**구조화 KB — 중첩 블록을 클래스로 올림** (test-ontology): 진짜 유형은 ArchitectureStyle 하나인데 YAML 중첩 블록
+(fit_signals, tradeoffs, decision_rules …)에 붙은 rdf:type 을 TBox 가 클래스 11개로 올렸다. 이 노드들은 레코드마다
+하나씩 붙은 속성 묶음이지 독립 대상이 아니다. 반대로 다른 스타일을 가리키는 경로(related_patterns,
+combines_well_with.style, conflicts_with.style)는 레코드 노드에 rdf:type 이 없어 관계로 잡히지 않았다.
+
+- `class_query.attach_ref_kinds`: 경로 값의 60% 이상이 한 유형의 멤버면 `ref_kind` (다른 레코드 참조)
+- TBox: 중첩 블록 클래스에 `rag:structural true`, 참조 경로의 range = 유형
+- 스키마 그래프(API·편집기): 유형 노드 하나 + 중첩 블록은 값 속성 묶음(fit_signals 26, decision_rules 24 …),
+  참조 경로 3개는 ArchitectureStyle → ArchitectureStyle 관계. 편집기의 "중첩 블록 펼치기" 로 예전 트리도 볼 수 있다.
+
+데이터(트리플·청크)는 바꾸지 않았다 — 데이터는 이미 올바른 엔티티를 가리키고 있었고, 스키마 설명만 빠져 있었다.
+
 ## 6. 남은 것
 
 - 재추출 후 결과 비교(전/후 트리플 차이)를 편집기 안에서 보여 주기

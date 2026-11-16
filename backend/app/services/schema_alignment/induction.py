@@ -400,6 +400,19 @@ async def apply_induction(kb_id: str, run_id: str, reextract: bool = False,
     kb = await KnowledgeBase.get(kb_id)
     ind = (kb.promotion_metadata or {}).get("induction") or {}
     class_members = Counter(p.target for p in props if p.kind == "class")
+    # range 가 빠진 속성은 데이터로 채운다 (목적어 60% 이상이 한 클래스) — 시드 없는 유도는 range 를 거의 안 낸다
+    from app.services.schema_alignment.schema_editor import infer_ranges
+    empty = [p["name"] for p in ind.get("properties", []) if not p.get("range")]
+    if empty:
+        guessed = await infer_ranges(kb_id, empty)
+        for p in ind.get("properties", []):
+            if p["name"] in guessed:
+                p["range"] = guessed[p["name"]]["class"]
+                p["range_inferred"] = guessed[p["name"]]
+        if guessed:
+            meta0 = dict(kb.promotion_metadata or {})
+            meta0["induction"] = ind
+            kb.promotion_metadata = meta0
     classes = [{"name": c["name"], "description": c.get("description", "")} for c in ind.get("classes", [])]
     properties = ind.get("properties", [])
     ttl = build_tbox_turtle(classes, properties)

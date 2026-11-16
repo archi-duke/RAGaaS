@@ -206,6 +206,16 @@ async def get_schema(
     # - 클래스: label·comment(설명)
     # - 속성: range 가 클래스면 클래스 간 링크, 아니면 domain 클래스 노드의 attributes 로
     # 질의를 둘로 나눠 OPTIONAL 조합으로 행이 불어나 LIMIT 에 잘리던 문제를 없앴다.
+    # 구조화(YAML/JSON) KB: 중첩 블록은 클래스가 아니라 레코드의 속성 묶음 → 유형 노드 안의 값 속성(경로)으로 접고,
+    # 다른 레코드를 가리키는 경로만 유형 간 링크로 (§8)
+    try:
+        from app.models.knowledge_base import KnowledgeBase
+        _kb = await KnowledgeBase.get(kb_id)
+    except Exception:
+        _kb = None
+    if _kb and _kb.schema_source == "structured":
+        return await _structured_schema_graph(kb_id)
+
     nodes: Dict[str, GraphNode] = {}
     links: List[GraphLink] = []
     graph_uri = f"urn:ontology:{kb_id}"
@@ -247,7 +257,7 @@ async def get_schema(
         dom, rng = b.get("domain", {}).get("value"), b.get("range", {}).get("value")
         info = {"name": label, "description": b.get("comment", {}).get("value", ""),
                 "aliases": [a for a in (b.get("aliases", {}).get("value") or "").split("|") if a]}
-        if dom in nodes and rng in nodes and dom != rng:
+        if dom in nodes and rng in nodes:   # 자기 관계(ArchitectureStyle → ArchitectureStyle)도 링크
             links.append(GraphLink(source=dom, target=rng, label=label))
         elif dom in nodes:
             nodes[dom].properties["attributes"].append({**info, **({"range": local(rng)} if rng else {})})
@@ -258,6 +268,32 @@ async def get_schema(
     for n in nodes.values():
         n.properties["attribute_count"] = len(n.properties["attributes"])
     print(f"[Schema] {len(nodes)} classes, {len(links)} links for KB {kb_id}")
+    return GraphData(nodes=list(nodes.values()), links=links)
+
+
+async def _structured_schema_graph(kb_id: str) -> "GraphData":
+    from app.services.retrieval.graph_backends.fuseki import FusekiBackend
+    kinds, catalogs = await FusekiBackend()._class_catalog(kb_id, lambda _m: None, {})
+    nodes: Dict[str, GraphNode] = {}
+    links: List[GraphLink] = []
+    for k in kinds:
+        uri = f"http://rag.local/class/{k['name']}"
+        attrs, groups = [], {}
+        for p in catalogs.get(k["name"]) or []:
+            if p.get("equiv_rep") and p["equiv_rep"] != p["key"]:
+                continue
+            if p.get("ref_kind"):
+                links.append(GraphLink(source=uri, target=f"http://rag.local/class/{p['ref_kind']}", label=p["key"]))
+                continue
+            attrs.append({"name": p["key"], "description": p.get("description", ""), "aliases": p.get("aliases") or [],
+                          "group": p["segments"][0] if len(p["segments"]) > 1 else ""})
+            if len(p["segments"]) > 1:
+                groups[p["segments"][0]] = groups.get(p["segments"][0], 0) + 1
+        nodes[uri] = GraphNode(id=uri, label=k["name"], group="Class",
+                               properties={"uri": uri, "description": k.get("description", ""), "attributes": attrs,
+                                           "attribute_count": len(attrs), "nested_groups": groups,
+                                           "member_count": len(k["members"])})
+    links = [l for l in links if l.target in nodes]
     return GraphData(nodes=list(nodes.values()), links=links)
 
 

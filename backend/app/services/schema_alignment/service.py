@@ -561,6 +561,7 @@ async def mark_structured_ontology(kb_id: str) -> Dict[str, Any]:
         classes.setdefault(name, {"label": name, "count": n, "description": "구조화 문서의 중첩 항목"})
     props: Dict[str, str] = {}
     prop_notes: Dict[str, Dict[str, Any]] = {}   # 마지막 세그먼트 → 정의·별칭 (덧씌우기)
+    ref_ranges: Dict[str, str] = {}               # 마지막 세그먼트 → 가리키는 유형 클래스
     for k in kinds:
         dom = kind_class(k)
         for p in catalogs.get(k["name"], []):
@@ -568,6 +569,11 @@ async def mark_structured_ontology(kb_id: str) -> Dict[str, Any]:
                 props.setdefault(seg, dom if i == 0 else "")
             if p.get("description") or p.get("aliases"):
                 prop_notes.setdefault(p["segments"][-1], {"description": p.get("description"), "aliases": p.get("aliases")})
+            if p.get("ref_kind"):
+                # 다른 레코드를 가리키는 경로 → 마지막 세그먼트의 range = 그 유형 (예: related_patterns → ArchitectureStyle)
+                ref = next((kind_class(x) for x in kinds if x["name"] == p["ref_kind"]), None)
+                if ref:
+                    ref_ranges[p["segments"][-1]] = ref
 
     # 중첩 구조의 방향 (스키마 그래프용): 속성 → 값 노드의 rdf:type = range, 주어 노드의 rdf:type = domain
     #   예: fit_signals (ArchitectureStyle → Fit_signals), modifiability (Fit_signals → 값)
@@ -589,12 +595,19 @@ async def mark_structured_ontology(kb_id: str) -> Dict[str, Any]:
     for seg in list(props):
         if not props[seg] and nested_dom.get(seg) in classes:
             props[seg] = nested_dom[seg]
+    ranges.update(ref_ranges)
+    kind_names = {kind_class(k) for k in kinds}
 
     lines = ["@prefix owl: <http://www.w3.org/2002/07/owl#> .",
              "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .", ""]
     for name, c in classes.items():
+        # 중첩 블록 타입(Fit_signals …)은 독립 대상이 아니라 레코드에 붙은 속성 묶음 → 구조 노드로 표시
+        structural = name not in kind_names
+        if structural:
+            c["structural"] = True
         lines.append(f"<http://rag.local/class/{uri_part(name)}> a owl:Class ; rdfs:label {lit(name)}"
-                     + (f" ; rdfs:comment {lit(c['description'])}" if c.get("description") else "") + " .")
+                     + (f" ; rdfs:comment {lit(c['description'])}" if c.get("description") else "")
+                     + (" ; <http://rag.local/schema/structural> true" if structural else "") + " .")
     lines.insert(2, "@prefix skos: <http://www.w3.org/2004/02/skos/core#> .")
     for seg, dom in props.items():
         note = prop_notes.get(seg) or {}
