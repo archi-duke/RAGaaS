@@ -342,13 +342,20 @@ def narrower_of(idx: Dict[str, Any], term: str) -> List[Dict[str, Any]]:
 
 async def duplicates(kb_id: str) -> List[Dict[str, Any]]:
     """같은 표기(라벨·별칭)가 둘 이상의 라벨을 가리키는 경우 — 중복 엔티티 후보."""
+    from app.models.lexicon import KbLexiconEntry
     idx = await get_index(kb_id)
+    # 정규화 키 → 사람이 읽을 표기 (화면·별칭 삭제용)
+    shown: Dict[str, str] = {}
+    for e in await KbLexiconEntry.find({"kb_id": kb_id}).to_list():
+        for f in [e.label] + list(e.variants or []) + e.ko + e.en + e.syn:
+            shown.setdefault(_compact(f), f)
     groups: Dict[Tuple[str, ...], Set[str]] = {}
     for norm, labs in idx["terms"].items():
         strong = sorted(l for l, (s, _v) in labs.items() if s >= SCORE_ALIAS)
         if len(strong) >= 2:
             groups.setdefault(tuple(strong), set()).add(norm)
-    return [{"labels": list(k), "shared": sorted(v)[:5]} for k, v in sorted(groups.items(), key=lambda x: -len(x[1]))]
+    return [{"labels": list(k), "shared": sorted({shown.get(n, n) for n in v})[:5]}
+            for k, v in sorted(groups.items(), key=lambda x: -len(x[1]))]
 
 
 # ---------------------------------------------------------------------------
@@ -486,3 +493,170 @@ async def match_translated(kb_id: str, idx: Dict[str, Any], term_en: str, top: i
             return {"matches": [{"label": l, "score": SCORE_TRANSLATED, "similarity": round(s, 3),
                                  "via": f"translated:{f}"}], "candidates": cands}
     return {"matches": [], "candidates": cands}
+
+
+# ---------------------------------------------------------------------------
+# 사람 편집 (L3, 스키마 편집기 "용어 사전" 탭) — 고친 항목은 source=user 로 재생성 때 보존
+# ---------------------------------------------------------------------------
+
+class LexiconEditError(ValueError):
+    pass
+
+
+async def _entry(kb_id: str, label: str):
+    from app.models.lexicon import KbLexiconEntry
+    e = await KbLexiconEntry.find_one({"kb_id": kb_id, "norm": _compact(label)})
+    if e is None:
+        raise LexiconEditError(f"사전에 '{label}' 항목이 없음")
+    return e
+
+
+def _clean_user_list(xs: Sequence[str], label: str) -> List[str]:
+    out, seen = [], {_compact(label)}
+    for x in xs or []:
+        x = str(x).strip()
+        k = _compact(x)
+        if x and k and k not in seen and len(x) <= 60:
+            seen.add(k)
+            out.append(x)
+    return out[:30]
+
+
+async def edit_entry(kb_id: str, label: str, ko=None, en=None, syn=None) -> Dict[str, Any]:
+    e = await _entry(kb_id, label)
+    if ko is not None:
+        e.ko = _clean_user_list(ko, e.label)
+    if en is not None:
+        e.en = _clean_user_list(en, e.label)
+    if syn is not None:
+        e.syn = _clean_user_list(syn, e.label)
+    e.skip = False
+    e.source = "user"
+    e.updated_at = datetime.utcnow()
+    await e.save()
+    invalidate(kb_id)
+    return e.model_dump(exclude={"id", "revision_id"})
+
+
+async def remove_alias(kb_id: str, alias: str, labels: Optional[Sequence[str]] = None) -> Dict[str, Any]:
+    """별칭 삭제 — labels 를 주면 그 항목들에서만, 아니면 그 별칭을 가진 모든 항목에서 (중복 묶음의 잡음 별칭 정리)."""
+    from app.models.lexicon import KbLexiconEntry
+    k = _compact(alias)
+    targets = [await _entry(kb_id, l) for l in labels] if labels else await KbLexiconEntry.find({"kb_id": kb_id}).to_list()
+    changed = []
+    for e in targets:
+        before = len(e.ko) + len(e.en) + len(e.syn)
+        e.ko = [x for x in e.ko if _compact(x) != k]
+        e.en = [x for x in e.en if _compact(x) != k]
+        e.syn = [x for x in e.syn if _compact(x) != k]
+        if len(e.ko) + len(e.en) + len(e.syn) != before:
+            e.source = "user"
+            e.updated_at = datetime.utcnow()
+            await e.save()
+            changed.append(e.label)
+    invalidate(kb_id)
+    return {"removed_from": changed}
+
+
+async def set_broader(kb_id: str, label: str, broader: str, status: str) -> Dict[str, Any]:
+    """상위 개념 승인(approved)·거절(rejected)·추가(없던 상위 개념이면 approved 로 추가)."""
+    if status not in ("approved", "rejected", "proposed"):
+        raise LexiconEditError("status 는 approved | rejected | proposed")
+    e = await _entry(kb_id, label)
+    hit = next((b for b in e.broader if _compact(b["label"]) == _compact(broader)), None)
+    if hit is None:
+        if status == "rejected":
+            raise LexiconEditError(f"'{label}' 에 상위 개념 '{broader}' 가 없음")
+        e.broader.append({"label": broader.strip(), "status": status})
+    else:
+        hit["status"] = status
+    e.source = "user"
+    e.updated_at = datetime.utcnow()
+    await e.save()
+    invalidate(kb_id)
+    return e.model_dump(exclude={"id", "revision_id"})
+
+
+async def review_queue(kb_id: str, limit: int = 300) -> List[Dict[str, Any]]:
+    """검토 전(proposed) 상위 개념 — 상위 개념별로 묶어서 (같은 상위 개념을 한 번에 승인·거절)."""
+    from app.models.lexicon import KbLexiconEntry
+    groups: Dict[str, List[str]] = {}
+    for e in await KbLexiconEntry.find({"kb_id": kb_id, "concept_only": False}).to_list():
+        for b in e.broader:
+            if b.get("status", "proposed") == "proposed":
+                groups.setdefault(b["label"], []).append(e.label)
+    rows = [{"broader": k, "labels": sorted(v)} for k, v in groups.items()]
+    rows.sort(key=lambda r: (-len(r["labels"]), r["broader"]))
+    return rows[:limit]
+
+
+# ---------------------------------------------------------------------------
+# L4 — 자동 갱신 + 내부 검색 연결
+# ---------------------------------------------------------------------------
+
+AUTO_REFRESH_MIN_INTERVAL_S = 600
+_LAST_FP: Dict[str, Tuple[str, float]] = {}
+
+
+async def ensure_fresh(kb_id: str) -> None:
+    """그래프가 바뀌었으면(카탈로그 지문 변경) 사전에 새 라벨을 증분 반영 — 백그라운드, 10분에 한 번까지.
+
+    사전을 한 번이라도 만든 KB 에만 (원치 않는 LLM 비용 방지). 새 라벨이 없으면 LLM 호출 0.
+    적재·재추출·리플레이 어느 경로로 그래프가 바뀌어도 잡히도록 지문 기준으로 한다.
+    """
+    try:
+        from app.models.lexicon import KbLexiconEntry
+        from app.services.retrieval.graph_backends.fuseki import FusekiBackend
+        cached = FusekiBackend._CLASS_CATALOG_CACHE.get(kb_id)
+        if not cached:
+            return
+        fp = cached[0]
+        prev = _LAST_FP.get(kb_id)
+        if prev is None:
+            _LAST_FP[kb_id] = (fp, time.time())      # 서버 시작 후 첫 확인 — 기준만 잡는다
+            return
+        if prev[0] == fp or time.time() - prev[1] < AUTO_REFRESH_MIN_INTERVAL_S:
+            return
+        if build_status(kb_id).get("state") == "running":
+            return
+        if await KbLexiconEntry.find_one({"kb_id": kb_id}) is None:
+            return
+        _LAST_FP[kb_id] = (fp, time.time())
+        logger.info("lexicon auto-refresh %s (fingerprint %s → %s)", kb_id, prev[0], fp)
+        asyncio.create_task(build_lexicon(kb_id))
+    except Exception as e:     # 검색을 막지 않는다
+        logger.warning("lexicon ensure_fresh failed: %s", e)
+
+
+async def expand_query_entities(kb_id: str, entities: Sequence[str], translated: Sequence[str]) -> Dict[str, Any]:
+    """내부 검색(/chat)용: 질문 분석이 뽑은 엔티티를 사전으로 그래프 표기에 맞춘다.
+
+    ① 원문 엔티티 → 사전 일치 ② 질문 분석의 영어 번역(translated_entities) → 사전 일치 → 없으면 영어 표기 임베딩.
+    반환: {"added": [그래프 라벨], "log": [사람이 읽을 근거]}. 사전이 없는 KB 면 빈 결과.
+    """
+    await ensure_fresh(kb_id)
+    idx = await get_index(kb_id)
+    if not idx["entries"]:
+        return {"added": [], "log": []}
+    added: List[str] = []
+    log: List[str] = []
+
+    def take(src: str, ms: List[Dict[str, Any]], how: str):
+        top = [m for m in ms if m["score"] >= SCORE_STRIPPED][:2]
+        for m in top:
+            if m["label"] not in added and _compact(m["label"]) != _compact(src):
+                added.append(m["label"])
+                log.append(f"{src} → {m['label']} ({how}:{m['via']})")
+        return bool(top)
+
+    for e in entities or []:
+        take(e, match_term(idx, e), "사전")
+    for t in translated or []:
+        if take(t, match_term(idx, t), "사전·영어"):
+            continue
+        tr = await match_translated(kb_id, idx, t)
+        for m in tr["matches"]:
+            if m["label"] not in added:
+                added.append(m["label"])
+                log.append(f"{t} → {m['label']} (영어 유사도 {m.get('similarity')})")
+    return {"added": added, "log": log}

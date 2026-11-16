@@ -22,13 +22,20 @@ import itertools
 import time
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-MAX_LEAVES = 12
-MAX_CONJUNCTIONS = 16
+MAX_LEAVES = 64           # GoJIRA style-score: 정규화 속성 × 신호 표기로 15개 이상이 흔함 (2026-11-16 상향)
+MAX_CONJUNCTIONS = 64
 MAX_LIMIT = 200
 
 
 class PlanError(ValueError):
     pass
+
+
+class QueryFailed(RuntimeError):
+    pass
+
+
+QUERY_TIMEOUT_S = 20
 
 
 # ---------------------------------------------------------------------------
@@ -86,6 +93,16 @@ SELECT ?e (SAMPLE(?l) AS ?label) FROM <urn:x-arq:UnionGraph> WHERE {{ VALUES ?e 
 
 
 async def run_plan(kb_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
+    """계획 실행. 그래프 조회가 실패하면 status=error 로 분명히 돌려준다 (부분 결과를 정답처럼 내지 않음)."""
+    t0 = time.time()
+    try:
+        return await _run_plan(kb_id, body)
+    except QueryFailed as e:
+        return {"status": "error", "message": str(e) + " — 잠시 뒤 다시 시도하거나 조건을 줄이세요.",
+                "entities": [], "total": 0, "elapsed_ms": int((time.time() - t0) * 1000)}
+
+
+async def _run_plan(kb_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
     from app.services.agent_query.catalog import load_catalog
     from app.services.retrieval import class_query as cq
     from app.services.retrieval.graph_backends.fuseki import FusekiBackend
@@ -94,8 +111,25 @@ async def run_plan(kb_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
     _kb, kinds, catalogs, version = await load_catalog(kb_id)
     fb = FusekiBackend()
 
+    _qcache: Dict[str, Any] = {}
+
+    from app.core.fuseki import fuseki_client
+
     async def q(sparql: str):
-        return await asyncio.to_thread(fb._bindings, kb_id, sparql)
+        # 같은 계획 안의 같은 질의는 한 번만 (any 의 단일 조건 묶음 = 조건별 충족 조회와 같은 SPARQL)
+        # 실패·시간 초과는 한 번 재시도하고, 그래도 실패하면 예외 — 빈 결과(= 조건 불충족)로 숨기지 않는다
+        if sparql not in _qcache:
+            last = None
+            for _attempt in range(2):
+                try:
+                    res = await asyncio.to_thread(fuseki_client.query_sparql_strict, kb_id, sparql, QUERY_TIMEOUT_S)
+                    _qcache[sparql] = res.get("results", {}).get("bindings", [])
+                    break
+                except Exception as e:      # noqa: BLE001
+                    last = e
+            else:
+                raise QueryFailed(f"그래프 조회 실패 ({QUERY_TIMEOUT_S}초 시간 초과 또는 오류, 재시도 1회): {str(last)[:200]}")
+        return _qcache[sparql]
 
     def fail(status: str, message: str, **extra) -> Dict[str, Any]:
         return {"status": status, "message": message, "schema_version": version,
@@ -231,7 +265,8 @@ async def run_plan(kb_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
 
     # 6) 근거 트리플 (묶음별, 그 묶음을 만족한 엔티티만) + 반환 경로
     triples: List[Dict[str, Any]] = []
-    if body.get("include_evidence", True) and entities:
+    want_evidence = body.get("include_evidence", True) and str(body.get("evidence") or "compact").lower() != "none"
+    if want_evidence and entities:
         seen = set()
         for i, (conj, plan) in enumerate(conj_plans):
             if plan is None:

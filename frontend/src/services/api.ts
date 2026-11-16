@@ -218,6 +218,21 @@ export const schemaApi = {
     },
 };
 
+// KB 용어 사전 (docs/design-kb-lexicon.md) — 스키마 편집기 "용어 사전" 탭
+export const lexiconApi = {
+    status: (kbId: string) => api.get(`knowledge-bases/${kbId}/lexicon/status`),
+    build: (kbId: string, rebuild = false) => api.post(`knowledge-bases/${kbId}/lexicon/build`, null, { params: { rebuild } }),
+    list: (kbId: string, q?: string, limit = 300) => api.get(`knowledge-bases/${kbId}/lexicon`, { params: { q, limit } }),
+    edit: (kbId: string, body: { label: string; ko?: string[]; en?: string[]; syn?: string[] }) =>
+        api.put(`knowledge-bases/${kbId}/lexicon/entry`, body),
+    removeAlias: (kbId: string, alias: string, labels?: string[]) =>
+        api.post(`knowledge-bases/${kbId}/lexicon/alias/remove`, { alias, labels }),
+    broader: (kbId: string, body: { label: string; broader: string; status: 'approved' | 'rejected' | 'proposed'; labels?: string[] }) =>
+        api.post(`knowledge-bases/${kbId}/lexicon/broader`, body),
+    review: (kbId: string) => api.get(`knowledge-bases/${kbId}/lexicon/review`),
+    duplicates: (kbId: string) => api.get(`knowledge-bases/${kbId}/lexicon/duplicates`),
+};
+
 export const retrievalApi = {
     retrieve: (kbId: string, data: {
         query: string;

@@ -128,6 +128,20 @@ class FusekiClient:
             logger.error(f"Error executing SPARQL query on {kb_id}: {e}")
             return {}
 
+    def query_sparql_strict(self, kb_id: str, query: str, timeout: int = 20) -> dict:
+        """query_sparql 과 같지만 실패·시간 초과를 예외로 올린다 (빈 결과로 숨기지 않음).
+
+        외부 에이전트용 query_plan 처럼 '조건을 만족하는 엔티티 없음'과 '조회 실패'를 구분해야 하는 곳에서 쓴다.
+        (2026-11-16: 근거 질의 하나가 간헐적으로 36~60초 걸려 시간 초과 → 빈 결과로 조용히 처리되던 문제)
+        """
+        dataset_url = self._get_dataset_url(kb_id)
+        sparql = SPARQLWrapper(f"{dataset_url}/query")
+        sparql.setCredentials("admin", "admin")
+        sparql.setQuery(query)
+        sparql.setReturnFormat(JSON)
+        sparql.setTimeout(timeout)
+        return sparql.query().convert()
+
     def upload_file(self, kb_id: str, file_path: str, graph_uri: str, content_type: str = "text/turtle") -> bool:
         """Upload an RDF file to a specific named graph (replaces existing data)."""
         dataset_url = self._get_dataset_url(kb_id)

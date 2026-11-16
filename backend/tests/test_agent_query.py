@@ -155,7 +155,7 @@ def test_to_dnf():
         to_dnf({"all": [A], "any": [B]})
     with pytest.raises(PlanError):
         to_dnf({"any": []})
-    many = {"all": [{"any": [A, B]} for _ in range(5)]}      # 2^5 = 32 > 16
+    many = {"all": [{"any": [A, B]} for _ in range(7)]}      # 2^7 = 128 > 64
     with pytest.raises(PlanError):
         to_dnf(many)
 
@@ -191,3 +191,41 @@ def test_validate_plan_strict_no_loose_text_match():
     five = [{"path": "consistency_model", "op": "exists"}] * 5
     assert cq.validate_plan({"kind": "Style", "filters": five}, kinds, cats, strict=True)["status"] == "reject"
     assert cq.validate_plan({"kind": "Style", "filters": five}, kinds, cats)["status"] == "ok"
+
+
+def test_validate_plan_strict_in_skips_unknown_values():
+    kinds, cats = _catalog()
+    f = [{"path": "consistency_model", "op": "in", "value": ["strong", "medium_or_lower"]}]
+    r = cq.validate_plan({"kind": "Style", "filters": f}, kinds, cats, strict=True)
+    assert r["status"] == "ok" and [v["label"] for v in r["plan"]["filters"][0]["values"]] == ["strong"]
+    assert any("medium_or_lower" in a for a in r["adjustments"])
+    # 전부 목록 밖이면 zero, 내부(비 strict)는 기존대로 zero
+    assert cq.validate_plan({"kind": "Style", "filters": [{"path": "consistency_model", "op": "in", "value": ["x", "y"]}]},
+                            kinds, cats, strict=True)["status"] == "zero"
+    assert cq.validate_plan({"kind": "Style", "filters": f}, kinds, cats)["status"] == "zero"
+
+
+def test_to_dnf_allows_many_or_leaves():
+    leaves = [{"path": f"p{i}", "op": "eq", "value": i} for i in range(40)]
+    assert len(to_dnf({"any": leaves})) == 40
+
+
+def test_run_plan_reports_query_failure(monkeypatch):
+    """그래프 조회 실패를 '결과 없음'으로 숨기지 않고 status=error 로 돌려준다."""
+    import asyncio
+    from app.services.agent_query import plan as pl
+    from app.services.agent_query import catalog as ct
+
+    kinds, cats = _catalog()
+
+    async def fake_load(kb_id):
+        return None, kinds, cats, "v1"
+
+    def boom(*a, **k):
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr(ct, "load_catalog", fake_load)
+    import app.core.fuseki as F
+    monkeypatch.setattr(F.fuseki_client, "query_sparql_strict", boom)
+    r = asyncio.run(pl.run_plan("kb", {"kind": "Style", "where": {"path": "consistency_model", "op": "eq", "value": "strong"}}))
+    assert r["status"] == "error" and "조회 실패" in r["message"]

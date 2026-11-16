@@ -118,11 +118,13 @@ async def describe_entity(kb_id: str, name: str, name_en: Optional[str] = None, 
         return _err(e)
 
 
-@mcp.tool(description="근거 청크 원문과 문서명 (query_plan 결과의 chunk_ids). 최대 50개.")
-async def get_chunks(kb_id: str, chunk_ids: List[str], max_chars: int = 1500) -> Dict[str, Any]:
+@mcp.tool(description="근거 청크 원문과 문서명 (query_plan·describe_entity 결과의 chunk_ids). 최대 50개. "
+                      "expand_doc=true 면 같은 문서의 다른 청크(same_doc_chunks)도 준다 — 연도·수치를 근거 청크에서 못 찾았을 때.")
+async def get_chunks(kb_id: str, chunk_ids: List[str], max_chars: int = 1500,
+                     expand_doc: bool = False) -> Dict[str, Any]:
     from app.services.agent_query import catalog
     try:
-        return await catalog.get_chunks(kb_id, chunk_ids, max_chars)
+        return await catalog.get_chunks(kb_id, chunk_ids, max_chars, expand_doc)
     except Exception as e:
         return _err(e)
 

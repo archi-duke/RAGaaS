@@ -37,9 +37,12 @@ TOOLS = [
                                                      "aggregate": {"type": "object"}, "limit": {"type": "integer"},
                                                      "evidence": {"type": "string", "enum": ["compact", "full", "none"]}},
                     "required": ["kind"]}}},
-    {"type": "function", "function": {"name": "get_chunks", "description": "근거 청크 원문 + 문서명",
-     "parameters": {"type": "object", "properties": {"chunk_ids": {"type": "array", "items": {"type": "string"}}},
+    {"type": "function", "function": {"name": "get_chunks", "description": "근거 청크 원문 + 문서명. expand_doc=true 면 같은 문서의 다른 청크도",
+     "parameters": {"type": "object", "properties": {"chunk_ids": {"type": "array", "items": {"type": "string"}},
+                                                     "expand_doc": {"type": "boolean"}},
                     "required": ["chunk_ids"]}}},
+    {"type": "function", "function": {"name": "search", "description": "자연어 검색 (느림, 마지막 수단). 근거 청크와 트리플을 준다",
+     "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
     {"type": "function", "function": {"name": "read_examples", "description": "스킬의 질의 계획 예시 5개를 읽는다",
      "parameters": {"type": "object", "properties": {}}}},
 ]
@@ -63,7 +66,10 @@ async def run_tool(kb_id: str, name: str, args: Dict[str, Any]) -> Any:
         r.pop("sparql", None)
         return r
     if name == "get_chunks":
-        return await catalog.get_chunks(kb_id, args.get("chunk_ids") or [], 1500)
+        return await catalog.get_chunks(kb_id, args.get("chunk_ids") or [], 1500, bool(args.get("expand_doc")))
+    if name == "search":
+        from app.mcp_server import search as mcp_search
+        return await mcp_search(kb_id, args.get("query") or "", False, 8)
     if name == "read_examples":
         return open(EXAMPLES).read()
     return {"error": f"unknown tool {name}"}
@@ -126,7 +132,7 @@ async def solve(kb_id: str, cfg, model: str, system: str, q: Dict[str, Any]) -> 
             msgs.append({"role": "tool", "tool_call_id": tc["id"], "content": txt[:TOOL_RESULT_MAX]})
     return {"id": q["id"], "answer": answer, "tool_calls": calls, "tools": tools_used, "turns": turn + 1,
             "prompt_tokens": pt, "completion_tokens": ct, "sec": round(time.time() - t0, 1),
-            "used_chat_fallback": False}
+            "used_chat_fallback": "search" in tools_used}
 
 
 async def main():

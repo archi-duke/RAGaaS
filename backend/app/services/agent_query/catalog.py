@@ -225,6 +225,7 @@ async def lookup_values(kb_id: str, terms: Sequence[str], kind: Optional[str] = 
     """terms_en: 클라이언트가 보낸 영어 표기 (오탈자 교정 포함). 사전에 없을 때만 쓴다 (§5.1)."""
     from app.services.agent_query import lexicon as lx
     _kb_, kinds, catalogs, version = await load_catalog(kb_id)
+    await lx.ensure_fresh(kb_id)
     idx = await lx.get_index(kb_id)
     # 값 라벨 → 등장 위치 (유형·경로)
     where: Dict[str, List[Dict[str, Any]]] = {}
@@ -440,7 +441,13 @@ async def resolve_entities(kb_id: str, names: Sequence[str], kind: Optional[str]
 _CHUNK_ID_RE = re.compile(r"^[A-Za-z0-9_\-:.]{1,200}$")
 
 
-async def get_chunks(kb_id: str, chunk_ids: Sequence[str], max_chars: int = 1500) -> Dict[str, Any]:
+MAX_DOC_CHUNKS = 12
+
+
+async def get_chunks(kb_id: str, chunk_ids: Sequence[str], max_chars: int = 1500,
+                     expand_doc: bool = False) -> Dict[str, Any]:
+    """expand_doc=True: 요청한 청크와 같은 문서의 다른 청크도 함께 (문서당 최대 12개).
+    평가 14: 연도('1887년 7월', '1868년')가 근거 청크가 아닌 같은 문서의 다른 청크에 있어 놓친 문제."""
     await _kb(kb_id)
     ids = [c for c in dict.fromkeys(chunk_ids or []) if isinstance(c, str) and _CHUNK_ID_RE.match(c)][:MAX_CHUNKS]
     if not ids:
@@ -452,12 +459,39 @@ async def get_chunks(kb_id: str, chunk_ids: Sequence[str], max_chars: int = 1500
         col = create_collection(kb_id)
         col.load()
         expr = "chunk_id in [" + ", ".join(f'"{c}"' for c in ids) + "]"
-        return col.query(expr=expr, output_fields=["chunk_id", "content", "metadata", "doc_id"], limit=len(ids))
+        # pymilvus 결과는 지연 객체라 일반 리스트로 바꾼다 (반복 후 append 하면 IndexError)
+        return [dict(r) for r in col.query(expr=expr, output_fields=["chunk_id", "content", "metadata", "doc_id"],
+                                           limit=len(ids))]
 
     try:
         rows = await asyncio.wait_for(asyncio.to_thread(_query), timeout=15)
     except asyncio.TimeoutError:
         raise HTTPException(status_code=504, detail="청크 조회 시간 초과 (Milvus)")
+    extra_ids: List[str] = []
+    if expand_doc and rows:
+        docs = list({r.get("doc_id") for r in rows if r.get("doc_id")})
+
+        def _same_doc():
+            from app.core.milvus import create_collection
+            col = create_collection(kb_id)
+            expr = "doc_id in [" + ", ".join(f'"{d}"' for d in docs) + "]"
+            return [dict(r) for r in col.query(expr=expr, output_fields=["chunk_id", "content", "metadata", "doc_id"],
+                                               limit=MAX_DOC_CHUNKS * len(docs))]
+        try:
+            more = await asyncio.wait_for(asyncio.to_thread(_same_doc), timeout=15)
+        except asyncio.TimeoutError:
+            more = []
+        have = {r["chunk_id"] for r in rows}
+        per_doc: Dict[str, int] = {}
+        for r in more:
+            if r["chunk_id"] in have:
+                continue
+            d = r.get("doc_id")
+            if per_doc.get(d, 0) >= MAX_DOC_CHUNKS:
+                continue
+            per_doc[d] = per_doc.get(d, 0) + 1
+            rows.append(r)
+            extra_ids.append(r["chunk_id"])
     # 문서명: Milvus 메타데이터가 비어 있는 경우가 많아 doc_id → Document.filename
     doc_names: Dict[str, str] = {}
     doc_ids = list({r.get("doc_id") for r in rows if r.get("doc_id")})
@@ -479,7 +513,10 @@ async def get_chunks(kb_id: str, chunk_ids: Sequence[str], max_chars: int = 1500
             "text": text[:max_chars],
             "truncated": len(text) > max_chars,
         }
-    return {"chunks": [found[c] for c in ids if c in found], "missing": [c for c in ids if c not in found]}
+    out = {"chunks": [found[c] for c in ids if c in found], "missing": [c for c in ids if c not in found]}
+    if extra_ids:
+        out["same_doc_chunks"] = [found[c] for c in extra_ids if c in found]
+    return out
 
 
 # ---------------------------------------------------------------------------
