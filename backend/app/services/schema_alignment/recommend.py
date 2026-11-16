@@ -56,6 +56,118 @@ async def _log(kb_id: str, entry: Dict[str, Any]) -> None:
     await kb.save()
 
 
+# ---------------------------------------------------------------------------
+# 추천 기억: 사람이 거절한 안 / 확정한 결정 — 다음 추천에서 반복·번복하지 않게 (promotion_metadata.ai_recommend_memory)
+# ---------------------------------------------------------------------------
+
+MEMORY_MAX = 200
+
+
+def _triple_sig(x: Dict[str, Any]) -> str:
+    from app.services.retrieval.entity_linking import _compact
+    return "|".join(_compact(x.get(k) or "") for k in ("subject", "predicate", "object"))
+
+
+def rejection_sigs(a: Dict[str, Any], removed: Optional[List[str]] = None) -> List[str]:
+    """처리안(또는 수정으로 뺀 엔티티)의 거절 서명. 같은 서명의 안은 다음 추천에서 결정적으로 뺀다."""
+    from app.services.retrieval.entity_linking import _compact
+    t = a.get("type")
+    if t in ("set_range", "set_domain"):
+        key = "range" if t == "set_range" else "domain"
+        return [f"{t}:{a.get('property')}:{a.get(key) or ''}"]
+    if t == "assign_members":
+        ents = removed if removed is not None else a.get("entities") or []
+        return [f"member:{a.get('class')}:{_compact(e)}" for e in ents]
+    if t == "add_class":
+        return [f"add_class:{_compact(a.get('name') or '')}"]
+    if t == "add_property":
+        return [f"add_property:{_compact(a.get('name') or '')}"]
+    if t == "merge_entities":
+        al = removed if removed is not None else a.get("aliases") or []
+        return [f"merge:{_compact(a.get('canonical') or '')}:{_compact(x)}" for x in al]
+    if t == "delete_triples":
+        # 삭제를 거절 = "이 트리플은 맞다" → 그 트리플의 삭제·이동을 모두 막는다
+        return [f"keep:{_triple_sig(x)}" for x in a.get("triples") or []]
+    if t == "move_triples":
+        # 이동을 거절 = 그 대상 관계가 틀렸다 (다른 관계로의 이동은 열어 둔다)
+        return [f"move:{_triple_sig(x)}:{a.get('target_property')}" for x in a.get("triples") or []]
+    return []    # 정의 수정은 문구가 매번 달라 서명으로 막지 않는다 (프롬프트로만)
+
+
+def _describe(a: Dict[str, Any], removed: Optional[List[str]] = None) -> str:
+    t = a.get("type")
+    if t in ("set_range", "set_domain"):
+        k = "range" if t == "set_range" else "domain"
+        return f"{a.get('property')} 의 {k} 를 '{a.get(k) or '(값)'}' 로"
+    if t == "assign_members":
+        return f"{', '.join((removed if removed is not None else a.get('entities') or [])[:8])} 를 {a.get('class')} 멤버로"
+    if t == "merge_entities":
+        return f"{', '.join((removed if removed is not None else a.get('aliases') or [])[:5])} → {a.get('canonical')} 병합"
+    if t in ("move_triples", "delete_triples"):
+        tr = "; ".join(f"{x.get('subject')} —{x.get('predicate')}→ {x.get('object')}" for x in (a.get("triples") or [])[:3])
+        if t == "move_triples":
+            return f"{tr} 를 {a.get('target_property')} 로 이동"
+        return f"{tr} 는 맞는 트리플 — 삭제·이동 안 함"
+    if t == "set_definition":
+        return f"{a.get('property')} 정의를 '{str(a.get('description') or '')[:80]}' 로"
+    return f"{ACTION_LABEL.get(t, t)} {a.get('name') or ''}"
+
+
+async def remember(kb_id: str, rejected: List[Dict[str, Any]], accepted: List[Dict[str, Any]]) -> Dict[str, int]:
+    """거절(체크 해제 + 수정으로 뺀 엔티티)과 확정 결정(승인한 range·domain)을 기억에 쌓는다."""
+    from app.models.knowledge_base import KnowledgeBase
+    kb = await KnowledgeBase.get(kb_id)
+    if not kb:
+        return {"rejected": 0, "decided": 0}
+    meta = dict(kb.promotion_metadata or {})
+    mem = dict(meta.get("ai_recommend_memory") or {})
+    rej = list(mem.get("rejected") or [])
+    have = {r["sig"] for r in rej}
+    n_rej = 0
+
+    def add(a, removed=None):
+        nonlocal n_rej
+        # 멤버·병합은 이름마다 따로 기억 (설명도 그 이름만)
+        if a.get("type") in ("assign_members", "merge_entities"):
+            names = removed if removed is not None else (a.get("entities") if a["type"] == "assign_members" else a.get("aliases")) or []
+            parts = [(rejection_sigs(a, [x])[0], _describe(a, [x])) for x in names]
+        elif a.get("type") in ("move_triples", "delete_triples"):
+            parts = [(rejection_sigs({**a, "triples": [x]})[0], _describe({**a, "triples": [x]})) for x in a.get("triples") or []]
+        else:
+            parts = [(sg, _describe(a)) for sg in rejection_sigs(a)]
+        for sig, text in parts:
+            if sig and sig not in have:
+                have.add(sig)
+                rej.append({"sig": sig, "text": text, "reason": a.get("reject_reason") or "", "at": _now()})
+                n_rej += 1
+
+    for a in rejected:
+        add(a)
+    for a in accepted:
+        orig = a.get("orig") or {}
+        if a.get("type") == "assign_members" and orig.get("entities"):
+            gone = [e for e in orig["entities"] if e not in set(a.get("entities") or [])]
+            if gone:
+                add(a, gone)
+        if a.get("type") == "merge_entities" and orig.get("aliases"):
+            gone = [x for x in orig["aliases"] if x not in set(a.get("aliases") or [])]
+            if gone:
+                add(a, gone)
+    decided = dict(mem.get("decided") or {})
+    n_dec = 0
+    for a in accepted:
+        if a.get("type") in ("set_range", "set_domain"):
+            k = "range" if a["type"] == "set_range" else "domain"
+            decided[f"{k}:{a['property']}"] = {"value": a.get(k) or "", "at": _now()}
+            n_dec += 1
+    mem["rejected"] = rej[-MEMORY_MAX:]
+    mem["decided"] = decided
+    meta["ai_recommend_memory"] = mem
+    kb.promotion_metadata = meta
+    await kb.save()
+    return {"rejected": n_rej, "decided": n_dec}
+
+
 def _chunk_texts(kb_id: str, chunk_ids: List[str]) -> Dict[str, str]:
     from app.core.milvus import create_collection
     out: Dict[str, str] = {}
@@ -83,6 +195,22 @@ async def collect_context(kb_id: str, scope: Optional[Dict[str, Any]] = None) ->
     problems: List[Dict[str, Any]] = []
     if scope and scope.get("triples"):
         problems = [t for t in scope["triples"] if t.get("subject") and t.get("object")][:MAX_PROBLEM_TRIPLES]
+    elif scope and scope.get("gaps") is not None:
+        # 재추출 뒤 정리: 멤버 누락 목적어(특히 새로 생긴 표기)를 가진 트리플을 문제로 — 관계마다 고르게
+        want = {n for names in (scope.get("gaps") or {}).values() for n in names}
+        props_with_gaps = []
+        for items in (spec.get("member_gaps") or {}).values():
+            for g in items:
+                if not want or g["name"] in want:
+                    props_with_gaps.extend(g.get("via") or [])
+        for name in list(dict.fromkeys(props_with_gaps))[:8]:
+            try:
+                rows = (await property_triples(kb_id, name, 150))["triples"]
+            except SchemaEditError:
+                continue
+            for r in rows:
+                if r["status"] == "gap" and (not want or r["object"] in want) and len(problems) < MAX_PROBLEM_TRIPLES:
+                    problems.append({**r, "property": name, "predicate": r.get("predicate") or name})
     else:
         # 위반·누락이 많은 관계부터 문제 트리플을 고른다
         scored = []
@@ -113,7 +241,10 @@ async def collect_context(kb_id: str, scope: Optional[Dict[str, Any]] = None) ->
         pass
     for t in problems:
         t["chunk_text"] = texts.get(t.get("source") or "", "")
-    return {"spec": spec, "problems": problems, "entity_keys": entity_keys}
+    from app.models.knowledge_base import KnowledgeBase
+    kb = await KnowledgeBase.get(kb_id)
+    memory = ((kb.promotion_metadata or {}).get("ai_recommend_memory") or {}) if kb else {}
+    return {"spec": spec, "problems": problems, "entity_keys": entity_keys, "memory": memory}
 
 
 def build_messages(ctx: Dict[str, Any]) -> List[Dict[str, str]]:
@@ -154,7 +285,7 @@ def build_messages(ctx: Dict[str, Any]) -> List[Dict[str, str]]:
 [문제 트리플과 근거 청크]
 {chr(10).join(prob) or '(없음)'}
 
-처리안 종류 (이 중에서만):
+{{memory_block}}처리안 종류 (이 중에서만):
 - set_definition {{property, description}}: 정의 수정. 같은 유형 오류가 반복되면 개별 수정보다 이것을 먼저 — 정의는 재추출 프롬프트에 들어가 같은 오류를 막는다.
   description 은 "Domain | 관계 | Range — 무엇이 목적어이고 무엇은 아닌지" 형태.
 - set_range {{property, range}} / set_domain {{property, domain}}: 클래스 이름 또는 "" (값 속성)
@@ -168,6 +299,18 @@ def build_messages(ctx: Dict[str, Any]) -> List[Dict[str, str]]:
 규칙: 이름은 위 목록에 있는 것만 (add_* 로 새로 만드는 이름 제외). 근거 청크를 읽고 판단하고, 근거 청크의 해당 구절을 evidence 로 짧게 인용.
 확신이 없으면 내지 마라. 처리안은 최대 15개, 중요한 것부터.
 JSON 만: {{"actions": [{{"type": "...", ...필드, "reason": "한 문장", "evidence": "인용 또는 ''", "confidence": 0.0~1.0}}]}}"""
+    mem = ctx.get("memory") or {}
+    lines = []
+    if mem.get("decided"):
+        lines.append("[사람이 확정한 결정 — 뒤집는 안을 내지 마라]")
+        for k, v in list(mem["decided"].items())[-30:]:
+            kind, prop = k.split(":", 1)
+            lines.append(f"- {prop} 의 {kind} = {v.get('value') or '(값)'}")
+    if mem.get("rejected"):
+        lines.append("[이전에 사람이 거절한 안 — 같은 안을 다시 내지 마라]")
+        for r in mem["rejected"][-40:]:
+            lines.append(f"- {r['text']}" + (f" (이유: {r['reason']})" if r.get("reason") else ""))
+    user = user.replace("{memory_block}", ("\n".join(lines) + "\n\n") if lines else "")
     return [{"role": "system", "content": "You are an ontology curator. Propose minimal, verifiable fixes. Output JSON only."},
             {"role": "user", "content": user}]
 
@@ -270,7 +413,56 @@ def validate_actions(data: Optional[Dict[str, Any]], ctx: Dict[str, Any]) -> Lis
                 out.append({**base, "triples": tri, "target_property": tp})
             else:
                 out.append({**base, "triples": tri})
-    return out[:15]
+    return filter_by_memory(out, ctx)[:15]
+
+
+def filter_by_memory(actions: List[Dict[str, Any]], ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """거절했던 안과 같은 안, 확정한 range·domain 을 뒤집는 안을 뺀다 (멤버·병합은 거절된 이름만 덜어 냄)."""
+    mem = ctx.get("memory") or {}
+    rej = {r["sig"] for r in mem.get("rejected") or []}
+    decided = mem.get("decided") or {}
+    dropped = ctx.setdefault("dropped", [])
+    out = []
+    for a in actions:
+        t = a["type"]
+        if t in ("set_range", "set_domain"):
+            k = "range" if t == "set_range" else "domain"
+            d = decided.get(f"{k}:{a['property']}")
+            if d is not None and (d.get("value") or "") != (a.get(k) or ""):
+                dropped.append(f"확정한 결정 번복: {a['property']} {k} {d.get('value') or '(값)'} → {a.get(k) or '(값)'}")
+                continue
+        if t == "assign_members":
+            keep = [e for e in a["entities"] if rejection_sigs({**a, "entities": [e]})[0] not in rej]
+            gone = [e for e in a["entities"] if e not in keep]
+            if gone:
+                dropped.append(f"거절했던 멤버 지정: {', '.join(gone)} → {a['class']}")
+            if not keep:
+                continue
+            a = {**a, "entities": keep}
+        elif t == "merge_entities":
+            keep = [x for x in a["aliases"] if rejection_sigs({**a, "aliases": [x]})[0] not in rej]
+            if len(keep) < len(a["aliases"]):
+                dropped.append(f"거절했던 병합: {a['canonical']} ← {', '.join(x for x in a['aliases'] if x not in keep)}")
+            if not keep:
+                continue
+            a = {**a, "aliases": keep}
+        elif t in ("move_triples", "delete_triples"):
+            def blocked(x):
+                ts = _triple_sig(x)
+                return f"keep:{ts}" in rej or (t == "move_triples" and f"move:{ts}:{a.get('target_property')}" in rej)
+            keep = [x for x in a["triples"] if not blocked(x)]
+            if len(keep) < len(a["triples"]):
+                dropped.append(f"거절했던 트리플 {'이동' if t == 'move_triples' else '삭제'} {len(a['triples']) - len(keep)}건")
+            if not keep:
+                continue
+            a = {**a, "triples": keep}
+        else:
+            sigs = rejection_sigs(a)
+            if sigs and all(sg in rej for sg in sigs):
+                dropped.append(f"거절했던 안: {_describe(a)}")
+                continue
+        out.append(a)
+    return out
 
 
 async def recommend(kb_id: str, scope: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -284,15 +476,22 @@ async def recommend(kb_id: str, scope: Optional[Dict[str, Any]] = None) -> Dict[
     cfg = await resolve_model_config(await _graph_llm_config(kb) or (kb.llm_model_config or {}))
     if not cfg.get("model"):
         raise SchemaEditError(["추천 모델을 확인할 수 없습니다 (그래프 단계 모델 설정 필요)"])
-    try:
-        raw = await achat(cfg, build_messages(ctx), model=cfg.get("model"), temperature=0,
-                          response_format={"type": "json_object"}, extra_body=no_thinking_extra_body(cfg.get("model")),
-                          timeout=300)
-    except Exception as e:
-        raise SchemaEditError([f"추천 생성 실패: {str(e)[:200]}"], 502)
-    actions = validate_actions(parse_json_loose(raw), ctx)
+    data = None
+    for attempt in range(2):   # 응답이 비거나 해석이 안 되면 한 번 더 (가끔 빈 JSON 이 온다)
+        try:
+            raw = await achat(cfg, build_messages(ctx), model=cfg.get("model"), temperature=0,
+                              response_format={"type": "json_object"}, extra_body=no_thinking_extra_body(cfg.get("model")),
+                              timeout=300)
+        except Exception as e:
+            if attempt:
+                raise SchemaEditError([f"추천 생성 실패: {str(e)[:200]}"], 502)
+            continue
+        data = parse_json_loose(raw)
+        if (data or {}).get("actions"):
+            break
+    actions = validate_actions(data, ctx)
     rec_id = uuid.uuid4().hex[:10]
-    await _log(kb_id, {"id": rec_id, "at": _now(), "model": cfg.get("model"), "scope": "triples" if scope else "schema",
+    await _log(kb_id, {"id": rec_id, "at": _now(), "model": cfg.get("model"), "scope": ("triples" if scope.get("triples") else "gaps") if scope else "schema",
                        "proposed": len(actions), "by_type": _count_types(actions), "dropped": ctx.get("dropped", [])[:10]})
     return {"id": rec_id, "model": cfg.get("model"), "version": ctx["spec"]["version"], "actions": actions,
             "dropped": ctx.get("dropped", [])[:10],
@@ -476,6 +675,7 @@ async def apply(kb_id: str, actions: List[Dict[str, Any]], base_version: Optiona
         kb.schema_rules_version = (kb.schema_rules_version or 0) + 1
         await kb.save()
     rp = await _replay_text_docs(kb_id) if (created or schema_acts) else {"replayed": 0, "errors": []}
+    mem_n = await remember(kb_id, (outcome or {}).get("rejected_actions") or [], actions)
     if rec_id:
         o = outcome or {}
         await _log(kb_id, {"id": rec_id, "applied_at": _now(), "accepted": len(actions),
@@ -484,6 +684,38 @@ async def apply(kb_id: str, actions: List[Dict[str, Any]], base_version: Optiona
                            "rejected": o.get("rejected"), "proposed_seen": o.get("proposed"),
                            "preview": o.get("preview"), "version_after": (saved or {}).get("version", ver)})
     return {"schema_saved": bool(saved and saved.get("saved")), "version": (saved or {}).get("version", ver),
-            "rules_created": created, **rp,
+            "rules_created": created, "remembered": mem_n, **rp,
             "reextract_recommended": any(a["type"] in ("set_definition", "set_range", "set_domain", "add_property")
                                          for a in schema_acts)}
+
+
+
+async def reject(kb_id: str, rec_id: Optional[str], rejected: List[Dict[str, Any]], proposed: Optional[int] = None) -> Dict[str, Any]:
+    """반영 없이 거절만 기록 (패널에서 '거절 기록하고 닫기')."""
+    n = await remember(kb_id, rejected, [])
+    if rec_id:
+        await _log(kb_id, {"id": rec_id, "closed_at": _now(), "accepted": 0, "rejected": len(rejected), "proposed_seen": proposed})
+    return {"remembered": n}
+
+
+async def get_memory(kb_id: str) -> Dict[str, Any]:
+    from app.models.knowledge_base import KnowledgeBase
+    kb = await KnowledgeBase.get(kb_id)
+    mem = ((kb.promotion_metadata or {}).get("ai_recommend_memory") or {}) if kb else {}
+    return {"rejected": list(reversed(mem.get("rejected") or [])), "decided": mem.get("decided") or {}}
+
+
+async def forget(kb_id: str, sig: Optional[str] = None, decided_key: Optional[str] = None) -> Dict[str, Any]:
+    """기억 항목 지우기 (거절을 취소하거나 확정 결정을 풀 때)."""
+    from app.models.knowledge_base import KnowledgeBase
+    kb = await KnowledgeBase.get(kb_id)
+    meta = dict(kb.promotion_metadata or {})
+    mem = dict(meta.get("ai_recommend_memory") or {})
+    if sig:
+        mem["rejected"] = [r for r in mem.get("rejected") or [] if r["sig"] != sig]
+    if decided_key:
+        mem["decided"] = {k: v for k, v in (mem.get("decided") or {}).items() if k != decided_key}
+    meta["ai_recommend_memory"] = mem
+    kb.promotion_metadata = meta
+    await kb.save()
+    return {"ok": True}

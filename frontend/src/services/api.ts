@@ -184,6 +184,8 @@ export const schemaApi = {
         api.post(`knowledge-bases/${kbId}/schema/spec/members`, { class_name: className, entities }),
     mergeCandidates: (kbId: string, className: string) =>
         api.get(`knowledge-bases/${kbId}/schema/spec/merge-candidates`, { params: { class_name: className } }),
+    mismatches: (kbId: string, status: 'violation' | 'gap' | 'all', className?: string) =>
+        api.get(`knowledge-bases/${kbId}/schema/spec/mismatches`, { params: { status, class_name: className } }),
     propertyTriples: (kbId: string, property: string, limit = 300) =>
         api.get(`knowledge-bases/${kbId}/schema/spec/triples`, { params: { property, limit } }),
     editTriples: (kbId: string, body: { action: 'move' | 'delete'; triples: { subject: string; predicate: string; object: string }[];
@@ -193,13 +195,18 @@ export const schemaApi = {
         api.post(`knowledge-bases/${kbId}/schema/spec/classes`, { name, description, members }),
     reextractPreview: (kbId: string, body: { classes: any[]; properties: any[]; triples: any[] }) =>
         api.post(`knowledge-bases/${kbId}/schema/spec/reextract-preview`, body, { timeout: 900000 }),
-    recommend: (kbId: string, triples?: any[]) =>
-        api.post(`knowledge-bases/${kbId}/schema/recommend`, triples ? { triples } : {}, { timeout: 900000 }),
+    recommend: (kbId: string, triples?: any[], gaps?: Record<string, string[]>) =>
+        api.post(`knowledge-bases/${kbId}/schema/recommend`, triples ? { triples } : gaps ? { gaps } : {}, { timeout: 900000 }),
     recommendPreview: (kbId: string, actions: any[], problems: any[]) =>
         api.post(`knowledge-bases/${kbId}/schema/recommend/preview`, { actions, problems }, { timeout: 900000 }),
     recommendApply: (kbId: string, actions: any[], baseVersion?: number, recId?: string, outcome?: any) =>
         api.post(`knowledge-bases/${kbId}/schema/recommend/apply`, { actions, base_version: baseVersion, rec_id: recId, outcome }, { timeout: 900000 }),
     recommendLog: (kbId: string) => api.get(`knowledge-bases/${kbId}/schema/recommend/log`),
+    recommendReject: (kbId: string, recId: string, rejected: any[], proposed: number) =>
+        api.post(`knowledge-bases/${kbId}/schema/recommend/reject`, { rec_id: recId, rejected_actions: rejected, proposed }),
+    recommendMemory: (kbId: string) => api.get(`knowledge-bases/${kbId}/schema/recommend/memory`),
+    recommendForget: (kbId: string, body: { sig?: string; decided_key?: string }) =>
+        api.post(`knowledge-bases/${kbId}/schema/recommend/memory/forget`, body),
     mergeEntities: (kbId: string, canonical: string, aliases: string[]) =>
         api.post(`knowledge-bases/${kbId}/schema/spec/merge`, { canonical, aliases }),
     reingest: (kbId: string, docId: string, file: File) => {

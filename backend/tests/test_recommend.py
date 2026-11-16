@@ -53,3 +53,41 @@ def test_unknown_entities_dropped():
         {"type": "merge_entities", "canonical": "없는대표", "aliases": ["단순성"]}]}, ctx)
     assert out[0]["entities"] == ["단순성"] and len(out) == 1
     assert any("지어낸이름" in d for d in ctx["dropped"])
+
+
+def test_memory_filters_rejected_and_decided():
+    mem = {"rejected": [{"sig": s} for s in (rc.rejection_sigs({"type": "assign_members", "class": "QualityAttribute", "entities": ["traffic control"]})
+                                           + rc.rejection_sigs({"type": "delete_triples", "triples": [CTX["problems"][0]]}))],
+           "decided": {"range:is_suitable_for": {"value": "Requirement"}}}
+    ctx = {**CTX, "memory": mem, "entity_keys": CTX["entity_keys"] | {"trafficcontrol"}}
+    out = rc.validate_actions({"actions": [
+        {"type": "assign_members", "class": "QualityAttribute", "entities": ["traffic control", "단순성"]},
+        {"type": "set_range", "property": "is_suitable_for", "range": "QualityAttribute"},
+        {"type": "set_range", "property": "is_suitable_for", "range": "Requirement"},
+        {"type": "delete_triples", "triples": ["T0"]}]}, ctx)
+    assert [a["type"] for a in out] == ["assign_members", "set_range"]
+    assert out[0]["entities"] == ["단순성"] and out[1]["range"] == "Requirement"
+    assert any("확정한 결정 번복" in d for d in ctx["dropped"])
+
+
+def test_prompt_includes_memory_block():
+    ctx = {**CTX, "memory": {"rejected": [{"sig": "x", "text": "traffic control 를 QualityAttribute 멤버로", "reason": ""}],
+                             "decided": {"range:consistency_model": {"value": "QualityAttribute"}}},
+           "spec": {**CTX["spec"], "member_gaps": {}, "range_violations": [], "out_of_schema": []}}
+    msg = rc.build_messages(ctx)[1]["content"]
+    assert "거절한 안" in msg and "traffic control" in msg and "consistency_model 의 range = QualityAttribute" in msg
+
+
+def test_rejected_delete_also_blocks_move_of_same_triple():
+    sig = rc.rejection_sigs({"type": "delete_triples", "triples": [CTX["problems"][0]]})
+    ctx = {**CTX, "memory": {"rejected": [{"sig": s} for s in sig], "decided": {}}}
+    out = rc.validate_actions({"actions": [{"type": "move_triples", "triples": ["T0"], "target_property": "관련_패턴"}]}, ctx)
+    assert out == []
+
+
+def test_rejected_move_blocks_only_same_target():
+    sig = rc.rejection_sigs({"type": "move_triples", "triples": [CTX["problems"][0]], "target_property": "관련_패턴"})
+    ctx = {**CTX, "memory": {"rejected": [{"sig": s} for s in sig], "decided": {}}}
+    out = rc.validate_actions({"actions": [{"type": "move_triples", "triples": ["T0"], "target_property": "관련_패턴"},
+                                           {"type": "move_triples", "triples": ["T0"], "target_property": "is_suitable_for"}]}, ctx)
+    assert [a["target_property"] for a in out] == ["is_suitable_for"]

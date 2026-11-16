@@ -47,7 +47,10 @@ export default function SchemaEditor({ kbId }: { kbId: string }) {
     const [showReextract, setShowReextract] = useState(false);
     const [view, setView] = useState<'table' | 'graph'>('table');
     const [triplesFor, setTriplesFor] = useState<string | null>(null);
-    const [recFor, setRecFor] = useState<null | { triples?: any[] }>(null);   // AI 추천 (스키마 전체 또는 선택 트리플)
+    const [mismatchFor, setMismatchFor] = useState<null | { status: 'violation' | 'gap'; className?: string }>(null);
+    const [recFor, setRecFor] = useState<null | { triples?: any[]; gaps?: Record<string, string[]> }>(null);   // AI 추천 (스키마 전체·선택 트리플·재추출 뒤 새 누락)
+    // 재추출 뒤 정리 안내: 마지막 재추출이 끝났고 새 멤버 누락이 있으면 (닫은 재추출은 다시 안 띄움)
+    const [followup, setFollowup] = useState<null | { finished_at: string; new_gaps: Record<string, string[]>; new_gap_count: number; gaps_before: number; gaps_after: number }>(null);
 
     const load = useCallback(async () => {
         const r = await schemaApi.getSpec(kbId);
@@ -71,6 +74,21 @@ export default function SchemaEditor({ kbId }: { kbId: string }) {
     }, [kbId]);
 
     useEffect(() => { load().catch(() => setMessage('스키마를 불러오지 못했습니다.')); }, [load]);
+    useEffect(() => {
+        schemaApi.reextractStatus(kbId).then((r) => {
+            const st = r.data || {};
+            const f = st.followup || {};
+            let dismissed = '';
+            try { dismissed = localStorage.getItem(`schema-followup-${kbId}`) || ''; } catch { /* 저장소 없음 */ }
+            if (st.status === 'done' && f.new_gap_count > 0 && dismissed !== st.finished_at) {
+                setFollowup({ finished_at: st.finished_at, ...f });
+            }
+        }).catch(() => undefined);
+    }, [kbId]);
+    const dismissFollowup = () => {
+        try { if (followup) localStorage.setItem(`schema-followup-${kbId}`, followup.finished_at); } catch { /* 무시 */ }
+        setFollowup(null);
+    };
 
     const body = useCallback(() => ({
         base_version: spec?.version,
@@ -188,10 +206,23 @@ export default function SchemaEditor({ kbId }: { kbId: string }) {
                 </div>
             )}
             {message && <div style={{ fontSize: '0.85rem', color: '#1e40af' }}>{message}</div>}
+            {followup && !structured && (
+                <div style={{ fontSize: '0.82rem', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '6px', padding: '0.5rem 0.75rem', display: 'flex', gap: '0.6rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                    <span>
+                        <b>재추출 뒤 정리</b> — 새로 생긴 멤버 누락 <b>{followup.new_gap_count}</b>개
+                        (전 {followup.gaps_before} → 후 {followup.gaps_after}). 재추출이 목적어를 새 표기로 뽑으면 기존 클래스 지정에 걸리지 않습니다.
+                        <span style={{ color: '#64748b' }}> 예: {Object.values(followup.new_gaps).flat().slice(0, 6).join(', ')}</span>
+                    </span>
+                    <button className="btn btn-primary" style={btn} disabled={busy || dirty}
+                        onClick={() => setRecFor({ gaps: followup.new_gaps })}><Sparkles size={14} /> 정리하기 (AI 추천)</button>
+                    <button className="btn btn-secondary" style={btn} onClick={dismissFollowup}>닫기</button>
+                </div>
+            )}
 
             {!structured && (
                 <SchemaChecks kbId={kbId} memberGaps={spec.member_gaps || {}} violations={spec.range_violations || []}
-                    onChanged={(m) => { setMessage(m); load(); }} />
+                    onChanged={(m) => { setMessage(m); load(); }}
+                    onOpenList={(status, className) => setMismatchFor({ status, className })} />
             )}
 
             <div style={{ display: 'flex', gap: 0 }}>
@@ -375,6 +406,16 @@ export default function SchemaEditor({ kbId }: { kbId: string }) {
                 </div>
             )}
 
+            {mismatchFor && (
+                <PropertyTriplesModal kbId={kbId} property="" mismatch={mismatchFor} onClose={() => setMismatchFor(null)}
+                    onChanged={(m) => { setMessage(m); load(); }}
+                    properties={props.filter((p) => orig.p[p.key]).map((p) => ({ name: orig.p[p.key], domain: p.domain, range: p.range }))}
+                    classes={classes.map((c) => orig.c[c.key] || c.name).filter(Boolean)}
+                    dirty={dirty}
+                    onRecommend={(tr) => setRecFor({ triples: tr })}
+                    getSpec={() => { const b = body(); return { classes: b.classes, properties: b.properties }; }} />
+            )}
+
             {triplesFor && (
                 <PropertyTriplesModal kbId={kbId} property={triplesFor} onClose={() => setTriplesFor(null)}
                     onChanged={(m) => { setMessage(m); load(); }}
@@ -386,10 +427,10 @@ export default function SchemaEditor({ kbId }: { kbId: string }) {
             )}
 
             {recFor && (
-                <RecommendPanel kbId={kbId} triples={recFor.triples} onClose={() => setRecFor(null)}
+                <RecommendPanel kbId={kbId} triples={recFor.triples} gaps={recFor.gaps} onClose={() => setRecFor(null)}
                     classes={classes.map((c) => orig.c[c.key] || c.name).filter(Boolean)}
                     properties={props.map((p) => orig.p[p.key] || p.name).filter(Boolean)}
-                    onApplied={(m) => { setMessage(m); setTriplesFor(null); load(); }} />
+                    onApplied={(m) => { setMessage(m); setTriplesFor(null); setMismatchFor(null); if (recFor?.gaps) dismissFollowup(); load(); }} />
             )}
 
             {showReextract && (

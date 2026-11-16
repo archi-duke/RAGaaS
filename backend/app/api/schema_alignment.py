@@ -395,6 +395,7 @@ async def schema_reextract_preview(kb_id: str, body: ReextractPreviewBody):
 
 class RecommendBody(BaseModel):
     triples: Optional[List[dict]] = None      # 트리플 창에서 호출하면 그 트리플만 대상으로
+    gaps: Optional[dict] = None               # {클래스: [이름]} — 재추출 뒤 새 멤버 누락만 정리 ({} 면 누락 전체)
 
 
 class RecommendActionsBody(BaseModel):
@@ -410,7 +411,8 @@ async def schema_recommend(kb_id: str, body: RecommendBody):
     from app.services.schema_alignment import recommend as rc
     from app.services.schema_alignment.schema_editor import SchemaEditError
     try:
-        return await rc.recommend(kb_id, {"triples": body.triples} if body.triples else None)
+        scope = {"triples": body.triples} if body.triples else ({"gaps": body.gaps} if body.gaps is not None else None)
+        return await rc.recommend(kb_id, scope)
     except SchemaEditError as e:
         _edit_error(e)
 
@@ -446,3 +448,45 @@ async def schema_recommend_log(kb_id: str):
     if not kb:
         raise HTTPException(status_code=404, detail="KB 없음")
     return list(reversed((kb.promotion_metadata or {}).get("ai_recommend_log") or []))
+
+
+
+class RecommendRejectBody(BaseModel):
+    rec_id: Optional[str] = None
+    rejected_actions: List[dict] = []
+    proposed: Optional[int] = None
+
+
+class ForgetBody(BaseModel):
+    sig: Optional[str] = None
+    decided_key: Optional[str] = None
+
+
+@router.post("/{kb_id}/schema/recommend/reject")
+async def schema_recommend_reject(kb_id: str, body: RecommendRejectBody):
+    """반영 없이 거절만 기록 — 다음 추천에서 같은 안이 나오지 않게."""
+    from app.services.schema_alignment import recommend as rc
+    return await rc.reject(kb_id, body.rec_id, body.rejected_actions, body.proposed)
+
+
+@router.get("/{kb_id}/schema/recommend/memory")
+async def schema_recommend_memory(kb_id: str):
+    """추천 기억: 거절한 안·확정한 결정."""
+    from app.services.schema_alignment import recommend as rc
+    return await rc.get_memory(kb_id)
+
+
+@router.post("/{kb_id}/schema/recommend/memory/forget")
+async def schema_recommend_forget(kb_id: str, body: ForgetBody):
+    from app.services.schema_alignment import recommend as rc
+    return await rc.forget(kb_id, body.sig, body.decided_key)
+
+
+@router.get("/{kb_id}/schema/spec/mismatches")
+async def schema_mismatches(kb_id: str, status: str = "violation", class_name: Optional[str] = None):
+    """일치하지 않는 트리플 모음 — range 위반·멤버 누락 (모든 관계, 또는 range 클래스별)."""
+    from app.services.schema_alignment import schema_editor as se
+    try:
+        return await se.mismatch_triples(kb_id, status, class_name)
+    except se.SchemaEditError as e:
+        _edit_error(e)

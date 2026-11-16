@@ -30,3 +30,14 @@ def test_triple_rules_move_and_delete_after_normalization():
     assert {"subject": "Modular Monolith", "predicate": "관련_패턴"}.items() <= out[0].items()
     assert len(out) == 2 and out[1]["subject"] == "B" and out[1]["object"] == "운영 복잡도"
     assert rep["counts"]["triple_moved"] == 1 and rep["counts"]["triple_deleted"] == 2
+
+
+def test_reextract_drops_absence_objects_and_prompt_requires_member_names():
+    from app.core.schema_reextract import parse_response, build_messages
+    data = {"triples": [{"subject": "Microservices", "predicate": "충돌", "object": "없음"},
+                        {"subject": "Microservices", "predicate": "충돌", "object": "해당되지 않음"},
+                        {"subject": "Microservices", "predicate": "has_positive_effect_on", "object": "테스트 용이성"}]}
+    out = parse_response(data, "n1", {"충돌", "has_positive_effect_on"})
+    assert [t.get("drop") for t in out] == ["absent", "absent", None]
+    msg = build_messages("[클래스]", "text")[1]["content"]
+    assert "번역도 대표 이름으로" in msg and "없음" in msg
