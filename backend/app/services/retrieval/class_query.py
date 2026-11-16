@@ -34,7 +34,7 @@ MAX_RESULT_ENTITIES = 50
 MAX_PATHS_FOR_LLM = 150
 
 OPS_BY_TYPE = {
-    "enum": {"eq", "ne", "in", "exists", "not_exists"},
+    "enum": {"eq", "ne", "in", "contains", "exists", "not_exists"},   # contains: 외부 계획용 ('노벨' → 노벨 물리학상 (1933년) 등)
     "number": {"eq", "ne", "in", "gt", "gte", "lt", "lte", "exists", "not_exists"},
     "text": {"eq", "in", "contains", "exists", "not_exists"},   # in: 외부 계획용 (내부 LLM 프롬프트는 eq/contains 만 안내)
 }

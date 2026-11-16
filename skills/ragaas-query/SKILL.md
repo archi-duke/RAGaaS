@@ -13,19 +13,23 @@ RAGaaS 쪽에는 LLM 이 없어 빠르다 (도구 호출당 0.1~0.3초). 대신 
 | MCP 도구 | REST (`{base}` = `…/ragaas/api/v2/knowledge-bases/{kb_id}`) | 용도 |
 |---|---|---|
 | `list_kbs` | `GET …/ragaas/api/v2/knowledge-bases/` | KB 목록. 조회 가능 = `graph_backend` 가 `ontology` |
-| `describe_kb` | `GET {base}/agent/describe?max_values=30` | 스키마: 유형·멤버 이름·경로(key, 정의, 계열·부호·강도, 값 어휘) |
+| `describe_kb` | `GET {base}/agent/describe?format=compact` | 스키마: 유형·멤버 이름·경로(key, 정의, 계열·부호·강도, 값 어휘) |
 | `lookup_values` | `POST {base}/agent/values` `{"terms": [...], "terms_en": {...}}` | 질문 속 말 → 그래프 값 |
 | `resolve_entities` | `POST {base}/agent/entities` `{"names": [...], "names_en": {...}}` | 이름 → 그래프 엔티티 |
+| `describe_entity` | `POST {base}/agent/entity` `{"name", "name_en"}` | 엔티티 하나의 관계 전부 (out / in) + chunk_ids |
 | `query_plan` | `POST {base}/agent/plan` `{"kind", "where", "return", "aggregate", ...}` | 조회 실행 |
 | `get_chunks` | `POST {base}/agent/chunks` `{"chunk_ids": [...]}` | 근거 원문 + 문서명 |
 | `search` | `POST {base}/chat` `{"query"}` | 자연어 검색 (느림, 수십 초). 마지막 수단 |
 
 MCP 의 `query_plan` 은 반환 경로를 `return_paths` 로, REST 는 `return` 으로 받는다.
+예시 5개(조건 하나, 복합, YAML 같은 항목, 집계, 관계 따라가기)는 `examples.md` 에 있다 — 질의가 처음이면 읽는다.
 
 ## 순서
 
 1. **스키마** — `describe_kb` 를 KB 당 한 번 받아 둔다. 응답의 `schema_version` 이 바뀌면 다시 받는다.
-   볼 것: `kinds`(무엇을 돌려받을 수 있나)와 `member_names`, 유형별 `paths` 의 `key`·`type`·`description`·`values`, 그리고 `notes`.
+   compact 형식의 경로 한 줄: `key [type, 계열:부호/강도] — 정의: 값(엔티티 수), …`.
+   엔티티 1개만 가진 경로는 숨겨져 있다 (`rare_paths_hidden`). 특정 엔티티의 사실은 `describe_entity` 로 본다.
+   **특정 엔티티를 묻는 질문**("볼츠만의 소속은?", "파인만에 대해")은 바로 `describe_entity` 를 쓴다. 질의 계획보다 빠르고 확실하다.
 2. **말 맞추기** — 질문의 엔티티·값을 그래프 표기로 바꾼다.
    - 엔티티(인물, 스타일 이름 등)는 `resolve_entities`, 조건 값(품질 속성, 상, 연도 등)은 `lookup_values` 에 넣는다.
    - **원문과 영어 표기를 함께 보낸다.** 오탈자는 고쳐서 영어로: `{"terms": ["헥사고널"], "terms_en": {"헥사고널": "Hexagonal"}}`.
@@ -34,6 +38,8 @@ MCP 의 `query_plan` 은 반환 경로를 `return_paths` 로, REST 는 `return` 
 3. **질의 계획 작성** — 아래 형식과 규칙대로.
 4. **실행** — `query_plan`. 결과가 `zero`·`reject` 면 `message` 를 읽고 고쳐서 다시 (최대 2~3회).
 5. **근거 확인** — 답의 핵심 근거는 `entities[].evidence[].chunk_ids` 로 `get_chunks` 원문을 확인한다. 트리플만 믿지 않는다.
+   - **연도·날짜는 대부분 원문에만 있다** (그래프 값에 섞여 있거나 없음). 연도를 묻는 질문은 청크를 읽는다.
+   - **관계 방향이 뒤집힌 트리플이 있다** (추출 오류). 방향이 답을 좌우하면(스승↔제자, 영향을 줌↔받음) 원문으로 확인한다.
 6. **답변** — 질문한 언어로. 출처 문서명을 적고, 해석·가정을 밝힌다 (아래 "답변 규칙").
 
 ## 질의 계획 형식
@@ -61,7 +67,7 @@ MCP 의 `query_plan` 은 반환 경로를 `return_paths` 로, REST 는 `return` 
 
 | type | 연산자 |
 |---|---|
-| enum | `eq`, `ne`, `in`(값 배열), `exists`, `not_exists` |
+| enum | `eq`, `ne`, `in`(값 배열), `contains`(부분 문자열: '노벨' → '노벨 물리학상 (1933년)' 등 모두), `exists`, `not_exists` |
 | text | `eq`, `in`, `contains`(부분 문자열), `exists`, `not_exists` |
 | number | `eq`, `ne`, `in`, `gt`, `gte`, `lt`, `lte`, `exists`, `not_exists` |
 
@@ -79,11 +85,11 @@ MCP 의 `query_plan` 은 반환 경로를 `return_paths` 로, REST 는 `return` 
 **결과**: `status`(ok/zero/reject), `total`, `entities[]`:
 - `label`
 - `matched` — 충족한 조건 수
-- `matched_conditions`
-- `values` — 경로 → 값
-- `evidence[]` — `s`, `p`, `o`, `chunk_ids`
+- `matched_conditions` — `conditions` 의 번호
+- `evidence[]` — `p`, `o`, `chunk_ids`
 
-그 밖에 `conditions`(조건별 만족 엔티티 수), `zero_conditions`, `adjustments`, `sparql`(실행한 질의)가 온다.
+그 밖에 `conditions`, `zero_conditions`, `adjustments`, `sparql` 가 온다.
+`evidence`: `compact`(기본) | `full`(s·role 포함) | `none`(목록만 — 가장 작음).
 
 ## 질의 작성 규칙
 
@@ -94,7 +100,8 @@ MCP 의 `query_plan` 은 반환 경로를 `return_paths` 로, REST 는 `return` 
 5. **text 경로는 `contains`, enum 경로는 목록 표기 그대로 `eq`/`in`.**
 6. **관계를 따라가는 질문은 나눠 조회한다.** "X 의 스승의 스승", "X 가 제안한 이론을 반박한 사람" — 한 번에 하나씩 `query_plan` 을 하고 앞 결과의 엔티티를 다음 조건의 값으로 쓴다.
 7. **엔티티 하나의 속성을 묻는 질문** ("파인만의 지도교수는?")은 그 엔티티를 값으로 갖는 경로로 찾거나, `kind` + `where: {"path": ..., "op": "eq", "value": 엔티티}` 로 역방향 조회한다. 안 되면 `search`.
-8. **`zero` 는 실패가 아니다.** message 를 읽고 값 표기(→ `lookup_values`)나 경로(→ `describe_kb` 정의)를 고친다. 그래도 없으면 "그래프에 없음"으로 답한다. 지어내지 않는다.
+8. **같은 결과를 여러 번 쓰면 한 번 받아 둔다.** 예: 한 유형 전체를 `where` 없이 받아 두고 여러 질문에 재사용. 같은 질의를 반복하지 않는다.
+9. **`zero` 는 실패가 아니다.** message 를 읽고 값 표기(→ `lookup_values`)나 경로(→ `describe_kb` 정의)를 고친다. 그래도 없으면 "그래프에 없음"으로 답한다. 지어내지 않는다.
 
 ## 답변 규칙
 
@@ -103,65 +110,3 @@ MCP 의 `query_plan` 은 반환 경로를 `return_paths` 로, REST 는 `return` 
 - 해석을 밝힌다: "유지보수성을 변경·테스트·관리 용이성으로 풀어 조회했습니다".
 - 질문에 없는 사용자 상황(팀 규모, 예산 등)을 사실처럼 쓰지 않는다. 필요하면 가정이라고 밝힌다.
 - 그래프에 없는 것은 "지식 그래프에서 찾지 못했다"고 답한다. 일반 지식으로 채울 때는 구분해서 밝힌다.
-
-## 예시
-
-### 1. 조건 하나 (상위 개념 풀기) — "유지 보수성이 좋은 스타일은?"
-
-`lookup_values(["유지보수성"])` → matches 없음, narrower = 변경·테스트·관리 용이성.
-
-```json
-{"kind": "ArchitectureStyle",
- "where": {"any": [
-   {"path": ["has_positive_effect_on", "has_moderate_positive_effect_on"], "op": "in", "value": ["변경 용이성", "테스트 용이성", "관리 용이성"]},
-   {"path": "is_suitable_for", "op": "contains", "value": "유지보수"}]},
- "return": ["has_moderate_negative_effect_on", "has_negative_effect_on"]}
-```
-
-→ Clean Architecture·Hexagonal (matched 2) 이 먼저 나오고 나머지 5개가 이어진다. CQRS 는 부정 효과에도 '변경 용이성'이 있다 → 충돌로 표시.
-
-### 2. 복합 조건 — "유지 보수성과 수정 용이성이 좋은 스타일은?"
-
-'수정 용이성'은 `lookup_values` 로 '변경 용이성'이 된다.
-
-```json
-{"kind": "ArchitectureStyle",
- "where": {"all": [
-   {"path": ["has_positive_effect_on", "has_moderate_positive_effect_on"], "op": "eq", "value": "변경 용이성"},
-   {"any": [
-     {"path": ["has_positive_effect_on", "has_moderate_positive_effect_on"], "op": "in", "value": ["테스트 용이성", "관리 용이성"]},
-     {"path": "is_suitable_for", "op": "contains", "value": "유지보수"}]}]},
- "return": ["has_moderate_negative_effect_on"]}
-```
-
-→ Clean·Hexagonal (3) → Micro-Frontend·Modular Monolith (2).
-
-### 3. 구조화 KB, 같은 항목 조건 — "변경 용이성에 강한 긍정 효과가 있는 스타일" (test-ontology)
-
-```json
-{"kind": "ArchitectureStyle",
- "where": {"all": [
-   {"path": "quality_attributes.attribute", "op": "eq", "value": "modifiability"},
-   {"path": "quality_attributes.effect", "op": "eq", "value": "positive"},
-   {"path": "quality_attributes.strength", "op": "eq", "value": "high"}]},
- "return": ["operational_complexity"]}
-```
-
-→ clean-architecture, hexagonal, micro_frontend, microservices. 세 조건이 같은 품질 항목에서 함께 만족해야 한다.
-
-### 4. 집계 — "단점이 가장 많은 스타일은?"
-
-```json
-{"kind": "ArchitectureStyle", "aggregate": {"fn": "count", "path": "has_disadvantage", "order": "desc", "limit": 1}}
-```
-
-### 5. 관계 따라가기 — "파인만의 지도교수의 지도교수는?"
-
-1. `resolve_entities(["파인만"])` → `파인만`.
-2. 지도교수 관계 경로를 `describe_kb` 에서 찾는다 → `지도교수_of` (값: 제자 이름).
-3. `{"kind": "Person", "where": {"path": "지도교수_of", "op": "eq", "value": "파인만"}}` → `존 휠러`.
-   `evidence`: (존 휠러, 지도교수_of, 파인만) — 휠러가 파인만의 지도교수다.
-4. 같은 방식으로 `"value": "존 휠러"` → `zero` ('존 휠러' 는 지도교수_of 값 목록에 없음).
-   `lookup_values(["휠러"])` 로 표기를 확인해도 없으면 → "휠러의 지도교수는 지식 그래프에 없다"고 답한다.
-
-경로 방향이 헷갈리면 두 방향을 `any` 로 묶어 조회하고, `evidence` 의 s·p·o 로 방향을 확인한다.

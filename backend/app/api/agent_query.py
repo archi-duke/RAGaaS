@@ -44,10 +44,11 @@ class SparqlRequest(BaseModel):
 
 
 @router.get("/{kb_id}/agent/describe")
-async def agent_describe(kb_id: str, kinds: Optional[str] = None, max_values: int = catalog.MAX_VALUES_DEFAULT):
-    """① 스키마: 유형, 경로(정의·계열·값 어휘), 스키마 버전."""
+async def agent_describe(kb_id: str, kinds: Optional[str] = None, max_values: int = catalog.MAX_VALUES_DEFAULT,
+                         format: str = "json", min_members: int = 2):
+    """① 스키마: 유형, 경로(정의·계열·값 어휘), 스키마 버전. format=compact 면 경로를 한 줄 문자열로."""
     t = time.time()
-    out = await catalog.describe_kb(kb_id, [k for k in (kinds or "").split(",") if k], max_values)
+    out = await catalog.describe_kb(kb_id, [k for k in (kinds or "").split(",") if k], max_values, format, min_members)
     out["elapsed_ms"] = int((time.time() - t) * 1000)
     return out
 
@@ -70,6 +71,21 @@ async def agent_entities(kb_id: str, req: EntitiesRequest):
     return out
 
 
+class EntityRequest(BaseModel):
+    name: str
+    name_en: Optional[str] = None
+    kind: Optional[str] = None
+
+
+@router.post("/{kb_id}/agent/entity")
+async def agent_entity(kb_id: str, req: EntityRequest):
+    """엔티티 하나의 모든 관계 (나가는·들어오는, 구조 노드 한 단계) + 근거 청크 ID."""
+    t = time.time()
+    out = await catalog.describe_entity(kb_id, req.name, req.name_en, req.kind)
+    out["elapsed_ms"] = int((time.time() - t) * 1000)
+    return out
+
+
 @router.post("/{kb_id}/agent/chunks")
 async def agent_chunks(kb_id: str, req: ChunksRequest):
     """⑤ 근거 청크 원문."""
@@ -88,6 +104,7 @@ class PlanRequest(BaseModel):
     rank_by: Optional[str] = None
     limit: int = 50
     include_evidence: bool = True
+    evidence: str = "compact"          # compact | full | none (응답 크기)
     schema_version: Optional[str] = None
 
     model_config = {"populate_by_name": True}

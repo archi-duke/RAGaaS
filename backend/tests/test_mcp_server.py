@@ -10,7 +10,7 @@ def test_tools_registered():
     from app.mcp_server import mcp
     tools = asyncio.run(mcp.list_tools())
     names = {t.name for t in tools}
-    assert {"list_kbs", "describe_kb", "lookup_values", "resolve_entities", "query_plan", "get_chunks", "search"} <= names
+    assert {"list_kbs", "describe_kb", "lookup_values", "resolve_entities", "query_plan", "get_chunks", "search", "describe_entity"} <= names
     qp = next(t for t in tools if t.name == "query_plan")
     props = (getattr(qp, "input_schema", None) or qp.inputSchema)["properties"]
     assert {"kb_id", "kind", "where", "return_paths", "aggregate"} <= set(props)

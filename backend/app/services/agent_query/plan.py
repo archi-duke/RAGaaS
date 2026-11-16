@@ -263,24 +263,37 @@ async def run_plan(kb_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
     by_ent: Dict[str, List[Dict[str, Any]]] = {}
     for t in triples:
         by_ent.setdefault(t["entity_uri"], []).append(t)
+    # 응답 크기 (클라이언트 토큰): compact = (p, o) 별로 묶어 청크 ID 합침 / full = 원래 트리플 / none
+    mode = str(body.get("evidence") or "compact").lower()
+    leaf_keys = list(leaves)
     out_entities = []
     for e in entities:
         ts = by_ent.get(e, [])
         values: Dict[str, List[str]] = {}
+        grouped: Dict[Tuple[str, str], Dict[str, Any]] = {}
         for t in ts:
+            o = str(t["object"])
             values.setdefault(t["predicate"], [])
-            if str(t["object"]) not in values[t["predicate"]]:
-                values[t["predicate"]].append(str(t["object"]))
-        out_entities.append({
+            if o not in values[t["predicate"]]:
+                values[t["predicate"]].append(o)
+            g = grouped.setdefault((t["predicate"], o), {"p": t["predicate"], "o": o, "chunk_ids": []})
+            for c in t["chunk_ids"] + list(t.get("edge_chunk_ids") or []):
+                if c not in g["chunk_ids"]:
+                    g["chunk_ids"].append(c)
+        item: Dict[str, Any] = {
             "label": name(e),
             "matched": len(matched.get(e, [])),
-            "matched_conditions": [leaves[k] for k in matched.get(e, [])],
+            "matched_conditions": [leaf_keys.index(k) for k in matched.get(e, [])],   # conditions 의 번호
             **({"aggregate": agg_values.get(e)} if agg_values else {}),
-            "values": values,
-            "evidence": [{"s": name(e), "p": t["predicate"], "o": str(t["object"]), "role": t["role"],
-                          "chunk_ids": t["chunk_ids"] + [c for c in t.get("edge_chunk_ids", []) if c not in t["chunk_ids"]]}
-                         for t in ts],
-        })
+        }
+        if mode == "full":
+            item["values"] = values
+            item["evidence"] = [{"s": name(e), "p": t["predicate"], "o": str(t["object"]), "role": t["role"],
+                                 "chunk_ids": t["chunk_ids"] + [c for c in t.get("edge_chunk_ids", []) if c not in t["chunk_ids"]]}
+                                for t in ts]
+        elif mode != "none":
+            item["evidence"] = list(grouped.values())      # values 는 evidence 의 p·o 로 충분
+        out_entities.append(item)
 
     status = "ok" if out_entities else "zero"
     if vplan and (vplan.get("aggregate") or {}).get("fn") == "count_members":
@@ -295,7 +308,7 @@ async def run_plan(kb_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
         "total": total,
         **({"count": out_count} if out_count is not None else {}),
         "entities": out_entities,
-        "conditions": leaf_status,
+        "conditions": leaf_status or [{"condition": leaves[k], "status": "ok"} for k in leaf_keys],
         "zero_conditions": zero_notes,
         "adjustments": adjustments + ([f"결과 {total}개 중 {limit}개만 반환"] if total > limit else []),
         "message": None if out_entities else (

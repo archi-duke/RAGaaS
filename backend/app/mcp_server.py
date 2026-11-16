@@ -17,6 +17,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 
 INSTRUCTIONS = """RAGaaS 지식 그래프 조회 도구.
 순서: list_kbs → describe_kb(스키마·값 어휘, KB 당 1회 캐시) → lookup_values / resolve_entities(질문 속 말을 그래프 표기로)
+→ 특정 엔티티를 묻는 질문은 describe_entity
 → query_plan(조건 트리로 조회) → get_chunks(근거 원문) → 답변은 호출한 쪽이 쓴다.
 - 말을 맞출 때 원문과 영어 표기(오탈자 교정)를 함께 보낸다 (terms_en / names_en).
 - 같은 계열 관계(강도·부호만 다름)를 '긍정 전체'로 찾을 때는 path 배열이나 any 로 묶는다. AND 로 묶지 않는다.
@@ -55,10 +56,11 @@ async def list_kbs() -> Dict[str, Any]:
 @mcp.tool(description="KB 스키마: 유형(kinds)과 멤버 이름, 유형별 경로(path key, 정의, 계열·부호·강도, 값 어휘와 건수), "
                       "schema_version. query_plan 의 path 는 여기의 key, value 는 values 의 label 표기 그대로 쓴다. "
                       "KB 당 한 번 받아 두고 schema_version 이 바뀌면 다시 받는다.")
-async def describe_kb(kb_id: str, kinds: Optional[List[str]] = None, max_values: int = 30) -> Dict[str, Any]:
+async def describe_kb(kb_id: str, kinds: Optional[List[str]] = None, max_values: int = 15,
+                      format: str = "compact", min_members: int = 2) -> Dict[str, Any]:
     from app.services.agent_query import catalog
     try:
-        return await catalog.describe_kb(kb_id, kinds, max_values)
+        return await catalog.describe_kb(kb_id, kinds, max_values, format, min_members)
     except Exception as e:
         return _err(e)
 
@@ -90,16 +92,28 @@ async def resolve_entities(kb_id: str, names: List[str], names_en: Optional[Dict
                       "조건 = {\"path\": key | [key, ...], \"op\": eq|ne|in|contains|gt|gte|lt|lte|exists|not_exists, \"value\": ...}. "
                       "path 배열은 그 경로들 중 하나(OR). return 은 결과마다 보여 줄 경로 key 목록. "
                       "aggregate = {\"fn\": count|max|min|count_members, \"path\", \"value\", \"order\", \"limit\", \"having\"}. "
-                      "결과: entities(라벨·충족 조건 수 matched·values·근거 트리플과 chunk_ids). zero 면 message 확인.")
+                      "evidence: compact(기본, p·o·chunk_ids) | full | none. "
+                      "결과: entities(라벨·충족 조건 수 matched·matched_conditions=conditions 번호·evidence). zero 면 message 확인.")
 async def query_plan(kb_id: str, kind: str, where: Optional[Any] = None, return_paths: Optional[List[Any]] = None,
                      aggregate: Optional[Dict[str, Any]] = None, rank_by: Optional[str] = "matched",
-                     limit: int = 50, include_evidence: bool = True,
+                     limit: int = 50, evidence: str = "compact",
                      schema_version: Optional[str] = None) -> Dict[str, Any]:
     from app.services.agent_query.plan import run_plan
     try:
         return await run_plan(kb_id, {"kind": kind, "where": where, "return": return_paths or [],
                                       "aggregate": aggregate, "rank_by": rank_by, "limit": limit,
-                                      "include_evidence": include_evidence, "schema_version": schema_version})
+                                      "include_evidence": evidence != "none", "evidence": evidence,
+                                      "schema_version": schema_version})
+    except Exception as e:
+        return _err(e)
+
+
+@mcp.tool(description="엔티티 하나의 모든 관계: out=(엔티티, p, o), in=(s, p, 엔티티), 구조 노드는 'a.b' 로 펼침, 근거 chunk_ids. "
+                      "'볼츠만의 소속은?', '파인만에 대해' 처럼 특정 엔티티를 물을 때. name_en(영어 표기)을 주면 오탈자도 찾는다.")
+async def describe_entity(kb_id: str, name: str, name_en: Optional[str] = None, kind: Optional[str] = None) -> Dict[str, Any]:
+    from app.services.agent_query import catalog
+    try:
+        return await catalog.describe_entity(kb_id, name, name_en, kind)
     except Exception as e:
         return _err(e)
 
