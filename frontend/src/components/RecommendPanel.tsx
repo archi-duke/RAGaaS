@@ -28,8 +28,49 @@ function detail(a: any): React.ReactNode {
     }
 }
 
-export default function RecommendPanel({ kbId, triples, onClose, onApplied }: {
+// 처리안 수정 폼 — 종류별 편집 가능한 필드. 수정하면 edited 표시 (수용 기록에 '수정 후 승인'으로 남음)
+function EditForm({ a, onChange, classes, properties }: {
+    a: any; onChange: (patch: any) => void; classes: string[]; properties: string[];
+}) {
+    const inp: React.CSSProperties = { fontSize: '0.78rem', padding: '0.15rem 0.3rem', border: '1px solid #cbd5e1', borderRadius: '4px' };
+    const list = (v: string[]) => v.join(', ');
+    const parse = (v: string) => v.split(',').map((x) => x.trim()).filter(Boolean);
+    const clsSel = (val: string, f: string, allowEmpty = true) => (
+        <select style={inp} value={val || ''} onChange={(e) => onChange({ [f]: e.target.value })}>
+            {allowEmpty && <option value="">(없음/값)</option>}
+            {classes.map((c) => <option key={c} value={c}>{c}</option>)}
+        </select>);
+    const box = { display: 'flex', gap: '0.35rem', flexWrap: 'wrap' as const, alignItems: 'center', marginTop: '0.3rem' };
+    switch (a.type) {
+        case 'set_definition':
+            return <textarea style={{ ...inp, width: '100%', minHeight: '3rem', marginTop: '0.3rem' }} value={a.description}
+                onChange={(e) => onChange({ description: e.target.value })} />;
+        case 'set_range': return <div style={box}>range {clsSel(a.range, 'range')}</div>;
+        case 'set_domain': return <div style={box}>domain {clsSel(a.domain, 'domain')}</div>;
+        case 'add_property': return <div style={box}>
+            <input style={inp} value={a.name} onChange={(e) => onChange({ name: e.target.value })} />
+            {clsSel(a.domain, 'domain')} → {clsSel(a.range, 'range')}
+            <input style={{ ...inp, minWidth: '20rem' }} value={a.description} onChange={(e) => onChange({ description: e.target.value })} /></div>;
+        case 'add_class': return <div style={box}>
+            <input style={inp} value={a.name} onChange={(e) => onChange({ name: e.target.value })} />
+            <input style={{ ...inp, minWidth: '14rem' }} value={a.description} onChange={(e) => onChange({ description: e.target.value })} />
+            멤버 <input style={{ ...inp, minWidth: '16rem' }} value={list(a.members || [])} onChange={(e) => onChange({ members: parse(e.target.value) })} /></div>;
+        case 'assign_members': return <div style={box}>{clsSel(a.class, 'class', false)}
+            <input style={{ ...inp, minWidth: '22rem' }} value={list(a.entities)} onChange={(e) => onChange({ entities: parse(e.target.value) })} /></div>;
+        case 'merge_entities': return <div style={box}>
+            대표 <input style={inp} value={a.canonical} onChange={(e) => onChange({ canonical: e.target.value })} />
+            ← <input style={{ ...inp, minWidth: '16rem' }} value={list(a.aliases)} onChange={(e) => onChange({ aliases: parse(e.target.value) })} /></div>;
+        case 'move_triples': return <div style={box}>이동할 관계
+            <select style={inp} value={a.target_property} onChange={(e) => onChange({ target_property: e.target.value })}>
+                {properties.map((p) => <option key={p} value={p}>{p}</option>)}
+            </select></div>;
+        default: return <div style={{ color: '#94a3b8', marginTop: '0.3rem' }}>수정할 항목이 없습니다 (체크를 풀면 거절)</div>;
+    }
+}
+
+export default function RecommendPanel({ kbId, triples, onClose, onApplied, classes = [], properties = [] }: {
     kbId: string; triples?: any[]; onClose: () => void; onApplied: (msg: string) => void;
+    classes?: string[]; properties?: string[];
 }) {
     const [rec, setRec] = useState<any>(null);
     const [error, setError] = useState('');
@@ -37,17 +78,38 @@ export default function RecommendPanel({ kbId, triples, onClose, onApplied }: {
     const [pv, setPv] = useState<any>(null);
     const [pvKey, setPvKey] = useState('');
     const [busy, setBusy] = useState<'' | 'rec' | 'pv' | 'apply'>('rec');
+    const [editing, setEditing] = useState<string | null>(null);
+    // 정의 수정안 자동 재추출 테스트: 처리안 id → 결과 (그 관계의 문제 트리플 청크만)
+    const [defTests, setDefTests] = useState<Record<string, any>>({});
     const errMsg = (e: any) => e?.response?.data?.detail?.errors?.join(' / ') || e?.response?.data?.detail || e.message;
 
     useEffect(() => {
-        schemaApi.recommend(kbId, triples).then((r) => {
+        schemaApi.recommend(kbId, triples).then(async (r) => {
             setRec(r.data);
             setChecked(new Set((r.data.actions || []).filter((a: any) => a.confidence >= 0.7 && !a.warning).map((a: any) => a.id)));
-        }).catch((e) => setError('추천 실패: ' + errMsg(e))).finally(() => setBusy(''));
+            setBusy('');
+            // 정의 수정안은 하나씩 자동으로 재추출 테스트 — 그 관계의 문제 트리플이 사라지는지
+            for (const a of (r.data.actions || []).filter((x: any) => x.type === 'set_definition')) {
+                const probs = (r.data.problems || []).filter((t: any) => (t.predicate || '') === a.property && t.source);
+                if (!probs.length) { setDefTests((d) => ({ ...d, [a.id]: { none: true } })); continue; }
+                setDefTests((d) => ({ ...d, [a.id]: { running: true } }));
+                try {
+                    const p = await schemaApi.recommendPreview(kbId, [a], probs);
+                    setDefTests((d) => ({ ...d, [a.id]: p.data }));
+                } catch (e: any) {
+                    setDefTests((d) => ({ ...d, [a.id]: { error: errMsg(e) } }));
+                }
+            }
+        }).catch((e) => { setError('추천 실패: ' + errMsg(e)); setBusy(''); });
     }, [kbId]);   // eslint-disable-line react-hooks/exhaustive-deps
 
+    const patch = (id: string, p: any) => {
+        setRec((r: any) => ({ ...r, actions: r.actions.map((a: any) => a.id === id ? { ...a, ...p, edited: true } : a) }));
+        if (rec?.actions.find((a: any) => a.id === id)?.type === 'set_definition') setDefTests((d) => ({ ...d, [id]: { stale: true } }));
+    };
+
     const chosen = useMemo(() => (rec?.actions || []).filter((a: any) => checked.has(a.id)), [rec, checked]);
-    const key = chosen.map((a: any) => a.id).sort().join(',');
+    const key = JSON.stringify(chosen);   // 체크·수정이 바뀌면 다시 미리보기
     const previewed = pv && pvKey === key;
 
     const doPreview = async () => {
@@ -60,7 +122,10 @@ export default function RecommendPanel({ kbId, triples, onClose, onApplied }: {
     const doApply = async () => {
         setBusy('apply'); setError('');
         try {
-            const r = await schemaApi.recommendApply(kbId, chosen, rec.version);
+            const r = await schemaApi.recommendApply(kbId, chosen, rec.version, rec.id, {
+                proposed: rec.actions.length, rejected: rec.actions.length - chosen.length,
+                preview: pv ? { ...pv.summary, range_fit: pv.range_fit } : null,
+            });
             const d = r.data;
             onApplied(`AI 추천 ${chosen.length}건 반영: ` + (d.schema_saved ? `스키마 v${d.version} 저장, ` : '') + `규칙 ${d.rules_created}건, 리플레이 ${d.replayed}건`
                 + (d.reextract_recommended ? ' · 정의·range 변경은 "스키마 기준 재추출"을 돌려야 전체 데이터에 반영됩니다.' : ''));
@@ -76,7 +141,8 @@ export default function RecommendPanel({ kbId, triples, onClose, onApplied }: {
             <div className="card" style={{ width: 'min(980px, 95vw)', maxHeight: '88vh', display: 'flex', flexDirection: 'column', padding: '1rem' }} onClick={(e) => e.stopPropagation()}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.4rem' }}>
                     <Sparkles size={16} /><h3 style={{ margin: 0 }}>AI 추천{triples ? ` — 선택한 트리플 ${triples.length}개` : ''}</h3>
-                    {rec && <span style={{ fontSize: '0.78rem', color: '#64748b' }}>{rec.model} · 처리안 {rec.actions.length} · 분석한 문제 트리플 {rec.problems.length}</span>}
+                    {rec && <span style={{ fontSize: '0.78rem', color: '#64748b' }}>{rec.model} · 처리안 {rec.actions.length} · 분석한 문제 트리플 {rec.problems.length}
+                        {rec.dropped?.length ? ` · 검증에서 뺀 것 ${rec.dropped.length}` : ''}</span>}
                     <button className="btn btn-secondary" style={{ marginLeft: 'auto', padding: '0.2rem 0.4rem' }} onClick={onClose}><XIcon size={14} /></button>
                 </div>
                 <p style={{ fontSize: '0.76rem', color: '#64748b', margin: '0 0 0.5rem' }}>
@@ -88,19 +154,38 @@ export default function RecommendPanel({ kbId, triples, onClose, onApplied }: {
                 {rec && <div style={{ overflowY: 'auto', flex: 1 }}>
                     {rec.actions.length === 0 && <div>제안할 처리안이 없습니다.</div>}
                     {rec.actions.map((a: any) => (
-                        <label key={a.id} style={{ display: 'flex', gap: '0.5rem', padding: '0.45rem 0.4rem', borderBottom: '1px solid #e2e8f0', fontSize: '0.8rem', background: checked.has(a.id) ? '#f8fafc' : undefined, cursor: 'pointer' }}>
-                            <input type="checkbox" checked={checked.has(a.id)} onChange={() => toggle(a.id)} style={{ marginTop: 3 }} />
+                        <div key={a.id} style={{ display: 'flex', gap: '0.5rem', padding: '0.45rem 0.4rem', borderBottom: '1px solid #e2e8f0', fontSize: '0.8rem', background: checked.has(a.id) ? '#f8fafc' : undefined }}>
+                            <input type="checkbox" checked={checked.has(a.id)} onChange={() => toggle(a.id)} style={{ marginTop: 3, cursor: 'pointer' }}
+                                title="체크 = 승인 대상, 해제 = 거절" />
                             <div style={{ flex: 1 }}>
                                 <div>
                                     <span style={{ color: '#fff', background: TYPE_COLOR[a.type] || '#64748b', borderRadius: '10px', padding: '0.05rem 0.45rem', fontSize: '0.72rem', marginRight: 6 }}>{a.label}</span>
                                     <span style={{ color: a.confidence >= 0.7 ? '#15803d' : '#b45309', fontSize: '0.72rem' }}>확신 {Math.round(a.confidence * 100)}%</span>
                                 </div>
                                 <div style={{ marginTop: '0.2rem' }}>{detail(a)}</div>
+                                {a.edited && <span style={{ color: '#7c3aed', fontSize: '0.72rem' }}>수정함</span>}
+                                {a.type === 'set_definition' && defTests[a.id] && (() => {
+                                    const t = defTests[a.id];
+                                    if (t.running) return <div style={{ color: '#64748b', fontSize: '0.74rem' }}>이 정의로 재추출 테스트 중…</div>;
+                                    if (t.none) return <div style={{ color: '#94a3b8', fontSize: '0.74rem' }}>이 관계의 문제 트리플이 분석 대상에 없어 자동 테스트 생략</div>;
+                                    if (t.stale) return <div style={{ color: '#b45309', fontSize: '0.74rem' }}>정의를 수정함 — 아래 효과 미리보기로 다시 확인</div>;
+                                    if (t.error) return <div style={{ color: '#b91c1c', fontSize: '0.74rem' }}>자동 테스트 실패: {t.error}</div>;
+                                    return <div style={{ fontSize: '0.74rem', marginTop: '0.15rem' }}>
+                                        이 정의만으로 재추출 (청크 {t.chunks}): <span style={{ color: '#15803d' }}>사라짐 {t.summary.gone}</span>{' · '}
+                                        <span style={{ color: '#2563eb' }}>바뀜 {t.summary.moved}</span>{' · '}
+                                        <span style={{ color: '#b91c1c' }}>남음 {t.summary.kept}</span>
+                                    </div>;
+                                })()}
+                                <button type="button" className="btn btn-secondary" style={{ padding: '0.05rem 0.4rem', fontSize: '0.72rem', marginTop: '0.25rem' }}
+                                    onClick={() => setEditing(editing === a.id ? null : a.id)}>
+                                    {editing === a.id ? '수정 닫기' : '수정'}
+                                </button>
+                                {editing === a.id && <EditForm a={a} onChange={(p) => patch(a.id, p)} classes={classes} properties={properties} />}
                                 <div style={{ color: '#475569', marginTop: '0.15rem' }}>↳ {a.reason}</div>
                                 {a.evidence && <div style={{ color: '#64748b', fontStyle: 'italic' }}>근거: “{a.evidence}”</div>}
                                 {a.warning && <div style={{ color: '#b45309' }}>⚠ {a.warning}</div>}
                             </div>
-                        </label>
+                        </div>
                     ))}
                 </div>}
                 {pv && (
