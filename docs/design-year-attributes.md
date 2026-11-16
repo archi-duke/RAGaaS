@@ -1,7 +1,7 @@
 # 설계: 연도 속성 (데이터 품질 D4)
 
 작성일: 2026-11-16
-상태: 설계 초안 — **승인 전, 구현하지 않음**
+상태: 승인 (2026-11-17) — Y1 → Y2 → Y3 순서로 구현
 관련: `docs/design-mcp-agent-query.md` (query_plan), `docs/design-schema-editor.md`, 물리학사 평가 13~15
 
 ---
