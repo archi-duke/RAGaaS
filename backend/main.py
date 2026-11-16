@@ -52,6 +52,10 @@ app.include_router(schema_alignment.router, prefix="/api/v2/knowledge-bases", ta
 from app.api import graph_viewer
 app.include_router(graph_viewer.router, prefix="/api/v2/graph", tags=["Graph Viewer"])
 
+# 외부 에이전트용 조회 (docs/design-mcp-agent-query.md) — 읽기 전용, LLM 없음
+from app.api import agent_query
+app.include_router(agent_query.router, prefix="/api/v2/knowledge-bases", tags=["Agent Query"])
+
 from app.api import providers
 app.include_router(providers.router, prefix="/api/v2", tags=["providers"])
 

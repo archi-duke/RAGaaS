@@ -310,6 +310,35 @@ Claude(Opus 5.5)가 호출하는 에이전트 역할을 맡았다. Fuseki 를 �
 
 ---
 
+### 7.1 P1 결과 (2026-11-16)
+
+구현: `backend/app/services/agent_query/catalog.py`, `backend/app/api/agent_query.py`, 테스트 `backend/tests/test_agent_query.py`.
+
+| 엔드포인트 | test-ontology2 (text) | test-ontology (YAML) | test-ontology3 (물리학사) |
+|---|---|---|---|
+| `GET …/agent/describe` | 144ms · 17KB · 경로 40 | 127ms · 29KB · 경로 95 | 288ms · 32KB · 경로 111 |
+| `POST …/agent/values` | 63ms | | |
+| `POST …/agent/entities` | 43ms | | |
+| `POST …/agent/chunks` | 77~210ms (Milvus) | | |
+| `POST …/agent/sparql` | 기본 꺼짐 (`AGENT_SPARQL_ENABLED=true` 일 때만, SELECT 만, 동시 2) | | |
+
+**확인된 점**
+
+- 관계 계열이 표시된다 (`has_moderate_negative_effect_on` → polarity=negative, strength=moderate, family=has_effect_on).
+- text 경로라도 값이 짧은 라벨이면 어휘로 준다 (`has_positive_effect_on` 값 19종).
+- 유형마다 멤버 이름 목록(`member_names`, 최대 150개)을 준다.
+- 청크는 문서명을 함께 준다 (Milvus 메타데이터가 비어 있어 `doc_id → Document.filename`).
+
+**드러난 한계 → 다음 단계에서 보강**
+
+1. `lookup_values("수정 용이성")` 은 빈 결과다. 그래프 표기가 '변경 용이성'이라 문자열 일치로는 못 찾는다.
+   → 값 라벨 임베딩 유사도를 추가한다 (§4.3). 그 전까지는 에이전트가 `describe` 의 값 어휘를 보고 직접 맞춘다.
+   11/16 검증에서도 이렇게 했다.
+2. `resolve_entities("마이크로서비스" / "헥사고날")` 는 빈 결과다. 그래프에 한글 음역 별칭이 없다.
+   → 에이전트가 `member_names` 로 맞추게 스킬에 적는다. 별칭 보강은 스키마 편집기(멤버 별칭)에서 한다.
+3. 멤버 이름은 URI 로컬명에서 만든다. 구조화 KB 는 소문자 키(`hexagonal`)로 보인다.
+   → P2 에서 `rdfs:label` 로 바꾼다 (한 번의 SPARQL, 카탈로그와 함께 캐시).
+
 ## 8. 위험과 대응
 
 | 위험 | 대응 |
