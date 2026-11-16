@@ -7,7 +7,7 @@ import asyncio
 import os
 import re
 import time
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -77,6 +77,28 @@ async def agent_chunks(kb_id: str, req: ChunksRequest):
     out = await catalog.get_chunks(kb_id, req.chunk_ids, req.max_chars)
     out["elapsed_ms"] = int((time.time() - t) * 1000)
     return out
+
+
+class PlanRequest(BaseModel):
+    kind: Optional[str] = None
+    where: Optional[Any] = None
+    # 'return' 은 파이썬 예약어라 별칭으로 받는다
+    returns: List[Any] = Field(default_factory=list, alias="return")
+    aggregate: Optional[Dict[str, Any]] = None
+    rank_by: Optional[str] = None
+    limit: int = 50
+    include_evidence: bool = True
+    schema_version: Optional[str] = None
+
+    model_config = {"populate_by_name": True}
+
+
+@router.post("/{kb_id}/agent/plan")
+async def agent_plan(kb_id: str, req: PlanRequest):
+    """④ 질의 계획 실행 — 검증 → 컴파일 → 실행 → 엔티티·근거 트리플·청크 ID (LLM 없음, §4.4)."""
+    from app.services.agent_query.plan import run_plan
+    body = req.model_dump(by_alias=True)
+    return await run_plan(kb_id, body)
 
 
 # ---------------------------------------------------------------------------

@@ -339,6 +339,37 @@ Claude(Opus 5.5)가 호출하는 에이전트 역할을 맡았다. Fuseki 를 �
 3. 멤버 이름은 URI 로컬명에서 만든다. 구조화 KB 는 소문자 키(`hexagonal`)로 보인다.
    → P2 에서 `rdfs:label` 로 바꾼다 (한 번의 SPARQL, 카탈로그와 함께 캐시).
 
+### 7.2 P2 결과 (2026-11-16) — `POST …/agent/plan`
+
+구현: `backend/app/services/agent_query/plan.py`.
+기존 `class_query.validate_plan` / `compile_member_query` / `compile_evidence_query` 를 재사용한다.
+
+**실행 방식**
+
+1. 조건 트리(all / any)를 DNF(OR of AND)로 펼친다. 상한: 묶음 16개, 조건 12개, 묶음당 4개.
+2. AND 묶음마다 기존 검증·컴파일러로 한 질의를 만든다. 구조화 KB 의 "같은 목록 항목" 조건은 컴파일러가 구조 노드 변수를 공유해 지킨다 (PR #58).
+3. 묶음 결과의 합집합이 최종 결과다. 조건마다 따로 조회해 엔티티별 충족 조건 수(`matched`)를 세고, 그 수로 정렬한다.
+4. **AND 결과가 0이어도 OR 로 완화하지 않는다.** 내부 검색은 완화하지만, 외부 계약에서는 논리를 에이전트가 정한다. 결과가 없으면 `zero` 와 이유를 돌려준다.
+
+**검증기 변경** (내부 동작은 그대로)
+
+- path 에 key 문자열을 허용한다. 번호는 지금처럼 쓴다.
+- text 경로에 `in` 을 허용한다. 내부 LLM 프롬프트는 계속 eq / contains 만 안내한다.
+- `strict=True` (외부 계획):
+  - text 경로의 느슨한 '라벨 유사' 일치를 하지 않는다. 추측하지 않고 `zero` 를 낸다.
+  - 필터 수가 상한을 넘으면 잘라내지 않고 반려한다.
+
+**확인** (11/16 수작업 SPARQL 검증과 같은 결과)
+
+| 질의 | 결과 | 시간 |
+|---|---|---|
+| test-ontology2 "유지 보수성이 좋은 스타일" (any: 긍정 계열 in [변경·테스트·관리 용이성], 적합 contains '유지보수') | 7개. Clean·Hexagonal 이 matched 2 로 위. CQRS 는 부정 효과에도 '변경 용이성'이 있어 충돌이 드러남 | 229ms |
+| test-ontology2 "유지 보수성과 수정 용이성" (all: 변경 용이성, any: 테스트·관리 / 유지보수 적합) | Clean·Hexagonal (3) → Micro-Frontend·Modular Monolith (2) | 94ms |
+| test-ontology (YAML) 같은 품질 항목에서 attribute=modifiability AND effect=positive AND strength=high | Clean·Hexagonal·Micro-Frontend·Microservices. 원본 대조 일치 (CQRS·Modular=medium, Layered=negative 제외) | 108ms |
+
+**배포 주의**: 구조화 KB 의 항목 조건 상관은 PR #58 의 `compile_member_query` 수정에 의존한다.
+이 브랜치(main 기준)에는 그 수정이 없다. **#58 을 먼저 머지**해야 한다.
+
 ## 8. 위험과 대응
 
 | 위험 | 대응 |

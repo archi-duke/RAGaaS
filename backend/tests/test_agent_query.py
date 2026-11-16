@@ -133,3 +133,61 @@ def test_english_forms_for_translated_fallback():
     assert fm["circuit breaker"] == {"circuit_breaker"}               # snake_case → 띄어쓰기
     assert not any("CRUD" in f for f in fm)                           # 설명형 라벨 제외
     assert fm["ease of deployment"] == {"deployability"}              # 상위 개념 항목이 빌려준 영어 표기
+
+
+# --- query_plan (P2) -------------------------------------------------------------------------------
+from app.services.agent_query.plan import PlanError, to_dnf
+from app.services.retrieval import class_query as cq
+
+A = {"path": "a", "op": "eq", "value": 1}
+B = {"path": "b", "op": "eq", "value": 2}
+C = {"path": "c", "op": "eq", "value": 3}
+
+
+def test_to_dnf():
+    assert to_dnf(None) == [[]]
+    assert to_dnf(A) == [[A]]
+    assert to_dnf({"all": [A, B]}) == [[A, B]]
+    assert to_dnf({"any": [A, B]}) == [[A], [B]]
+    assert to_dnf({"all": [A, {"any": [B, C]}]}) == [[A, B], [A, C]]
+    assert to_dnf([A, B]) == [[A, B]]                       # 맨 리스트 = all
+    with pytest.raises(PlanError):
+        to_dnf({"all": [A], "any": [B]})
+    with pytest.raises(PlanError):
+        to_dnf({"any": []})
+    many = {"all": [{"any": [A, B]} for _ in range(5)]}      # 2^5 = 32 > 16
+    with pytest.raises(PlanError):
+        to_dnf(many)
+
+
+def _catalog():
+    vals = lambda *ls: [{"uri": f"http://x/{l}", "label": l, "members": 1} for l in ls]
+    paths = [
+        {"key": "has_positive_effect_on", "uris": ["http://r/p"], "type": "text", "values": vals("변경 용이성", "확장성"), "examples": [], "dv": 20},
+        {"key": "consistency_model", "uris": ["http://r/c"], "type": "enum", "values": vals("eventual", "strong")},
+    ]
+    kinds = [{"name": "Style", "members": ["http://x/s1"], "examples": [], "class_uri": "http://c/Style"}]
+    return kinds, {"Style": paths}
+
+
+def test_validate_plan_accepts_keys_and_text_in():
+    kinds, cats = _catalog()
+    r = cq.validate_plan({"kind": "Style", "filters": [{"path": "has_positive_effect_on", "op": "in",
+                                                        "value": ["변경 용이성", "확장성"]}]}, kinds, cats, strict=True)
+    assert r["status"] == "ok" and len(r["plan"]["filters"][0]["values"]) == 2
+    # 번호(내부 LLM)도 그대로
+    r = cq.validate_plan({"kind": "Style", "filters": [{"path": 1, "op": "eq", "value": "strong"}]}, kinds, cats)
+    assert r["status"] == "ok"
+    # 모르는 key → reject
+    assert cq.validate_plan({"kind": "Style", "filters": [{"path": "nope", "op": "eq", "value": "x"}]},
+                            kinds, cats, strict=True)["status"] == "reject"
+
+
+def test_validate_plan_strict_no_loose_text_match():
+    kinds, cats = _catalog()
+    f = [{"path": "has_positive_effect_on", "op": "eq", "value": "변경"}]
+    assert cq.validate_plan({"kind": "Style", "filters": f}, kinds, cats, strict=True)["status"] == "zero"
+    # 필터 수 초과는 strict 에서 반려 (내부는 잘라냄)
+    five = [{"path": "consistency_model", "op": "exists"}] * 5
+    assert cq.validate_plan({"kind": "Style", "filters": five}, kinds, cats, strict=True)["status"] == "reject"
+    assert cq.validate_plan({"kind": "Style", "filters": five}, kinds, cats)["status"] == "ok"
