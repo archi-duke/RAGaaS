@@ -382,11 +382,11 @@ export default function PipelineBuilder({
         const baseStyle = usesLLM ? cardStyleLLM : cardStyle;
         const cardStyles: React.CSSProperties = {
             ...baseStyle,
-            paddingBottom: stage.type === 'graph' ? 0 : '0.65rem',
+            paddingBottom: (stage.type === 'graph' || stage.type === 'agentic') ? 0 : '0.65rem',
             width: 'fit-content',
             minWidth: '180px',
             flexShrink: 0,
-            ...(stage.type === 'graph' && { height: 'auto', minHeight: '160px' }),
+            ...((stage.type === 'graph' || stage.type === 'agentic') && { height: 'auto', minHeight: '160px' }),
         };
 
         return (
@@ -554,29 +554,10 @@ export default function PipelineBuilder({
                 );
 
             case 'agentic':
+                // Graph 카드와 같은 배치: 슬라이더 왼쪽 고정, 옆에 Mode → Model
                 return (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', paddingTop: '0.15rem' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', flexWrap: 'wrap' }}>
-                            <span style={{ fontSize: '0.7rem', color: '#475569', flexShrink: 0 }}>Model</span>
-                            <ModelSelector
-                                type="llm"
-                                value={params.llm_model || DEFAULT_LLM_CONFIG}
-                                onChange={(cfg) => handleParamChange(index, 'llm_model', cfg)}
-                            />
-                        </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
-                            <span style={{ fontSize: '0.7rem', color: '#475569', flexShrink: 0 }}>Mode</span>
-                            <select
-                                value={params.mode || 'auto'}
-                                onChange={(e) => handleParamChange(index, 'mode', e.target.value)}
-                                title="auto: 복합 질문이거나 단일 실행이 근거 없이 끝날 때만 단계 진행 / always: 항상 단계 진행"
-                                style={{ fontSize: '0.75rem', padding: '0.1rem 0.25rem', borderRadius: '4px', border: '1px solid #cbd5e1' }}
-                            >
-                                <option value="auto">auto (복합 질문만)</option>
-                                <option value="always">always (항상)</option>
-                            </select>
-                        </div>
-                        <div style={{ display: 'flex', flexDirection: 'row', gap: '0.3rem', alignItems: 'flex-start' }}>
+                    <div style={{ display: 'flex', flexDirection: 'row', gap: '0.3rem', alignItems: 'flex-start' }}>
+                        <div style={{ display: 'flex', flexDirection: 'row', gap: '0.3rem', flexShrink: 0 }}>
                             <ParamSlider
                                 label="Max Steps"
                                 value={params.max_steps ?? 6}
@@ -589,6 +570,29 @@ export default function PipelineBuilder({
                                 min={10} max={120} step={5}
                                 onChange={(v) => handleParamChange(index, 'time_budget_s', v)}
                             />
+                        </div>
+                        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '0.3rem', minWidth: 0 }}>
+                            <div style={{ display: 'flex', alignItems: 'center' }} title="auto: 복합 질문이거나 단일 실행이 근거 없이 끝날 때만 단계 진행 / always: 항상 단계 진행">
+                                <ParamSelect
+                                    label="Mode"
+                                    layout="inline"
+                                    minWidth="80px"
+                                    value={params.mode || 'auto'}
+                                    options={[
+                                        { value: 'auto', label: 'Auto' },
+                                        { value: 'always', label: 'Always' }
+                                    ]}
+                                    onChange={(v) => handleParamChange(index, 'mode', v)}
+                                />
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', flexWrap: 'wrap' }}>
+                                <span style={{ fontSize: '0.7rem', color: '#475569', flexShrink: 0 }}>Model</span>
+                                <ModelSelector
+                                    type="llm"
+                                    value={params.llm_model || DEFAULT_LLM_CONFIG}
+                                    onChange={(cfg) => handleParamChange(index, 'llm_model', cfg)}
+                                />
+                            </div>
                         </div>
                     </div>
                 );
