@@ -49,7 +49,7 @@ const GATE_STAGES: { type: StageType; label: string; category: 'gate' }[] = [
 
 const DEFAULT_PARAMS: Record<StageType, Record<string, any>> = {
     smalltalk: { llm_model: DEFAULT_LLM_CONFIG },
-    agentic: { llm_model: DEFAULT_LLM_CONFIG, mode: 'auto', max_steps: 6, time_budget_s: 40 },
+    agentic: { llm_model: DEFAULT_LLM_CONFIG, mode: 'auto', max_steps: 6, time_budget_s: 60 },
     ann: { top_k: 10, threshold: 0.5, index_type: 'IVF_FLAT', embedding_model: DEFAULT_EMBEDDING_CONFIG },
     bm25: { top_k: 50, use_multi_pos: true },
     brute_force: { top_k: 3, threshold: 1.5 },
@@ -566,7 +566,7 @@ export default function PipelineBuilder({
                             />
                             <ParamSlider
                                 label="Time (s)"
-                                value={params.time_budget_s ?? 40}
+                                value={params.time_budget_s ?? 60}
                                 min={10} max={120} step={5}
                                 onChange={(v) => handleParamChange(index, 'time_budget_s', v)}
                             />

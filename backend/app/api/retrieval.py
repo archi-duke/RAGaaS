@@ -764,16 +764,65 @@ async def chat_with_kb(
             if "no fallback" not in log_lower and "fallback search disabled" not in log_lower:
                 used_fallback = True
     
+    elapsed = time.time() - start_time
+    # 검색 기록 저장 (사후 검토용) — 응답을 늦추지 않도록 백그라운드로
+    asyncio.create_task(_save_chat_trace(kb_id, request.query, answer, display_strategy, elapsed, has_error,
+                                         used_fallback, execution_logs, results, pipeline_config))
     return ChatResponse(
         answer=answer,
         chunks=results,
-        execution_time=time.time() - start_time,
+        execution_time=elapsed,
         strategy=display_strategy,
         execution_log=execution_logs,
         pipeline_config=pipeline_config,
         has_error=has_error,
         used_fallback=used_fallback
     )
+
+
+CHAT_TRACE_KEEP = 300   # KB 당 최근 기록 수
+
+
+async def _save_chat_trace(kb_id, query, answer, strategy, elapsed, has_error, used_fallback, logs, results, pipeline):
+    try:
+        from app.models.chat_trace import ChatTrace
+        gm = next((r.get("graph_metadata") for r in (results or []) if (r.get("graph_metadata") or {}).get("reasoning")), None) \
+            or next((r.get("graph_metadata") for r in (results or []) if r.get("graph_metadata")), None) or {}
+        triples = [t for t in (gm.get("triples") or []) if isinstance(t, dict)][:150]
+        chunks = [{"chunk_id": r.get("chunk_id"), "doc_id": (r.get("metadata") or {}).get("doc_id"),
+                   "score": r.get("score"), "content": (r.get("content") or "")[:300]} for r in (results or [])[:15]]
+        await ChatTrace(kb_id=kb_id, query=query, answer=answer or "", strategy=strategy, execution_time=round(elapsed, 2),
+                        has_error=has_error, used_fallback=used_fallback, execution_log=[str(x)[:4000] for x in (logs or [])][:600],
+                        reasoning=gm.get("reasoning") or {}, result_summary=gm.get("result_summary"),
+                        triples=[{k: t.get(k) for k in ("subject", "predicate", "object", "chunk_ids")} for t in triples],
+                        chunks=chunks, pipeline=pipeline).insert()
+        old = await ChatTrace.find(ChatTrace.kb_id == kb_id).sort(-ChatTrace.created_at).skip(CHAT_TRACE_KEEP).to_list()
+        for o in old:
+            await o.delete()
+    except Exception as e:
+        print(f"[ChatTrace] 저장 실패: {e}")
+
+
+@router.get("/{kb_id}/chat/traces")
+async def list_chat_traces(kb_id: str, limit: int = 20):
+    """최근 검색 기록 (질문·답변 요약·시간·전략)."""
+    from app.models.chat_trace import ChatTrace
+    rows = await ChatTrace.find(ChatTrace.kb_id == kb_id).sort(-ChatTrace.created_at).limit(max(1, min(limit, 100))).to_list()
+    return [{"id": str(r.id), "query": r.query, "answer": r.answer[:300], "strategy": r.strategy,
+             "execution_time": r.execution_time, "has_error": r.has_error, "used_fallback": r.used_fallback,
+             "agentic": bool((r.reasoning or {}).get("agentic")), "created_at": r.created_at.isoformat()} for r in rows]
+
+
+@router.get("/{kb_id}/chat/traces/{trace_id}")
+async def get_chat_trace(kb_id: str, trace_id: str):
+    """검색 기록 하나 전체 — 실행 로그·추론 과정(스크래치패드)·트리플·청크."""
+    from app.models.chat_trace import ChatTrace
+    r = await ChatTrace.get(trace_id)
+    if not r or r.kb_id != kb_id:
+        raise HTTPException(status_code=404, detail="기록 없음")
+    d = r.model_dump(mode="json")
+    d["id"] = str(r.id)
+    return d
 
 @router.get("/{kb_id}/chunks/{chunk_id}")
 async def get_chunk(kb_id: str, chunk_id: str):

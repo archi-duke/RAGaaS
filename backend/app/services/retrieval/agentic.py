@@ -16,7 +16,8 @@ import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 DEFAULT_MAX_STEPS = 6
-DEFAULT_TIME_BUDGET_S = 40.0
+DEFAULT_TIME_BUDGET_S = 60.0
+SCRATCHPAD_MAX = 2500       # 스크래치패드 길이 상한 (다음 단계 프롬프트·답변 컨텍스트에 그대로 들어감)
 ESCALATED_MAX_STEPS = 2   # 단일 실행 실패 후 승격된 경우의 단계 상한 (없는 사실을 오래 찾지 않게)
 MAX_CALLS_PER_STEP = 4
 MAX_TRIPLES = 150
@@ -37,6 +38,9 @@ _COMPLEX_PATTERNS = [
     r"공통", r"비교", r"차이", r"각각", r"모두의", r"대비", r"vs\.?", r"어느 쪽",
     r"(들|것들)(이|의|은|는|에)\s*\S*\s*(가지|갖|있|공유|약점|강점|단점|장점|특징|문제)",
     r"(인|하는|한|되는|높은|낮은|빠른|많은)\s*\S*(들)(이|의|은|는)",
+    # 조건 여러 개를 '과/와/및' 으로 묶은 질문: "배포 용이성과 수정 용이성이 좋은 스타일은?" — 교차 확인이 필요
+    r"\S+(과|와|및)\s+\S+.{0,20}(좋은|높은|낮은|강한|뛰어난|우수한|빠른|적합한|유리한|불리한|나쁜)",
+    r"(모두|둘\s*다|동시에|함께)\s*\S*(좋|높|만족|충족|해당|가진|갖)",
 ]
 _COMPLEX_RE = re.compile("|".join(_COMPLEX_PATTERNS))
 
@@ -101,7 +105,7 @@ async def describe_kb(kb_id: str, graph_backend: str, llm_model_config: Optional
 # ---------------------------------------------------------------------------
 
 def build_step_messages(query: str, kb_summary: str, tools: List[str], history: List[Dict[str, Any]],
-                        step_no: int, max_steps: int) -> List[Dict[str, str]]:
+                        step_no: int, max_steps: int, scratchpad: str = "", final: bool = False) -> List[Dict[str, str]]:
     tool_lines = "\n".join(f"- {t}: {TOOL_DESC[t]}" for t in tools)
     hist = []
     for h in history:
@@ -123,6 +127,10 @@ def build_step_messages(query: str, kb_summary: str, tools: List[str], history: 
 [지금까지의 검색]
 {hist_text}
 
+[스크래치패드 — 직전 단계까지 정리한 메모. 이어서 고쳐 쓴다]
+{scratchpad or '(비어 있음 — 처음 작성)'}
+
+{'[지금은 정리 단계다 — 시간·단계가 다 되어 더 검색하지 않는다. action 은 finish, calls 는 빈 목록. 지금까지의 검색으로 스크래치패드를 최종 정리하라.]' if final else ''}
 규칙:
 1. 복합 질문은 나눠서 찾는다. 예: "X 한 것들의 공통 약점" → (1) X 인 대상 목록을 찾고 (2) 찾은 대상 각각의 약점을 찾는다.
 2. 하위 질문은 도구가 한 번에 풀 수 있게 짧고 구체적으로. 앞 단계에서 찾은 대상 이름을 그대로 쓴다.
@@ -132,10 +140,19 @@ def build_step_messages(query: str, kb_summary: str, tools: List[str], history: 
 3. 한 단계에 서로 독립인 하위 질문을 최대 {MAX_CALLS_PER_STEP}개까지 동시에 보낼 수 있다 (예: 대상별 속성 조회).
 4. 같은 질문을 반복하지 않는다. 질문에 답할 근거가 모이면 바로 finish 한다. 답변 작성은 하지 않는다.
 5. 같은 사실을 표현만 바꿔 두 번 찾았는데도 근거가 없으면 더 찾지 말고 finish 한다 — 문서에 없는 사실일 수 있다.
+6. 스크래치패드를 매 단계 갱신한다 (마크다운, 짧게):
+   ## 알게 된 것 — 검색으로 확인한 사실만 (출처 단계 번호)
+   ## 후보 × 조건 — 조건이 둘 이상이면 표: | 후보 | 조건1 | 조건2 | 칸은 ✔(근거 있음) ✘(반대 근거) ?(미확인)
+   ## 아직 모르는 것 — ? 칸과 빠진 정보
+   ## 다음 — 다음 단계에서 확인할 것
+7. 표에 ? 가 남아 있으면 finish 하지 말고 그 칸을 채우는 검색을 먼저 한다. 한 조건이 지식베이스 구조의
+   여러 위치에 있을 수 있다 (예: 수정 용이성 = 적합 신호 속성과 품질 속성 목록 둘 다) — 한 곳에 없다고 ✘ 로 두지 말고 다른 위치도 확인.
+   반대 근거(예: effect=negative)가 있으면 ✘.
 
 JSON 만 출력:
 {{"thought": "이번 단계에서 할 일과 이유 (한 문장)", "action": "search" | "finish",
   "calls": [{{"tool": "{tools[0]}", "query": "하위 질문"}}],
+  "scratchpad": "갱신한 스크래치패드 전체",
   "note": "finish 일 때: 모은 근거로 답할 때 주의할 점 (예: 공통점만 추릴 것)"}}"""
     return [
         {"role": "system", "content": "You are a retrieval planner. Decide the next search step. Output JSON only."},
@@ -148,11 +165,15 @@ def parse_step(text: str, tools: List[str]) -> Dict[str, Any]:
     m = re.search(r"```(?:json)?\s*(.*?)```", t, re.S)
     if m:
         t = m.group(1)
+    # strict=False: GLM 이 스크래치패드 문자열 안에 줄바꿈을 그대로 넣는 경우 ("Invalid control character")
     try:
-        d = json.loads(t)
+        d = json.loads(t, strict=False)
     except ValueError:
         s, e = t.find("{"), t.rfind("}")
-        d = json.loads(t[s:e + 1]) if s != -1 and e > s else {}
+        try:
+            d = json.loads(t[s:e + 1], strict=False) if s != -1 and e > s else {}
+        except ValueError:
+            d = {}
     if not isinstance(d, dict):
         d = {}
     calls = []
@@ -166,7 +187,8 @@ def parse_step(text: str, tools: List[str]) -> Dict[str, Any]:
             calls.append({"tool": tool, "query": q[:300]})
     action = "finish" if d.get("action") == "finish" or not calls else "search"
     return {"thought": str(d.get("thought") or "")[:300], "action": action,
-            "calls": calls[:MAX_CALLS_PER_STEP], "note": str(d.get("note") or "")[:500]}
+            "calls": calls[:MAX_CALLS_PER_STEP], "note": str(d.get("note") or "")[:500],
+            "scratchpad": str(d.get("scratchpad") or "").strip()[:SCRATCHPAD_MAX]}
 
 
 # ---------------------------------------------------------------------------
@@ -243,6 +265,7 @@ async def run_agentic(
         log(f"[Agentic] 단계 0 (단일 실행): {obs[:300]}")
 
     model = planner_cfg.get("model")
+    scratchpad = ""   # 에이전트 메모 — 단계마다 갱신해 다음 단계로 넘기고, 마지막 것은 답변 모델에 전달
     for step_no in range(1, max_steps + 1):
         # 남은 예산이 계획 1회 + 검색 1회에 못 미치면 새 단계를 시작하지 않는다 (중간에 잘린 검색은 근거가 안 됨)
         if budget - (time.time() - t0) < MIN_STEP_S:
@@ -250,7 +273,8 @@ async def run_agentic(
             break
         ts = time.time()
         try:
-            raw = await achat(planner_cfg, build_step_messages(ctx.query, kb_summary, tools, history, step_no, max_steps),
+            raw = await achat(planner_cfg, build_step_messages(ctx.query, kb_summary, tools, history, step_no, max_steps,
+                                                               scratchpad=scratchpad),
                               model=model, temperature=0, response_format={"type": "json_object"},
                               extra_body=no_thinking_extra_body(model), timeout=60)
             plan = parse_step(raw, tools)
@@ -259,6 +283,8 @@ async def run_agentic(
             stop_reason = "계획 실패"
             break
         plan_sec = time.time() - ts
+        if plan.get("scratchpad"):
+            scratchpad = plan["scratchpad"]
         if plan["action"] == "finish":
             note = plan["note"]
             stop_reason = "근거 충분"
@@ -288,7 +314,7 @@ async def run_agentic(
             return c, res, meta or {}, time.time() - tc
 
         outs = await asyncio.gather(*(one(c) for c in calls))
-        rec = {"step": step_no, "thought": plan["thought"], "calls": []}
+        rec = {"step": step_no, "thought": plan["thought"], "calls": [], "scratchpad": plan.get("scratchpad") or ""}
         for c, res, meta, sec in outs:
             obs = ("오류: " + meta["error"]) if meta.get("error") else summarize_observation(res, meta)
             rec["calls"].append({"tool": c["tool"], "query": c["query"], "observation": obs, "sec": round(sec, 1),
@@ -299,20 +325,37 @@ async def run_agentic(
     else:
         stop_reason = "단계 상한"
 
-    merged = merge_evidence(gathered, note, query=ctx.query, history=history)
+    # 근거 충분으로 끝나지 않았으면(시간·단계 상한, 반복) 지금까지의 관찰로 스크래치패드를 한 번 정리 — 검색은 하지 않는다
+    if stop_reason != "근거 충분" and history and stop_reason != "계획 실패":
+        try:
+            raw = await achat(planner_cfg, build_step_messages(ctx.query, kb_summary, tools, history, len(history) + 1,
+                                                               max_steps, scratchpad=scratchpad, final=True),
+                              model=model, temperature=0, response_format={"type": "json_object"},
+                              extra_body=no_thinking_extra_body(model), timeout=25)
+            fin = parse_step(raw, tools)
+            if fin.get("scratchpad"):
+                scratchpad = fin["scratchpad"]
+            note = note or fin.get("note") or ""
+        except Exception as e:
+            log(f"[Agentic] 스크래치패드 정리 실패: {str(e)[:150]}")
+    if scratchpad:
+        log("[Agentic] 스크래치패드:\n" + scratchpad)
+
+    merged = merge_evidence(gathered, note, query=ctx.query, history=history, scratchpad=scratchpad)
     total = time.time() - t0
     log(f"[Agentic] 종료: {stop_reason} | {len(history)}단계 {total:.1f}초 | 근거 청크 {len(merged['results'])}건 · "
         f"트리플 {len(merged['graph_metadata']['triples'])}건")
     merged["graph_metadata"]["reasoning"] = {
         "targeting": {"mode": "AG", "reason": f"에이전틱 {len(history)}단계 ({stop_reason})"},
-        "agentic": {"steps": history, "stop_reason": stop_reason, "seconds": round(total, 1), "note": note},
+        "agentic": {"steps": history, "stop_reason": stop_reason, "seconds": round(total, 1), "note": note,
+                    "scratchpad": scratchpad},
     }
     merged.update({"steps": history, "stop_reason": stop_reason})
     return merged
 
 
 def merge_evidence(gathered: List[Dict[str, Any]], note: str = "", query: str = "",
-                   history: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+                   history: Optional[List[Dict[str, Any]]] = None, scratchpad: str = "") -> Dict[str, Any]:
     """호출별 근거 병합. 청크는 호출마다 돌아가며(라운드로빈) 넣어 대상별 근거가 모두 상위에 오게 한다."""
     triples, tseen = [], set()
     summaries = []
@@ -353,6 +396,9 @@ def merge_evidence(gathered: List[Dict[str, Any]], note: str = "", query: str = 
             qs = "; ".join(f"{c['query']}" + (" (실패)" if str(c.get("observation", "")).startswith("오류") else "")
                            for c in h["calls"])
             head.append(f"- 단계 {h['step']}: {h.get('thought', '')} → {qs}")
+    if scratchpad:
+        head.append("[에이전트 스크래치패드 — 단계별로 확인한 내용. 후보 × 조건 표의 ✔(근거 있음)/✘(반대 근거)/?(미확인)를 지켜 답하고, "
+                    "? 는 '확인되지 않음' 으로 밝힐 것]\n" + scratchpad)
     if note:
         head.append(f"[답변 시 유의] {note}")
     summary = "\n".join(head) + ("\n\n" if head and summaries else "") + "\n\n".join(summaries)

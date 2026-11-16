@@ -439,17 +439,25 @@ class GraphRetrievalStrategy(RetrievalStrategy):
             if not llm_cfg:
                 raise ValueError("Graph search model is not configured.")
             from app.core.llm import achat, no_thinking_extra_body
-            content = await achat(
-                llm_cfg,
-                [
-                    {"role": "system", "content": "You are a precise query analyzer and entity extractor for Knowledge Graphs. Output JSON only. Never translate entity names in the main 'entities' list."},
-                    {"role": "user", "content": prompt},
-                ],
-                model=llm_model, temperature=0, response_format={"type": "json_object"},
-                # GLM 은 기본이 사고 모드 — 끄지 않으면 다단계 질문 분석에 30초 이상 걸린다
-                extra_body=no_thinking_extra_body(llm_model),
-            )
-            data = json.loads(content)
+            data = None
+            for attempt in range(2):   # GLM 이 가끔 빈 응답을 준다 ("Expecting value") — 한 번 더 묻는다
+                content = await achat(
+                    llm_cfg,
+                    [
+                        {"role": "system", "content": "You are a precise query analyzer and entity extractor for Knowledge Graphs. Output JSON only. Never translate entity names in the main 'entities' list."},
+                        {"role": "user", "content": prompt},
+                    ],
+                    model=llm_model, temperature=0, response_format={"type": "json_object"},
+                    # GLM 은 기본이 사고 모드 — 끄지 않으면 다단계 질문 분석에 30초 이상 걸린다
+                    extra_body=no_thinking_extra_body(llm_model),
+                )
+                try:
+                    data = json.loads(content, strict=False)
+                    break
+                except ValueError:
+                    if attempt:
+                        raise
+                    logger.warning("[Graph] 질문 분석 응답이 비었거나 JSON 이 아님 — 한 번 더 요청")
 
             # 엔티티 + 역할
             for ent in data.get("entities", []):
