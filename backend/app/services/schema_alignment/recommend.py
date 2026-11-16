@@ -25,6 +25,37 @@ ACTION_LABEL = {
 }
 
 
+def _now() -> str:
+    from datetime import datetime
+    return datetime.utcnow().isoformat()
+
+
+def _count_types(actions: List[Dict[str, Any]]) -> Dict[str, int]:
+    out: Dict[str, int] = {}
+    for a in actions:
+        out[a["type"]] = out.get(a["type"], 0) + 1
+    return out
+
+
+async def _log(kb_id: str, entry: Dict[str, Any]) -> None:
+    """추천 수용 기록 (promotion_metadata.ai_recommend_log, 최근 30건) — 추천을 얼마나 그대로 받아들였는지."""
+    from app.models.knowledge_base import KnowledgeBase
+    kb = await KnowledgeBase.get(kb_id)
+    if not kb:
+        return
+    meta = dict(kb.promotion_metadata or {})
+    log = list(meta.get("ai_recommend_log") or [])
+    for e in log:
+        if e.get("id") == entry.get("id"):
+            e.update(entry)
+            break
+    else:
+        log.append(entry)
+    meta["ai_recommend_log"] = log[-30:]
+    kb.promotion_metadata = meta
+    await kb.save()
+
+
 def _chunk_texts(kb_id: str, chunk_ids: List[str]) -> Dict[str, str]:
     from app.core.milvus import create_collection
     out: Dict[str, str] = {}
@@ -69,9 +100,20 @@ async def collect_context(kb_id: str, scope: Optional[Dict[str, Any]] = None) ->
                 if r["status"] in ("violation", "gap") and len(problems) < MAX_PROBLEM_TRIPLES:
                     problems.append({**r, "property": name, "predicate": r.get("predicate") or name})
     texts = _chunk_texts(kb_id, list(dict.fromkeys(t["source"] for t in problems if t.get("source"))))
+    # 그래프에 있는 엔티티 라벨 (처리안 엔티티 이름 검증용)
+    from app.core.fuseki import fuseki_client
+    from app.services.retrieval.entity_linking import _compact
+    entity_keys = set((await _class_index(kb_id)).keys())
+    try:
+        q = """SELECT DISTINCT ?l WHERE { GRAPH ?g { ?e <http://www.w3.org/2000/01/rdf-schema#label> ?l
+               FILTER(STRSTARTS(STR(?e), "http://rag.local/inst/")) } FILTER(STRSTARTS(STR(?g), "urn:doc:")) } LIMIT 20000"""
+        for b in fuseki_client.query_sparql(kb_id, q).get("results", {}).get("bindings", []):
+            entity_keys.add(_compact(b["l"]["value"]))
+    except Exception:
+        pass
     for t in problems:
         t["chunk_text"] = texts.get(t.get("source") or "", "")
-    return {"spec": spec, "problems": problems}
+    return {"spec": spec, "problems": problems, "entity_keys": entity_keys}
 
 
 def build_messages(ctx: Dict[str, Any]) -> List[Dict[str, str]]:
@@ -130,10 +172,33 @@ JSON 만: {{"actions": [{{"type": "...", ...필드, "reason": "한 문장", "evi
             {"role": "user", "content": user}]
 
 
+def known_entities(ctx: Dict[str, Any]) -> set:
+    """처리안에 쓸 수 있는 엔티티 이름(정규화 키): 문제 트리플·멤버 누락·range 위반·클래스 멤버·그래프 라벨."""
+    from app.services.retrieval.entity_linking import _compact
+    names = set(ctx.get("entity_keys") or set())
+    for t in ctx.get("problems") or []:
+        names.update((_compact(t.get("subject") or ""), _compact(t.get("object") or "")))
+    for items in (ctx["spec"].get("member_gaps") or {}).values():
+        names.update(_compact(g["name"]) for g in items)
+    names.update(_compact(v["name"]) for v in ctx["spec"].get("range_violations") or [])
+    names.discard("")
+    return names
+
+
 def validate_actions(data: Optional[Dict[str, Any]], ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """존재하는 이름만, 형식이 맞는 처리안만 채택. 트리플 참조 T0.. 는 실제 트리플로 바꾼다."""
+    """존재하는 이름만, 형식이 맞는 처리안만 채택. 트리플 참조 T0.. 는 실제 트리플로 바꾼다.
+    엔티티(멤버 지정·병합·새 클래스 멤버)는 그래프에 실재하는 이름만 — 없는 이름은 빼고 dropped 에 남긴다."""
     from app.services.retrieval.entity_linking import _compact
     spec = ctx["spec"]
+    ents = known_entities(ctx)
+    dropped = ctx.setdefault("dropped", [])
+
+    def real(xs):
+        ok = [x for x in xs if _compact(x) in ents]
+        miss = [x for x in xs if _compact(x) not in ents]
+        if miss:
+            dropped.append("없는 엔티티: " + ", ".join(miss[:5]))
+        return ok
     classes = {c["name"] for c in spec["classes"]}
     props = {p["name"]: p for p in spec["properties"]}
     probs = ctx["problems"]
@@ -171,13 +236,16 @@ def validate_actions(data: Optional[Dict[str, Any]], ctx: Dict[str, Any]) -> Lis
                 continue
             new_classes.add(nm)
             out.append({**base, "name": nm, "description": str(a.get("description") or "")[:300],
-                        "members": [str(x) for x in (a.get("members") or []) if str(x).strip()][:40]})
+                        "members": real([str(x) for x in (a.get("members") or []) if str(x).strip()][:40])})
         elif t == "assign_members" and (a.get("class") in classes | new_classes):
-            ents = [str(x) for x in (a.get("entities") or []) if _compact(str(x))][:60]
-            if ents:
-                out.append({**base, "class": a["class"], "entities": ents})
+            sel = real([str(x) for x in (a.get("entities") or []) if _compact(str(x))][:60])
+            if sel:
+                out.append({**base, "class": a["class"], "entities": sel})
         elif t == "merge_entities" and a.get("canonical") and a.get("aliases"):
-            al = [str(x) for x in a["aliases"] if _compact(str(x)) and _compact(str(x)) != _compact(str(a["canonical"]))]
+            al = real([str(x) for x in a["aliases"] if _compact(str(x)) and _compact(str(x)) != _compact(str(a["canonical"]))])
+            if al and _compact(str(a["canonical"])) not in ents:
+                dropped.append(f"병합 대표 이름이 그래프에 없음: {a['canonical']}")
+                al = []
             if al:
                 # 한쪽 이름이 다른 쪽을 포함하면 상하위·수식 관계일 가능성 ('확장성' ⊂ '확장성 요구') → 경고·확신도 낮춤
                 cc = _compact(str(a["canonical"]))
@@ -223,7 +291,11 @@ async def recommend(kb_id: str, scope: Optional[Dict[str, Any]] = None) -> Dict[
     except Exception as e:
         raise SchemaEditError([f"추천 생성 실패: {str(e)[:200]}"], 502)
     actions = validate_actions(parse_json_loose(raw), ctx)
-    return {"model": cfg.get("model"), "version": ctx["spec"]["version"], "actions": actions,
+    rec_id = uuid.uuid4().hex[:10]
+    await _log(kb_id, {"id": rec_id, "at": _now(), "model": cfg.get("model"), "scope": "triples" if scope else "schema",
+                       "proposed": len(actions), "by_type": _count_types(actions), "dropped": ctx.get("dropped", [])[:10]})
+    return {"id": rec_id, "model": cfg.get("model"), "version": ctx["spec"]["version"], "actions": actions,
+            "dropped": ctx.get("dropped", [])[:10],
             "problems": [{k: t.get(k) for k in ("subject", "predicate", "object", "status", "source", "doc_id", "doc")}
                          for t in ctx["problems"]]}
 
@@ -347,7 +419,8 @@ async def preview(kb_id: str, actions: List[Dict[str, Any]], problems: List[Dict
             "rules_simulated": len(_simulated_rules(actions)), "failures": failures[:5]}
 
 
-async def apply(kb_id: str, actions: List[Dict[str, Any]], base_version: Optional[int] = None) -> Dict[str, Any]:
+async def apply(kb_id: str, actions: List[Dict[str, Any]], base_version: Optional[int] = None,
+                rec_id: Optional[str] = None, outcome: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """승인한 처리안 반영: 스키마 변경을 한 번에 저장 → 규칙(class·entity·triple) 생성 → 리플레이 1회."""
     from app.models.knowledge_base import KnowledgeBase
     from app.models.schema_mapping import SchemaMappingRule
@@ -403,6 +476,13 @@ async def apply(kb_id: str, actions: List[Dict[str, Any]], base_version: Optiona
         kb.schema_rules_version = (kb.schema_rules_version or 0) + 1
         await kb.save()
     rp = await _replay_text_docs(kb_id) if (created or schema_acts) else {"replayed": 0, "errors": []}
+    if rec_id:
+        o = outcome or {}
+        await _log(kb_id, {"id": rec_id, "applied_at": _now(), "accepted": len(actions),
+                           "accepted_by_type": _count_types(actions),
+                           "edited": sum(1 for a in actions if a.get("edited")),
+                           "rejected": o.get("rejected"), "proposed_seen": o.get("proposed"),
+                           "preview": o.get("preview"), "version_after": (saved or {}).get("version", ver)})
     return {"schema_saved": bool(saved and saved.get("saved")), "version": (saved or {}).get("version", ver),
             "rules_created": created, **rp,
             "reextract_recommended": any(a["type"] in ("set_definition", "set_range", "set_domain", "add_property")

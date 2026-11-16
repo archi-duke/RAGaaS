@@ -401,6 +401,8 @@ class RecommendActionsBody(BaseModel):
     actions: List[dict]
     problems: List[dict] = []
     base_version: Optional[int] = None
+    rec_id: Optional[str] = None            # 추천 id — 수용 기록용
+    outcome: Optional[dict] = None          # {proposed, rejected, preview}
 
 
 @router.post("/{kb_id}/schema/recommend")
@@ -430,6 +432,17 @@ async def schema_recommend_apply(kb_id: str, body: RecommendActionsBody):
     from app.services.schema_alignment import recommend as rc
     from app.services.schema_alignment.schema_editor import SchemaEditError
     try:
-        return await rc.apply(kb_id, body.actions, body.base_version)
+        return await rc.apply(kb_id, body.actions, body.base_version, body.rec_id, body.outcome)
     except SchemaEditError as e:
         _edit_error(e)
+
+
+
+@router.get("/{kb_id}/schema/recommend/log")
+async def schema_recommend_log(kb_id: str):
+    """AI 추천 수용 기록 — 제안 수·종류, 승인·수정·거절 수, 미리보기 결과."""
+    from app.models.knowledge_base import KnowledgeBase
+    kb = await KnowledgeBase.get(kb_id)
+    if not kb:
+        raise HTTPException(status_code=404, detail="KB 없음")
+    return list(reversed((kb.promotion_metadata or {}).get("ai_recommend_log") or []))
