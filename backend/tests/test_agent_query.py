@@ -229,3 +229,30 @@ def test_run_plan_reports_query_failure(monkeypatch):
     monkeypatch.setattr(F.fuseki_client, "query_sparql_strict", boom)
     r = asyncio.run(pl.run_plan("kb", {"kind": "Style", "where": {"path": "consistency_model", "op": "eq", "value": "strong"}}))
     assert r["status"] == "error" and "조회 실패" in r["message"]
+
+
+def test_year_condition_parse_and_compile():
+    assert cq.parse_year_cond(1933) == ({"gte": 1933, "lte": 1933}, None)
+    assert cq.parse_year_cond({"gte": 1930, "lte": 1939}) == ({"gte": 1930, "lte": 1939}, None)
+    assert cq.parse_year_cond({"gt": 1929, "lt": 1940}) == ({"gte": 1930, "lte": 1939}, None)
+    assert cq.parse_year_cond({"gte": 1940, "lte": 1930})[1]
+    assert cq.parse_year_cond({"from": 1930})[1]
+    assert cq.parse_year_cond(99)[1]
+    kinds, cats = _catalog()
+    f = [{"path": "has_positive_effect_on", "op": "exists", "year": {"gte": 1930, "lte": 1939}}]
+    r = cq.validate_plan({"kind": "Style", "filters": f}, kinds, cats, strict=True)
+    assert r["status"] == "ok" and r["plan"]["filters"][0]["year"] == {"gte": 1930, "lte": 1939}
+    sp = cq.compile_member_query(r["plan"])
+    assert "meta:year ?yrf0" in sp and "?yrf0 >= 1930 && ?yrf0 <= 1939" in sp
+    assert "meta:year" in cq.compile_evidence_query(["http://x/s1"], r["plan"])
+    # ne 와 함께는 반려
+    f = [{"path": "consistency_model", "op": "ne", "value": "strong", "year": 1933}]
+    assert cq.validate_plan({"kind": "Style", "filters": f}, kinds, cats, strict=True)["status"] == "reject"
+
+
+def test_parse_evidence_collects_years():
+    b = lambda y: {"e": {"value": "http://x/e"}, "s": {"value": "http://x/e"}, "p": {"value": "http://r/p"},
+                   "o": {"value": "http://x/o"}, "oLabel": {"value": "노벨 물리학상"}, "role": {"value": "filter"},
+                   **({"year": {"value": str(y)}} if y else {})}
+    ts = cq.parse_evidence([b(1933), b(1922), b(None)], ["http://x/e"])
+    assert len(ts) == 1 and ts[0]["years"] == [1922, 1933]

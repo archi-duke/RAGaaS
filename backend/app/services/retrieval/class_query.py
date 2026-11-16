@@ -406,6 +406,8 @@ def build_plan_messages(
   enum 값은 목록에 적힌 표기 그대로 써라 (예: "작을 때" → "small", "높은" → "high").
   질문의 값이 목록에 없으면(예: "very low" 인데 목록엔 low 뿐) 비슷한 값으로 바꾸지 말고 질문 표기 그대로 써라.
   "X와 잘 어울리는/관련된 Y" 같은 역방향 질문은 X 가 값으로 들어가는 경로의 eq 필터로 표현한다.
+  질문에 시기가 있으면 그 사실의 연도를 필터에 "year" 로 붙인다 (관계 경로만, 값에 연도 문자열을 contains 로 넣지 않는다):
+  "1933년" → "year": 1933, "1930년대" → "year": {{"gte": 1930, "lte": 1939}}, "1900년 이후" → "year": {{"gte": 1900}}.
 - return: 결과 엔티티마다 보여줄 경로 번호 (질문이 묻는 속성, 최대 {MAX_RETURNS}개, 없으면 []).
 - aggregate: 개수/최대/최소를 물으면 {{"fn": "count|max|min|count_members", "path": 경로번호, "order": "desc|asc", "limit": 1}}
   (count = 경로 값 개수로 엔티티 순위, count_members = 조건을 만족하는 엔티티 수, max/min 은 number 경로)
@@ -470,6 +472,67 @@ def resolve_value(raw: Any, path: Dict[str, Any], value_hints_uris: Sequence[str
             out.append(hit)
             notes.append(f"'{s}'→{hit['label']}({how})")
     return out, ", ".join(notes)
+
+
+YEAR_MIN, YEAR_MAX = 1000, 2100
+
+
+def parse_year_cond(raw: Any) -> Tuple[Optional[Dict[str, int]], Optional[str]]:
+    """조건의 year → {"gte": a, "lte": b} (진술 연도 범위, D4). 정수 하나는 그 해. gt/lt 는 gte/lte 로 바꾼다."""
+    if isinstance(raw, bool):
+        return None, "정수 또는 {gte, lte} 여야 함"
+    if isinstance(raw, (int, str)) and str(raw).strip().rstrip("년").isdigit():
+        y = int(str(raw).strip().rstrip("년"))
+        raw = {"gte": y, "lte": y}
+    if not isinstance(raw, dict):
+        return None, "정수 또는 {gte, lte} 여야 함"
+    out: Dict[str, int] = {}
+    try:
+        for k, v in raw.items():
+            k = str(k).lower()
+            n = int(str(v).strip().rstrip("년"))
+            if k == "eq":
+                out["gte"] = out["lte"] = n
+            elif k in ("gte", "lte"):
+                out[k] = n
+            elif k == "gt":
+                out["gte"] = n + 1
+            elif k == "lt":
+                out["lte"] = n - 1
+            else:
+                return None, f"알 수 없는 키 {k} (gte·lte·gt·lt·eq)"
+    except (TypeError, ValueError):
+        return None, "연도는 정수여야 함"
+    if not out:
+        return None, "범위가 비어 있음"
+    for v in out.values():
+        if not (YEAR_MIN <= v <= YEAR_MAX):
+            return None, f"연도는 {YEAR_MIN}~{YEAR_MAX}"
+    if out.get("gte", YEAR_MIN) > out.get("lte", YEAR_MAX):
+        return None, "gte 가 lte 보다 큼"
+    return out, None
+
+
+def year_pattern(subj: str, pred_uri: str, obj: str, tag: str, yr: Optional[Dict[str, int]]) -> str:
+    """진술 노드의 meta:year 로 연도 조건 (D4). yr 가 빈 dict 면 '연도가 있는 진술' 만."""
+    y = f"?yr{tag}"
+    conds = []
+    if yr and "gte" in yr:
+        conds.append(f"{y} >= {int(yr['gte'])}")
+    if yr and "lte" in yr:
+        conds.append(f"{y} <= {int(yr['lte'])}")
+    filt = f" FILTER({' && '.join(conds)})" if conds else ""
+    return (f"?yst{tag} rdf:subject {subj} ; rdf:predicate <{pred_uri}> ; rdf:object {obj} ; "
+            f"meta:year {y} .{filt}")
+
+
+def year_label(yr: Optional[Dict[str, int]]) -> str:
+    if not yr:
+        return ""
+    a, b = yr.get("gte"), yr.get("lte")
+    if a is not None and a == b:
+        return f"{a}년"
+    return f"{a if a is not None else ''}~{b if b is not None else ''}년"
 
 
 def validate_plan(
@@ -592,6 +655,15 @@ def validate_plan(
         if op not in OPS_BY_TYPE[p["type"]]:
             return {"status": "reject", "message": f"{p['key']}({p['type']}) 에 연산자 {op} 사용 불가"}
         nf = {"path": p, "op": op}
+        if f.get("year") not in (None, "", {}):
+            yr, err = parse_year_cond(f.get("year"))
+            if err:
+                return {"status": "reject", "message": f"{p['key']} year: {err}"}
+            if op in ("ne", "not_exists"):
+                return {"status": "reject", "message": f"{p['key']}: 연도 조건은 {op} 와 함께 쓸 수 없음"}
+            if any(len(a["uris"]) != 1 for a in (p.get("alts") or [p])):
+                return {"status": "reject", "message": f"{p['key']}: 연도 조건은 관계 경로(한 단계)에만 쓸 수 있음"}
+            nf["year"] = yr
         if op in ("exists", "not_exists"):
             pass
         elif op in _NUM_OPS or (p["type"] == "number" and op in ("eq", "ne", "in")):
@@ -713,6 +785,10 @@ def _plan_equivalences(plan: Dict[str, Any]) -> List[str]:
 def plan_summary(plan: Dict[str, Any]) -> Dict[str, Any]:
     """리포트/UI 용 계획 요약 (직렬화 가능)."""
     def fdesc(f):
+        d = _fdesc(f)
+        return f"{d} (연도 {year_label(f['year'])})" if f.get("year") else d
+
+    def _fdesc(f):
         k = f["path"]["key"]
         op = f["op"]
         if "values" in f:
@@ -823,6 +899,8 @@ def compile_member_query(plan: Dict[str, Any]) -> str:
                 cond = _filter_condition(dict(f, op="eq"), v, tag)
             else:
                 cond = _filter_condition(f, v, tag)
+            if "year" in f:
+                cond = f"{cond} {year_pattern('?e', alt['uris'][0], v, tag, f['year'])}".strip()
             blocks.append(f"{pat} {cond}".strip())
         block = blocks[0] if len(blocks) == 1 else " UNION ".join(f"{{ {b} }}" for b in blocks)
         parts.append(f"FILTER NOT EXISTS {{ {block} }}" if negated else block)
@@ -940,7 +1018,8 @@ def compile_evidence_query(entities: Sequence[str], plan: Dict[str, Any]) -> str
         for alt in _alts(f["path"]):
             if len(alt["uris"]) >= 2 and f["op"] != "exists":
                 item_filters.setdefault(tuple(alt["uris"][:-1]), []).append((alt["uris"][-1], f, i))
-            branch(alt["uris"], "filter", extra, alt["key"])
+            yx = f" {year_pattern('?e', alt['uris'][0], '?o', f'e{i}', f['year'])}" if "year" in f else ""
+            branch(alt["uris"], "filter", extra + yx, alt["key"])
 
     agg = plan.get("aggregate")
     if agg and agg.get("path"):
@@ -970,11 +1049,12 @@ def compile_evidence_query(entities: Sequence[str], plan: Dict[str, Any]) -> str
     union = "\n  UNION\n".join(branches)
     return f"""{_PREFIXES}
 PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
-SELECT DISTINCT ?e ?role ?path ?s ?p ?o ?oLabel ?chunk ?edgeChunk
+SELECT DISTINCT ?e ?role ?path ?s ?p ?o ?oLabel ?chunk ?edgeChunk ?year
 FROM <urn:x-arq:UnionGraph>
 WHERE {{
 {union}
   OPTIONAL {{ ?o rdfs:label ?oLabel }}
+  OPTIONAL {{ ?yst rdf:subject ?s ; rdf:predicate ?p ; rdf:object ?o ; meta:year ?year . }}
   OPTIONAL {{
     ?st rdf:subject ?s ; rdf:predicate ?p ; rdf:object ?o ;
         meta:sourceNodeId ?chunk .
@@ -1008,6 +1088,7 @@ def parse_evidence(bindings: List[Dict[str, Any]], entity_order: Sequence[str]) 
                 "object": _val(b, "oLabel") or (local_name(o) if o.startswith("http") else o),
                 "path": f"out|{path}", "dir": "out",
                 "chunk_ids": [], "edge_chunk_ids": [], "s_uri": s, "p_uri": p, "o_uri": o,
+                "years": [],
             }
             by_key[k] = t
         elif _ROLE_ORDER.get(role, 9) < _ROLE_ORDER.get(t["role"], 9):
@@ -1018,6 +1099,11 @@ def parse_evidence(bindings: List[Dict[str, Any]], entity_order: Sequence[str]) 
         ec = _val(b, "edgeChunk")
         if ec and ec not in t["edge_chunk_ids"]:
             t["edge_chunk_ids"].append(ec)
+        yv = _val(b, "year")
+        if yv and str(yv).isdigit() and int(yv) not in t["years"]:
+            t["years"].append(int(yv))
+    for t in by_key.values():
+        t["years"].sort()
     pos = {u: i for i, u in enumerate(entity_order)}
     triples = list(by_key.values())
     triples.sort(key=lambda t: (pos.get(t["entity_uri"], 999), _ROLE_ORDER.get(t["role"], 9), t["predicate"], str(t["object"])))
@@ -1123,10 +1209,14 @@ ASK FROM <urn:x-arq:UnionGraph> {{ <{uri}> ?p ?o . FILTER(?p NOT IN ({_EXCL})) F
 
 
 def triples_view(triples: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    return [
-        {k: t.get(k) for k in ("subject", "predicate", "object", "chunk_ids", "path", "role", "entity")}
-        for t in triples
-    ]
+    out = []
+    for t in triples:
+        v = {k: t.get(k) for k in ("subject", "predicate", "object", "chunk_ids", "path", "role", "entity")}
+        if t.get("years"):   # 진술 연도를 답변 근거에 보이게 (D4)
+            v["object"] = f"{v['object']} ({', '.join(str(y) for y in t['years'])})"
+            v["years"] = t["years"]
+        out.append(v)
+    return out
 
 
 __all__ = [

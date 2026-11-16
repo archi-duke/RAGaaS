@@ -539,10 +539,11 @@ def _entity_queries(uri: str) -> Dict[str, str]:
     pre = """PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
 PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
 PREFIX meta: <http://rag.local/meta/>"""
-    chunk = "OPTIONAL { ?st rdf:subject ?s0 ; rdf:predicate ?p ; rdf:object ?o0 ; meta:sourceNodeId ?chunk . }"
+    chunk = ("OPTIONAL { ?st rdf:subject ?s0 ; rdf:predicate ?p ; rdf:object ?o0 ; meta:sourceNodeId ?chunk . } "
+             "OPTIONAL { ?yst rdf:subject ?s0 ; rdf:predicate ?p ; rdf:object ?o0 ; meta:year ?year . }")   # 진술 연도 (D4)
     return {
         "out": f"""{pre}
-SELECT ?p ?o ?oLabel ?chunk FROM <urn:x-arq:UnionGraph> WHERE {{
+SELECT ?p ?o ?oLabel ?chunk ?year FROM <urn:x-arq:UnionGraph> WHERE {{
   BIND(<{uri}> AS ?s0) <{uri}> ?p ?o . BIND(?o AS ?o0)
   FILTER(?p NOT IN ({cq._EXCL})) FILTER(!STRSTARTS(STR(?o), "{STMT_PREFIX}"))
   OPTIONAL {{ ?o rdfs:label ?oLabel }} {chunk}
@@ -554,7 +555,7 @@ SELECT ?p1 ?p ?o ?oLabel ?chunk FROM <urn:x-arq:UnionGraph> WHERE {{
   OPTIONAL {{ ?o rdfs:label ?oLabel }} {chunk}
 }} LIMIT {MAX_ENTITY_ROWS}""",
         "in": f"""{pre}
-SELECT ?s ?p ?sLabel ?chunk FROM <urn:x-arq:UnionGraph> WHERE {{
+SELECT ?s ?p ?sLabel ?chunk ?year FROM <urn:x-arq:UnionGraph> WHERE {{
   ?s ?p <{uri}> . BIND(?s AS ?s0) BIND(<{uri}> AS ?o0)
   FILTER(?p NOT IN ({cq._EXCL})) FILTER(!STRSTARTS(STR(?s), "{STMT_PREFIX}"))
   FILTER(!REGEX(STR(?s), "{STRUCT_NODE_REGEX}"))
@@ -589,11 +590,12 @@ async def describe_entity(kb_id: str, name: str, name_en: Optional[str] = None,
                 lst.append(c)
         return out
 
-    out_g = group(((cq.local_name(cq._val(b, "p")), lab(b, "o", "oLabel")), cq._val(b, "chunk")) for b in rows["out"]
+    yr = lambda b, t: f"{t} ({cq._val(b, 'year')})" if cq._val(b, "year") else t
+    out_g = group(((cq.local_name(cq._val(b, "p")), yr(b, lab(b, "o", "oLabel"))), cq._val(b, "chunk")) for b in rows["out"]
                   if not re.search(r"/inst/root_[0-9]+_", cq._val(b, "o") or ""))
     st_g = group(((f"{cq.local_name(cq._val(b, 'p1'))}.{cq.local_name(cq._val(b, 'p'))}", lab(b, "o", "oLabel")),
                   cq._val(b, "chunk")) for b in rows["struct"])
-    in_g = group(((cq.local_name(cq._val(b, "p")), lab(b, "s", "sLabel")), cq._val(b, "chunk")) for b in rows["in"])
+    in_g = group(((cq.local_name(cq._val(b, "p")), yr(b, lab(b, "s", "sLabel"))), cq._val(b, "chunk")) for b in rows["in"])
     return {
         "status": "ok",
         "schema_version": res["schema_version"],
@@ -601,6 +603,6 @@ async def describe_entity(kb_id: str, name: str, name_en: Optional[str] = None,
         "other_candidates": [{"label": c["label"], "kind": c["kind"]} for c in cands[1:]],
         "out": [{"p": p, "o": o, "chunk_ids": cs} for (p, o), cs in sorted({**out_g, **st_g}.items())],
         "in": [{"s": s, "p": p, "chunk_ids": cs} for (p, s), cs in sorted(in_g.items())],
-        "note": "out = (엔티티, p, o), in = (s, p, 엔티티). 추출 오류로 방향이 뒤집힌 관계가 있을 수 있다 — "
+        "note": "out = (엔티티, p, o), in = (s, p, 엔티티). 이름 뒤 괄호는 그 사실의 연도. 추출 오류로 방향이 뒤집힌 관계가 있을 수 있다 — "
                 "방향이 답을 좌우하면 chunk_ids 원문으로 확인할 것.",
     }

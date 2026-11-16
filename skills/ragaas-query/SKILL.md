@@ -70,13 +70,14 @@ MCP 의 `query_plan` 은 반환 경로를 `return_paths` 로, REST 는 `return` 
 
 | type | 연산자 |
 |---|---|
-| enum | `eq`, `ne`, `in`(값 배열), `contains`(부분 문자열: '노벨' → '노벨 물리학상 (1933년)' 등 모두), `exists`, `not_exists` |
+| enum | `eq`, `ne`, `in`(값 배열), `contains`(부분 문자열: '노벨' → '노벨 물리학상' 등), `exists`, `not_exists` |
 | text | `eq`, `in`, `contains`(부분 문자열), `exists`, `not_exists` |
 | number | `eq`, `ne`, `in`, `gt`, `gte`, `lt`, `lte`, `exists`, `not_exists` |
 
 - `path` 배열은 "그 경로들 중 하나"(OR)다. 같은 값을 여러 관계에서 찾을 때 쓴다.
 - `value` 는 `describe_kb` 의 `values[].label` 표기 그대로 쓴다. 목록에 없는 값은 `zero` 가 된다 (서버가 추측하지 않음).
-- 한 AND 묶음의 조건은 최대 4개. any 를 펼친 조합은 최대 16개. 조건 전체는 최대 12개.
+- 한 AND 묶음의 조건은 최대 4개. any 를 펼친 조합은 최대 64개. 조건 전체는 최대 64개.
+- **연도 조건**: 조건에 `"year": 1933` 또는 `"year": {"gte": 1930, "lte": 1939}` 를 붙이면 그 연도의 사실(진술)만 맞춘다. 예: 1930년대 노벨상 수상 → `{"path": "수상함", "op": "contains", "value": "노벨", "year": {"gte": 1930, "lte": 1939}}`. 관계 경로에만 쓰고, `ne`/`not_exists` 와는 못 쓴다. 연도가 기록되지 않은 사실은 빠지며 그 수가 `adjustments` 에 온다 — 0이 아니면 원문(`get_chunks`)으로 확인한다. 값에 '1933' 같은 문자열을 `contains` 로 찾지 않는다.
 - 구조화(YAML) KB 의 `a.b` 경로(예: `quality_attributes.attribute`, `quality_attributes.effect`)를 같은 `all` 에 넣으면 **같은 목록 항목**에서 함께 만족해야 한다.
 
 **집계**: `{"fn": "count" | "max" | "min" | "count_members", "path": key, "value": 값(선택), "order": "desc" | "asc", "limit": 1, "having": {"op": "gte", "value": 3}}`
@@ -89,7 +90,7 @@ MCP 의 `query_plan` 은 반환 경로를 `return_paths` 로, REST 는 `return` 
 - `label`
 - `matched` — 충족한 조건 수
 - `matched_conditions` — `conditions` 의 번호
-- `evidence[]` — `p`, `o`, `chunk_ids`
+- `evidence[]` — `p`, `o`, `chunk_ids`. `o` 뒤 괄호는 진술 연도다 (예: `노벨 물리학상 (1933)`)
 
 그 밖에 `conditions`, `zero_conditions`, `adjustments`, `sparql` 가 온다.
 `evidence`: `compact`(기본) | `full`(s·role 포함) | `none`(목록만 — 가장 작음).
