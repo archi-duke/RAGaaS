@@ -211,6 +211,15 @@ test-ontology2 사람 확인 내역: 멤버 지정 12건(팀 자율성·consiste
 (디버깅 용이성←debugging complexity, 운영 단순성←운영 복잡도 — **반대 개념**을 LLM 이 같은 것으로 묶음).
 LLM 병합 제안을 사람이 확인해야 하는 이유다.
 
+## 11. 속성별 트리플 목록 + 병합 충돌 수정 (2026-11-16)
+
+- `GET schema/spec/triples?property=` — 속성(텍스트: 대표+별칭 술어, 구조화: 필드 경로)의 트리플, 상태(ok/gap/violation/value/-),
+  주어 클래스의 domain 불일치, 근거 청크(rdf:Statement 의 sourceNodeId)·문서. 편집기 속성 표의 트리플 수를 누르면 열린다
+  (`PropertyTriplesModal`), 멤버 누락은 그 자리에서 지정.
+- 이 목록으로 찾은 버그: 표기 병합 `operational complexity → 운영 복잡도` 가 적용되지 않았다. 예전 유도의 **값 규칙**
+  `운영 복잡도 → operational complexity` 가 남아 있어, 적용 순서(entity → value)상 병합 결과를 다시 영어로 바꿨다.
+  `merge_entities` 가 대표 이름을 다른 이름으로 바꾸는 기존 entity·value 규칙을 끄도록 수정 (`conflicts_disabled`).
+
 ## 6. 남은 것
 
 - 재추출 후 결과 비교(전/후 트리플 차이)를 편집기 안에서 보여 주기

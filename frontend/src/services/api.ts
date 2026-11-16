@@ -184,6 +184,8 @@ export const schemaApi = {
         api.post(`knowledge-bases/${kbId}/schema/spec/members`, { class_name: className, entities }),
     mergeCandidates: (kbId: string, className: string) =>
         api.get(`knowledge-bases/${kbId}/schema/spec/merge-candidates`, { params: { class_name: className } }),
+    propertyTriples: (kbId: string, property: string, limit = 300) =>
+        api.get(`knowledge-bases/${kbId}/schema/spec/triples`, { params: { property, limit } }),
     mergeEntities: (kbId: string, canonical: string, aliases: string[]) =>
         api.post(`knowledge-bases/${kbId}/schema/spec/merge`, { canonical, aliases }),
     reingest: (kbId: string, docId: string, file: File) => {

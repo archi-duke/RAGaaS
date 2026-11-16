@@ -327,3 +327,13 @@ async def induce_dry_run(kb_id: str, body: InduceDryRunBody):
         return await run_induction(kb_id, cfg, dry_run=True)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/{kb_id}/schema/spec/triples")
+async def schema_property_triples(kb_id: str, property: str, limit: int = 200):
+    """속성 하나의 트리플 목록 + range 기준 상태 (편집기: 트리플 수 클릭)."""
+    from app.services.schema_alignment import schema_editor as se
+    try:
+        return await se.property_triples(kb_id, property, limit)
+    except se.SchemaEditError as e:
+        _edit_error(e)

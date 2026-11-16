@@ -4,6 +4,7 @@ import { schemaApi } from '../services/api';
 import ReextractModal from './ReextractModal';
 import SchemaGraph from './SchemaGraph';
 import SchemaChecks from './SchemaChecks';
+import PropertyTriplesModal from './PropertyTriplesModal';
 
 // 스키마 편집기 — 승격된 텍스트 KB 의 클래스·속성을 사람이 직접 고친다 (docs/design-schema-editor.md)
 // 저장 시: 검증 → 이전 버전 이력 보관 → TBox 재생성. 이름 변경은 규칙 + 리플레이로 기존 그래프에 반영.
@@ -44,6 +45,7 @@ export default function SchemaEditor({ kbId }: { kbId: string }) {
     const [filter, setFilter] = useState('');
     const [showReextract, setShowReextract] = useState(false);
     const [view, setView] = useState<'table' | 'graph'>('table');
+    const [triplesFor, setTriplesFor] = useState<string | null>(null);
 
     const load = useCallback(async () => {
         const r = await schemaApi.getSpec(kbId);
@@ -303,7 +305,15 @@ export default function SchemaEditor({ kbId }: { kbId: string }) {
                                         onChange={(e) => upd({ description: e.target.value })} /></td>
                                     <td style={cell}><textarea style={{ ...input, minHeight: '2.2rem', resize: 'vertical' }} value={p.aliases}
                                         onChange={(e) => upd({ aliases: e.target.value })} /></td>
-                                    <td style={cell}>{p.triple_count ?? 0}</td>
+                                    <td style={cell}>
+                                        {/* 저장된 이름 기준으로 조회 (이름을 바꾸는 중이면 이전 이름) */}
+                                        <button className="btn btn-secondary" style={{ ...btn, padding: '0.1rem 0.45rem' }}
+                                            disabled={!(orig.p[p.key] || p.name) || !p.triple_count}
+                                            title="이 속성의 실제 트리플 목록 — 일치·멤버 누락·range 위반 확인"
+                                            onClick={() => setTriplesFor(orig.p[p.key] || p.name)}>
+                                            {p.triple_count ?? 0}
+                                        </button>
+                                    </td>
                                     <td style={cell}>
                                         {!structured && <button className="btn btn-secondary" style={{ ...btn, padding: '0.2rem 0.35rem' }}
                                             title="스키마에서 삭제 (기존 트리플은 남고 스키마 밖으로 분류)"
@@ -356,6 +366,11 @@ export default function SchemaEditor({ kbId }: { kbId: string }) {
                         </tbody>
                     </table>
                 </div>
+            )}
+
+            {triplesFor && (
+                <PropertyTriplesModal kbId={kbId} property={triplesFor} onClose={() => setTriplesFor(null)}
+                    onChanged={(m) => { setMessage(m); load(); }} />
             )}
 
             {showReextract && (

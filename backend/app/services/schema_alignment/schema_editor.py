@@ -868,8 +868,19 @@ async def merge_entities(kb_id: str, canonical: str, aliases: List[str]) -> Dict
     """표기 병합 (entity 규칙, origin=schema_editor:merge) + 리플레이."""
     from app.models.knowledge_base import KnowledgeBase
     from app.models.schema_mapping import SchemaMappingRule
+    from app.services.retrieval.entity_linking import _compact
     kb = await KnowledgeBase.get(kb_id)
     n = 0
+    # 대표 이름을 다른 이름으로 바꾸는 기존 규칙(entity·value)이 있으면 병합을 되돌린다 (entity → value 순으로 적용되므로
+    # '운영 복잡도 → operational complexity' 값 규칙이 남아 있으면 병합 결과가 다시 영어로 바뀜) → 끈다
+    conflicts = 0
+    for r in await SchemaMappingRule.find(SchemaMappingRule.kb_id == kb_id, SchemaMappingRule.status == "active").to_list():
+        if r.rule_type in ("entity", "value") and r.source_value and _compact(r.source_value) == _compact(canonical) \
+                and _compact(r.target_value or "") != _compact(canonical):
+            r.status = "disabled"
+            r.origin = (r.origin or "") + "|병합 충돌"
+            await r.save()
+            conflicts += 1
     for a in dict.fromkeys(x.strip() for x in aliases if x and x.strip() and x.strip() != canonical):
         r = await SchemaMappingRule.find_one(SchemaMappingRule.kb_id == kb_id, SchemaMappingRule.rule_type == "entity",
                                              SchemaMappingRule.source_value == a)
@@ -880,8 +891,108 @@ async def merge_entities(kb_id: str, canonical: str, aliases: List[str]) -> Dict
             await SchemaMappingRule(kb_id=kb_id, rule_type="entity", source_value=a, target_value=canonical,
                                     origin="schema_editor:merge").insert()
         n += 1
-    if n:
+    if n or conflicts:
         kb.schema_rules_version = (kb.schema_rules_version or 0) + 1
         await kb.save()
-    rp = await _replay_text_docs(kb_id) if n else {"replayed": 0, "errors": []}
-    return {"canonical": canonical, "merged": n, **rp}
+    rp = await _replay_text_docs(kb_id) if (n or conflicts) else {"replayed": 0, "errors": []}
+    return {"canonical": canonical, "merged": n, "conflicts_disabled": conflicts, **rp}
+
+
+# ---------------------------------------------------------------------------
+# 속성별 트리플 목록 (편집기: 트리플 수 클릭) — 실제 데이터를 보며 스키마를 고치기 위함
+# ---------------------------------------------------------------------------
+
+async def property_triples(kb_id: str, prop: str, limit: int = 200) -> Dict[str, Any]:
+    """속성(텍스트: 관계 이름, 구조화: 필드 경로)의 트리플 + 상태.
+
+    상태: ok(목적어가 range 멤버) / gap(멤버 누락) / violation(다른 클래스) / value(서술·수치 등 값) / -(range 없음)
+    domain 과 다른 주어 클래스면 subject_mismatch 표시. 근거 청크 id(source node)·문서 이름 포함.
+    """
+    from app.core.fuseki import fuseki_client
+    from app.models.document import Document
+    from app.models.knowledge_base import KnowledgeBase
+    from app.services.retrieval.entity_linking import _compact
+    from app.services.schema_alignment.induction import REL_NS
+    kb = await KnowledgeBase.get(kb_id)
+    if not kb:
+        raise SchemaEditError(["KB 없음"], 404)
+    limit = max(1, min(int(limit or 200), 1000))
+    LBL = "<http://www.w3.org/2000/01/rdf-schema#label>"
+    RDF = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+
+    def label_of(b, k, uk):
+        v = b.get(k, {}).get("value")
+        if v:
+            return v
+        u = b.get(uk, {}).get("value", "")
+        return u.rstrip("/").rsplit("/", 1)[-1] if u.startswith("http") else u
+
+    rows: List[Dict[str, Any]] = []
+    domain = rng = ""
+    if kb.schema_source == STRUCTURED:
+        kinds, catalogs = await _structured_catalog(kb_id)
+        path = next((p for k in kinds for p in catalogs.get(k["name"]) or [] if p["key"] == prop), None)
+        if not path:
+            raise SchemaEditError([f"경로 '{prop}' 없음"], 404)
+        kind = next(k for k in kinds if any(p is path for p in catalogs.get(k["name"]) or []))
+        domain, rng = kind["name"], path.get("ref_kind") or ""
+        uris = path["uris"]
+        chain = " . ".join(f"?n{i} <{u}> ?n{i + 1}" for i, u in enumerate(uris)).replace("?n0", "?s").replace(f"?n{len(uris)}", "?o")
+        q = f"""SELECT ?g ?s ?o (SAMPLE(?sl0) AS ?sl) (SAMPLE(?ol0) AS ?ol) WHERE {{ GRAPH ?g {{ {chain}
+                 OPTIONAL {{ ?s {LBL} ?sl0 }} OPTIONAL {{ ?o {LBL} ?ol0 }} }}
+                 FILTER(STRSTARTS(STR(?g), "urn:doc:")) }} GROUP BY ?g ?s ?o LIMIT {limit}"""
+        members = set(kind["members"])
+        owner = {m: k["name"] for k in kinds for m in k["members"]}
+        for b in fuseki_client.query_sparql(kb_id, q).get("results", {}).get("bindings", []):
+            s_uri = b["s"]["value"]
+            if s_uri not in members:
+                continue
+            o_uri = b["o"]["value"]
+            ocls = owner.get(o_uri, "")
+            st = ("ok" if ocls == rng else "violation" if ocls else "gap") if rng else ("value" if b["o"]["type"] != "uri" or not ocls else "-")
+            rows.append({"subject": label_of(b, "sl", "s"), "object": label_of(b, "ol", "o"), "object_class": ocls,
+                         "subject_class": domain, "status": st, "doc_id": b["g"]["value"][8:], "source": None})
+    else:
+        ind = (kb.promotion_metadata or {}).get("induction") or {}
+        p = next((x for x in ind.get("properties") or [] if x["name"] == prop), None)
+        if not p:
+            raise SchemaEditError([f"속성 '{prop}' 없음"], 404)
+        domain, rng = p.get("domain") or "", p.get("range") or ""
+        cls = await _class_index(kb_id)
+        names = [prop] + [m for m in p.get("members") or [] if m != prop]
+        vals = " ".join(f"<{REL_NS}{re.sub(r'[^0-9A-Za-z가-힣_]', '_', n)}>" for n in names)
+        q = f"""SELECT ?g ?s ?o ?p (SAMPLE(?sl0) AS ?sl) (SAMPLE(?ol0) AS ?ol) (SAMPLE(?src0) AS ?src) WHERE {{
+                 VALUES ?p {{ {vals} }}
+                 GRAPH ?g {{ ?s ?p ?o OPTIONAL {{ ?s {LBL} ?sl0 }} OPTIONAL {{ ?o {LBL} ?ol0 }}
+                   OPTIONAL {{ ?st <{RDF}subject> ?s ; <{RDF}predicate> ?p ; <{RDF}object> ?o ;
+                                   <http://rag.local/meta/sourceNodeId> ?src0 }} }}
+                 FILTER(STRSTARTS(STR(?g), "urn:doc:")) }} GROUP BY ?g ?s ?o ?p LIMIT {limit}"""
+        for b in fuseki_client.query_sparql(kb_id, q).get("results", {}).get("bindings", []):
+            sl, ol = label_of(b, "sl", "s"), label_of(b, "ol", "o")
+            scls, ocls = cls.get(_compact(sl), ""), cls.get(_compact(ol), "")
+            if not _usable_object(ol):
+                st = "value"
+            elif not rng:
+                st = "-"
+            else:
+                st = "ok" if ocls == rng else ("violation" if ocls else "gap")
+            rows.append({"subject": sl, "object": ol, "subject_class": scls, "object_class": ocls, "status": st,
+                         "subject_mismatch": bool(domain and scls and scls != domain),
+                         "predicate": b["p"]["value"][len(REL_NS):], "doc_id": b["g"]["value"][8:],
+                         "source": b.get("src", {}).get("value")})
+    names_by_doc = {}
+    for did in {r["doc_id"] for r in rows}:
+        try:
+            d = await Document.get(did)
+            names_by_doc[did] = d.filename if d else did[:8]
+        except Exception:
+            names_by_doc[did] = did[:8]
+    for r in rows:
+        r["doc"] = names_by_doc.get(r["doc_id"], "")
+    order = {"violation": 0, "gap": 1, "ok": 2, "-": 3, "value": 4}
+    rows.sort(key=lambda r: (order.get(r["status"], 9), r["subject"], r["object"]))
+    counts: Dict[str, int] = {}
+    for r in rows:
+        counts[r["status"]] = counts.get(r["status"], 0) + 1
+    return {"property": prop, "domain": domain, "range": rng, "mode": "structured" if kb.schema_source == STRUCTURED else "induced",
+            "total": len(rows), "truncated": len(rows) >= limit, "counts": counts, "triples": rows}
