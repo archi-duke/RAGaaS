@@ -22,10 +22,11 @@ const LABEL: Record<string, { text: string; color: string; bg: string; help: str
 // - 멤버 누락: range 멤버로 지정 / 새 클래스를 만들어 멤버로 / 삭제
 type Panel = null | 'move' | 'newclass' | 'delete';
 
-export default function PropertyTriplesModal({ kbId, property, onClose, onChanged, properties = [], classes = [], dirty = false }: {
+export default function PropertyTriplesModal({ kbId, property, onClose, onChanged, properties = [], classes = [], dirty = false, getSpec }: {
     kbId: string; property: string; onClose: () => void; onChanged?: (msg: string) => void;
     properties?: { name: string; domain?: string; range?: string }[]; classes?: string[];
     dirty?: boolean;   // 편집기에 저장 안 한 변경이 있음 — 편집 동작 뒤 다시 불러오면 사라지므로 막는다
+    getSpec?: () => { classes: any[]; properties: any[] };   // 편집 중인(저장 전) 스키마 — 재추출 테스트용
 }) {
     const [data, setData] = useState<any>(null);
     const [error, setError] = useState('');
@@ -37,6 +38,8 @@ export default function PropertyTriplesModal({ kbId, property, onClose, onChange
     const [moveTo, setMoveTo] = useState('');                     // 기존 관계 이름 또는 '__new__'
     const [newRel, setNewRel] = useState({ name: '', domain: '', range: '', description: '' });
     const [newCls, setNewCls] = useState({ name: '', description: '' });
+    const [preview, setPreview] = useState<any>(null);            // 재추출 테스트 결과
+    const [previewing, setPreviewing] = useState(false);
     // 근거 청크 펼치기: 행 번호 → 청크 내용 (청크 id 기준 캐시)
     const [openRow, setOpenRow] = useState<number | null>(null);
     const [chunks, setChunks] = useState<Record<string, { content?: string; error?: string }>>({});
@@ -91,6 +94,20 @@ export default function PropertyTriplesModal({ kbId, property, onClose, onChange
             (d) => `트리플 ${d.edited}건을 ${d.target_property} 로 이동 (리플레이 완료)`);
     const doDelete = () => run('삭제', () => schemaApi.editTriples(kbId, { action: 'delete', triples: tri() }),
         (d) => `트리플 ${d.edited}건 삭제 (규칙으로 남아 리플레이 뒤에도 유지 · 스키마 정렬 규칙 목록에서 복구 가능)`);
+    const chunkCount = new Set(selected.filter((r) => r.source).map((r) => r.source)).size;
+    const doPreview = async () => {
+        if (!getSpec) return;
+        setPreviewing(true);
+        setError('');
+        setPreview(null);
+        try {
+            const spec = getSpec();
+            const r = await schemaApi.reextractPreview(kbId, { ...spec, triples: selected.map((x) => ({ ...x, predicate: x.predicate || property })) });
+            setPreview(r.data);
+        } catch (e: any) {
+            setError('재추출 테스트 실패: ' + errMsg(e));
+        } finally { setPreviewing(false); }
+    };
     const doNewClass = () => run('클래스 생성', () => schemaApi.createClass(kbId, newCls.name, newCls.description, selGapObjects),
         (d) => `클래스 ${d.class} 를 만들고 멤버 ${d.added + d.moved}개 지정 (리플레이 완료)`);
 
@@ -120,10 +137,11 @@ export default function PropertyTriplesModal({ kbId, property, onClose, onChange
                     </div>
                     {editable && dirty && (
                         <div style={{ fontSize: '0.78rem', color: '#92400e', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: '6px', padding: '0.35rem 0.6rem', marginBottom: '0.5rem' }}>
-                            스키마 표에 저장하지 않은 편집이 있습니다. 트리플 편집은 스키마를 다시 불러오므로 그 편집이 사라집니다 — 먼저 저장한 뒤 사용하세요.
+                            스키마 표에 저장하지 않은 편집이 있습니다. <b>재추출 테스트</b>는 그 편집으로 바로 해 볼 수 있고, 이동·멤버 지정·삭제는
+                            스키마를 다시 불러오므로 먼저 저장한 뒤 사용하세요.
                         </div>
                     )}
-                    {editable && !dirty && selected.length > 0 && (
+                    {editable && selected.length > 0 && (
                         <div style={{ border: '1px solid #cbd5e1', borderRadius: '6px', padding: '0.4rem 0.6rem', marginBottom: '0.5rem', fontSize: '0.78rem', background: '#f8fafc' }}>
                             <div style={{ display: 'flex', gap: '0.35rem', alignItems: 'center', flexWrap: 'wrap' }}>
                                 <b>선택 {selected.length}개</b>
@@ -131,22 +149,68 @@ export default function PropertyTriplesModal({ kbId, property, onClose, onChange
                                     ({['violation', 'gap', 'ok', 'value', '-'].filter((k) => selected.some((r) => r.status === k))
                                         .map((k) => `${LABEL[k].text} ${selected.filter((r) => r.status === k).length}`).join(', ')})
                                 </span>
-                                <button className={`btn ${panel === 'move' ? 'btn-primary' : 'btn-secondary'}`} style={sbtn} disabled={busy}
+                                {getSpec && (
+                                    <button className="btn btn-primary" style={sbtn} disabled={previewing || busy || chunkCount === 0 || chunkCount > 10}
+                                        title={chunkCount > 10 ? '근거 청크가 10개를 넘습니다 — 선택을 줄이세요'
+                                            : `편집 중인(저장 전) 스키마로 선택 트리플의 근거 청크 ${chunkCount}개만 다시 추출해 사라지는지 봅니다. 저장하지 않으며 청크당 LLM 1회.`}
+                                        onClick={doPreview}>
+                                        {previewing ? '재추출 테스트 중…' : `재추출 테스트 (청크 ${chunkCount})`}
+                                    </button>
+                                )}
+                                <button className={`btn ${panel === 'move' ? 'btn-primary' : 'btn-secondary'}`} style={sbtn} disabled={busy || dirty}
                                     title="주어·목적어는 그대로 두고 관계만 바꿉니다" onClick={() => setPanel(panel === 'move' ? null : 'move')}>다른 관계로 이동…</button>
                                 {data.range && selGapObjects.length > 0 && (
-                                    <button className="btn btn-secondary" style={sbtn} disabled={busy} onClick={assign}
+                                    <button className="btn btn-secondary" style={sbtn} disabled={busy || dirty} onClick={assign}
                                         title="선택한 '멤버 누락' 목적어를 range 클래스 멤버로 (class 규칙 + 리플레이)">
                                         목적어 {selGapObjects.length}개를 {data.range} 멤버로
                                     </button>
                                 )}
                                 {selGapObjects.length > 0 && (
-                                    <button className={`btn ${panel === 'newclass' ? 'btn-primary' : 'btn-secondary'}`} style={sbtn} disabled={busy}
+                                    <button className={`btn ${panel === 'newclass' ? 'btn-primary' : 'btn-secondary'}`} style={sbtn} disabled={busy || dirty}
                                         onClick={() => setPanel(panel === 'newclass' ? null : 'newclass')}>새 클래스 만들어 멤버로…</button>
                                 )}
                                 <button className={`btn ${panel === 'delete' ? 'btn-primary' : 'btn-secondary'}`} style={{ ...sbtn, color: panel === 'delete' ? undefined : '#b91c1c' }}
-                                    disabled={busy} onClick={() => setPanel(panel === 'delete' ? null : 'delete')}>트리플 삭제…</button>
+                                    disabled={busy || dirty} onClick={() => setPanel(panel === 'delete' ? null : 'delete')}>트리플 삭제…</button>
                                 <button className="btn btn-secondary" style={{ ...sbtn, marginLeft: 'auto' }} onClick={() => { setSel(new Set()); setPanel(null); }}>선택 해제</button>
                             </div>
+                            {preview && (
+                                <div style={{ marginTop: '0.5rem', borderTop: '1px dashed #cbd5e1', paddingTop: '0.4rem' }}>
+                                    <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                                        <b>재추출 테스트 결과</b>
+                                        <span style={{ color: '#15803d' }}>사라짐 {preview.summary.gone}</span>
+                                        <span style={{ color: '#2563eb' }}>관계 바뀜 {preview.summary.moved}</span>
+                                        <span style={{ color: '#b91c1c' }}>남음 {preview.summary.kept}</span>
+                                        <span style={{ color: '#94a3b8' }}>청크 {preview.chunks} · {preview.model} · 저장 안 됨</span>
+                                        <button className="btn btn-secondary" style={{ ...sbtn, marginLeft: 'auto' }} onClick={() => setPreview(null)}>닫기</button>
+                                    </div>
+                                    {(preview.results || []).map((x: any, i: number) => (
+                                        <div key={i} style={{ marginTop: '0.2rem' }}>
+                                            <span style={{ color: x.result === 'gone' ? '#15803d' : x.result === 'moved' ? '#2563eb' : '#b91c1c', fontWeight: 600 }}>
+                                                {x.result === 'gone' ? '사라짐' : x.result === 'moved' ? '관계 바뀜' : '남음'}
+                                            </span>{' '}
+                                            {x.subject} —{x.predicate}→ {x.object}
+                                            {x.new_predicate && <span style={{ color: '#2563eb' }}> ⇒ —{x.new_predicate}→</span>}
+                                        </div>
+                                    ))}
+                                    <details style={{ marginTop: '0.3rem' }}>
+                                        <summary style={{ cursor: 'pointer', color: '#475569' }}>근거 청크에서 새로 뽑힌 트리플 보기 (사라진 사실이 다른 관계·표기로 나왔는지 확인)</summary>
+                                        {Object.entries(preview.chunk_triples || {}).map(([ch, ts]: [string, any]) => (
+                                            <div key={ch} style={{ marginTop: '0.3rem' }}>
+                                                <div style={{ color: '#94a3b8', fontSize: '0.7rem' }}>{ch}</div>
+                                                {(ts as any[]).map((t, j) => (
+                                                    <div key={j} style={{ paddingLeft: '0.6rem', color: t.out_of_schema ? '#94a3b8' : undefined }}>
+                                                        · {t.subject} —{t.predicate}→ {t.object}{t.out_of_schema ? ' (스키마 밖)' : ''}
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        ))}
+                                    </details>
+                                    <div style={{ color: '#64748b', marginTop: '0.3rem' }}>
+                                        결과가 좋으면 스키마를 <b>저장</b>한 뒤 "스키마 기준 재추출"로 전체에 적용하세요. 남은 것은 정의를 더 고치거나 트리플 편집(이동·삭제)으로 처리합니다.
+                                    </div>
+                                    {preview.failures?.length > 0 && <div style={{ color: '#b91c1c' }}>일부 실패: {JSON.stringify(preview.failures).slice(0, 200)}</div>}
+                                </div>
+                            )}
                             {panel === 'move' && (
                                 <div style={{ marginTop: '0.4rem', display: 'flex', gap: '0.35rem', flexWrap: 'wrap', alignItems: 'center' }}>
                                     <span>이동할 관계</span>

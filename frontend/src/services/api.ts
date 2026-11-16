@@ -191,6 +191,8 @@ export const schemaApi = {
         api.post(`knowledge-bases/${kbId}/schema/spec/triples/edit`, body),
     createClass: (kbId: string, name: string, description: string, members: string[]) =>
         api.post(`knowledge-bases/${kbId}/schema/spec/classes`, { name, description, members }),
+    reextractPreview: (kbId: string, body: { classes: any[]; properties: any[]; triples: any[] }) =>
+        api.post(`knowledge-bases/${kbId}/schema/spec/reextract-preview`, body, { timeout: 900000 }),
     mergeEntities: (kbId: string, canonical: string, aliases: string[]) =>
         api.post(`knowledge-bases/${kbId}/schema/spec/merge`, { canonical, aliases }),
     reingest: (kbId: string, docId: string, file: File) => {

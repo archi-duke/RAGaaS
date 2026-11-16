@@ -1102,3 +1102,81 @@ async def create_class_with_members(kb_id: str, name: str, description: str, mem
     r = await _add_to_schema(kb_id, new_class={"name": nm, "description": description}, note=f"클래스 추가: {nm}")
     out = await assign_members(kb_id, nm, members) if members else {"added": 0, "moved": 0}
     return {"class": nm, "version": r.get("version"), **out}
+
+
+
+# ---------------------------------------------------------------------------
+# 재추출 테스트 — 편집 중인 스키마로 선택 트리플의 근거 청크만 다시 추출해 비교 (저장 없음)
+# ---------------------------------------------------------------------------
+
+PREVIEW_MAX_CHUNKS = 10
+
+
+async def reextract_preview(kb_id: str, spec_in: Dict[str, Any], triples: List[Dict[str, Any]],
+                            model_key: str = "ingest") -> Dict[str, Any]:
+    """선택 트리플마다: 사라짐 / 남음 / 관계 바뀜(같은 주어·목적어, 다른 관계). 청크별 새 결과도 함께.
+
+    spec_in: 편집기의 현재(저장 전) 스키마 {classes, properties}. 청크당 LLM 1회, 최대 10청크.
+    """
+    from app.models.knowledge_base import KnowledgeBase
+    from app.services.ingestion.ingest_client import ingest_client
+    from app.services.retrieval.entity_linking import _compact
+    from app.services.schema_alignment import reextract as rx
+    from app.services.schema_alignment.service import rules_for_ingest
+    kb = await KnowledgeBase.get(kb_id)
+    if not kb or kb.schema_source not in EDITABLE_SOURCES:
+        raise SchemaEditError(["텍스트(승격) KB 에서만 재추출 테스트를 할 수 있습니다"])
+    spec = _norm_spec(spec_in)
+    errors, _w = validate_spec(spec)
+    if errors:
+        raise SchemaEditError(["편집 중인 스키마에 오류가 있습니다: " + "; ".join(errors[:3])])
+    sel = [t for t in triples if t.get("source") and t.get("doc_id")]
+    if not sel:
+        raise SchemaEditError(["근거 청크가 있는 트리플을 선택하세요"])
+    by_doc: Dict[str, List[str]] = {}
+    for t in sel:
+        ids = by_doc.setdefault(t["doc_id"], [])
+        if t["source"] not in ids:
+            ids.append(t["source"])
+    n_chunks = sum(len(v) for v in by_doc.values())
+    if n_chunks > PREVIEW_MAX_CHUNKS:
+        raise SchemaEditError([f"근거 청크가 {n_chunks}개입니다 — 한 번에 {PREVIEW_MAX_CHUNKS}개까지 (선택을 줄이세요)"])
+    opts = await rx._model_options(kb)
+    llm = opts.get(model_key) or opts.get("ingest")
+    if not llm:
+        raise SchemaEditError(["재추출 모델을 확인할 수 없습니다"])
+    full = await rx.build_schema_spec(kb, override={"classes": spec["classes"], "properties": [
+        {**p, "aliases": [a for a in p["members"] if a != p["name"]]} for p in spec["properties"]]})
+    rules = await rules_for_ingest(kb_id, include_graph_rules=True)
+    out_by_chunk: Dict[str, List[Dict[str, Any]]] = {}
+    failures = []
+    for doc_id, node_ids in by_doc.items():
+        try:
+            r = await ingest_client.reextract_preview(kb_id, doc_id, node_ids, full, llm, rules or None)
+        except Exception as e:
+            failures.append({"doc_id": doc_id, "error": str(e)[:200]})
+            continue
+        for t in r.get("triples") or []:
+            out_by_chunk.setdefault(t.get("source_node_id"), []).append(
+                {"subject": t["subject"], "predicate": t["predicate"], "object": t["object"],
+                 "out_of_schema": bool(t.get("out_of_schema"))})
+        failures += r.get("stats", {}).get("chunk_failures") or []
+
+    def k3(t):
+        return (_compact(t["subject"]), _compact(t["predicate"]), _compact(t["object"]))
+
+    results, summary = [], {"gone": 0, "kept": 0, "moved": 0}
+    for t in sel:
+        outs = out_by_chunk.get(t["source"]) or []
+        same = [o for o in outs if k3(o) == k3(t)]
+        so = [o for o in outs if (_compact(o["subject"]), _compact(o["object"])) == (_compact(t["subject"]), _compact(t["object"]))]
+        if same:
+            res = {"result": "kept"}
+        elif so:
+            res = {"result": "moved", "new_predicate": so[0]["predicate"]}
+        else:
+            res = {"result": "gone"}
+        summary[res["result"]] += 1
+        results.append({**{k: t.get(k) for k in ("subject", "predicate", "object", "source", "doc")}, **res})
+    return {"model": llm.get("model"), "chunks": n_chunks, "summary": summary, "results": results,
+            "chunk_triples": out_by_chunk, "failures": failures[:5]}

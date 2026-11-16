@@ -370,3 +370,20 @@ async def create_schema_class(kb_id: str, body: NewClassBody):
         return await se.create_class_with_members(kb_id, body.name, body.description, body.members)
     except se.SchemaEditError as e:
         _edit_error(e)
+
+
+
+class ReextractPreviewBody(BaseModel):
+    classes: List[dict] = []
+    properties: List[dict] = []
+    triples: List[dict] = []          # [{subject, predicate, object, source, doc_id, doc}]
+
+
+@router.post("/{kb_id}/schema/spec/reextract-preview")
+async def schema_reextract_preview(kb_id: str, body: ReextractPreviewBody):
+    """편집 중인(저장 전) 스키마로 선택 트리플의 근거 청크만 재추출해 사라지는지 비교 — 저장 없음, 청크당 LLM 1회."""
+    from app.services.schema_alignment import schema_editor as se
+    try:
+        return await se.reextract_preview(kb_id, {"classes": body.classes, "properties": body.properties}, body.triples)
+    except se.SchemaEditError as e:
+        _edit_error(e)

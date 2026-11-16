@@ -234,6 +234,18 @@ LLM 병합 제안을 사람이 확인해야 하는 이유다.
   새 관계 생성 이동·새 클래스 생성은 시험 후 되돌림(이력 되돌리기 + 규칙 삭제).
 - 한계: 재추출이 같은 사실을 다른 표기로 뽑으면 triple 규칙이 맞지 않는다 (표기 정규화 키로 비교하므로 띄어쓰기·대소문자 차이는 견딤).
 
+## 13. 재추출 테스트 (2026-11-16)
+
+트리플 삭제 규칙은 이름 변경·병합·재추출 문구 변화에 약하다 (pair 를 그 시점 표기로 저장). 근본 처리는 스키마를 고쳐
+재추출에서 안 나오게 하는 것이고, 그 효과를 저장 전에 확인하는 기능을 넣었다.
+
+- ingest `POST /reextract/preview {doc_id, node_ids≤10, schema_spec, llm, schema_rules}`: 청크만 골라 `reextract_chunks` +
+  규칙 적용, **저장·그래프 변경 없음**
+- backend `POST schema/spec/reextract-preview {classes, properties, triples}`: 편집기의 저장 전 스키마로
+  `build_schema_spec(kb, override=…)` (멤버·값 어휘는 현재 데이터) → 선택 트리플마다 kept / moved(같은 주어·목적어, 다른 관계) / gone
+- 모델은 전체 재추출과 같은 KB 추출 모델 (test-ontology2 는 gpt-4o-mini)
+- 남은 과제: 삭제 규칙을 원본(raw) 트리플·근거 청크 기준으로 매칭(이름 변경·병합에 견딤), 재추출 프롬프트에 청크별 삭제 목록 전달
+
 ## 6. 남은 것
 
 - 재추출 후 결과 비교(전/후 트리플 차이)를 편집기 안에서 보여 주기

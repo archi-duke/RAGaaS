@@ -373,7 +373,8 @@ export default function SchemaEditor({ kbId }: { kbId: string }) {
                     onChanged={(m) => { setMessage(m); load(); }}
                     properties={props.filter((p) => orig.p[p.key]).map((p) => ({ name: orig.p[p.key], domain: p.domain, range: p.range }))}
                     classes={classes.map((c) => orig.c[c.key] || c.name).filter(Boolean)}
-                    dirty={dirty} />
+                    dirty={dirty}
+                    getSpec={structured ? undefined : () => { const b = body(); return { classes: b.classes, properties: b.properties }; }} />
             )}
 
             {showReextract && (

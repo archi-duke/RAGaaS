@@ -611,6 +611,39 @@ async def reextract(request: ReextractRequest):
     return {"doc_id": request.doc_id, **stats, "after_rules": report["output"]}
 
 
+class ReextractPreviewRequest(BaseModel):
+    """재추출 미리보기: 지정한 청크만 (편집 중인) 스키마로 다시 추출해 결과만 돌려준다 — 저장·그래프 변경 없음."""
+    kb_id: str
+    doc_id: str
+    node_ids: List[str]
+    schema_spec: Dict[str, Any]
+    llm: Dict[str, Any]
+    schema_rules: Optional[List[Dict[str, Any]]] = None
+
+
+@router.post("/reextract/preview")
+async def reextract_preview(request: ReextractPreviewRequest):
+    import json as _json
+    import os as _os
+    from app.utils.temp_storage import temp_storage
+    from app.core.schema_reextract import reextract_chunks
+    from app.core.schema_normalizer import apply_rules_to_triples
+
+    chunks_path = temp_storage._get_file_path(request.kb_id, request.doc_id, "_chunks.json")
+    if not _os.path.exists(chunks_path):
+        raise HTTPException(status_code=404, detail=f"저장된 청크가 없음: {request.doc_id}")
+    with open(chunks_path, encoding="utf-8") as f:
+        chunks = _json.load(f)
+    want = set(request.node_ids)
+    chunks = [c for c in chunks if c.get("node_id") in want][:10]
+    if not chunks:
+        raise HTTPException(status_code=404, detail="해당 청크를 찾지 못했습니다")
+    triples, stats = await reextract_chunks(chunks, request.schema_spec, request.llm)
+    applied, report = apply_rules_to_triples(triples, request.schema_rules)
+    return {"doc_id": request.doc_id, "chunks": [c.get("node_id") for c in chunks], "triples": applied,
+            "stats": stats, "after_rules": report}
+
+
 class ReextractRevertRequest(BaseModel):
     kb_id: str
     doc_id: str

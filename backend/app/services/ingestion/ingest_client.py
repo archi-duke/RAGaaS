@@ -130,6 +130,18 @@ class IngestServiceClient:
             response.raise_for_status()
             return response.json()
 
+    async def reextract_preview(self, kb_id: str, doc_id: str, node_ids: List[str], schema_spec: Dict[str, Any],
+                                llm: Dict[str, Any], schema_rules: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+        """청크 몇 개만 스키마로 재추출해 결과만 받는다 (저장 없음)."""
+        async with httpx.AsyncClient(timeout=600.0) as client:
+            resp = await client.post(
+                f"{self.base_url}/api/v2/reextract/preview",
+                json={"kb_id": kb_id, "doc_id": doc_id, "node_ids": node_ids, "schema_spec": schema_spec,
+                      "llm": llm, "schema_rules": schema_rules},
+            )
+            resp.raise_for_status()
+            return resp.json()
+
     async def reextract_revert(self, kb_id: str, doc_id: str, graph_store: str,
                                schema_rules: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
         async with httpx.AsyncClient(timeout=600.0) as client:
