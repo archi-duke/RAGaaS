@@ -337,3 +337,36 @@ async def schema_property_triples(kb_id: str, property: str, limit: int = 200):
         return await se.property_triples(kb_id, property, limit)
     except se.SchemaEditError as e:
         _edit_error(e)
+
+
+class TripleEditBody(BaseModel):
+    action: str                       # move | delete
+    triples: List[dict]               # [{subject, predicate, object}]
+    target_property: Optional[str] = None
+    new_property: Optional[dict] = None   # {name, domain, range, description} — 새 관계를 만들어 이동
+
+
+class NewClassBody(BaseModel):
+    name: str
+    description: str = ""
+    members: List[str] = []
+
+
+@router.post("/{kb_id}/schema/spec/triples/edit")
+async def edit_schema_triples(kb_id: str, body: TripleEditBody):
+    """트리플 이동·삭제 (triple 규칙 + 리플레이) — 리플레이·재추출 뒤에도 유지된다."""
+    from app.services.schema_alignment import schema_editor as se
+    try:
+        return await se.edit_triples(kb_id, body.action, body.triples, body.target_property, body.new_property)
+    except se.SchemaEditError as e:
+        _edit_error(e)
+
+
+@router.post("/{kb_id}/schema/spec/classes")
+async def create_schema_class(kb_id: str, body: NewClassBody):
+    """새 클래스 추가 + 멤버 지정."""
+    from app.services.schema_alignment import schema_editor as se
+    try:
+        return await se.create_class_with_members(kb_id, body.name, body.description, body.members)
+    except se.SchemaEditError as e:
+        _edit_error(e)

@@ -15,7 +15,7 @@ interface Proposal {
 
 interface Rule {
     id: string;
-    rule_type: 'key' | 'value' | 'ignore' | 'entity' | 'class';
+    rule_type: 'key' | 'value' | 'ignore' | 'entity' | 'class' | 'triple';
     source_path?: string;
     target_path?: string;
     source_value?: string;
@@ -85,6 +85,10 @@ export default function SchemaAlignmentPanel({ kbId, onClose, onChanged }: Props
         if (r.rule_type === 'value') return `'${r.source_value}' → '${r.target_value}'`;
         if (r.rule_type === 'entity') return `엔티티 '${r.source_value}' → '${r.target_value}'`;
         if (r.rule_type === 'class') return `'${r.source_value}' ∈ ${r.target_value}`;
+        if (r.rule_type === 'triple') {
+            const [s, p, o] = r.pair || [];
+            return r.target_path ? `트리플 이동: ${s} —${p}→ ${o}  ⇒  —${r.target_path}→` : `트리플 삭제: ${s} —${p}→ ${o}`;
+        }
         return `구별 유지: ${(r.pair || []).join(' ≠ ')}`;
     };
 
@@ -188,10 +192,10 @@ export default function SchemaAlignmentPanel({ kbId, onClose, onChanged }: Props
                         {rules.map((r) => (
                             <li key={r.id} style={{ marginBottom: '0.25rem' }}>
                                 <code>{ruleText(r)}</code>
-                                <span style={{ opacity: 0.6 }}> · {r.origin.startsWith('proposal') ? '제안 수락' : r.origin === 'auto' ? '자동(표기 정규화)' : '사용자'}</span>
+                                <span style={{ opacity: 0.6 }}> · {r.origin.startsWith('proposal') ? '제안 수락' : r.origin === 'auto' ? '자동(표기 정규화)' : r.origin.startsWith('schema_editor') ? '스키마 편집기' : '사용자'}</span>
                                 {' '}
                                 <button className="btn btn-secondary" style={{ ...btn, padding: '0.1rem 0.35rem' }} disabled={!!busy}
-                                    onClick={() => run(r.id, () => schemaApi.deleteRule(kbId, r.id), () => '규칙을 삭제했습니다. 이미 정규화된 데이터는 그대로입니다.')}>
+                                    onClick={() => run(r.id, () => schemaApi.deleteRule(kbId, r.id), () => '규칙을 삭제했습니다. 이미 반영된 데이터는 그대로입니다 — "규칙 미반영 문서 재정규화"를 누르면 다시 적용됩니다(텍스트 문서는 리플레이).')}>
                                     <Trash2 size={12} />
                                 </button>
                             </li>

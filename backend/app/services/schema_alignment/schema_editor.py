@@ -1001,3 +1001,104 @@ async def property_triples(kb_id: str, prop: str, limit: int = 200) -> Dict[str,
         counts[r["status"]] = counts.get(r["status"], 0) + 1
     return {"property": prop, "domain": domain, "range": rng, "mode": "structured" if kb.schema_source == STRUCTURED else "induced",
             "total": len(rows), "truncated": len(rows) >= limit, "counts": counts, "triples": rows}
+
+
+# ---------------------------------------------------------------------------
+# 트리플 단위 편집 (트리플 목록) — 그래프를 직접 고치지 않고 triple 규칙으로 남겨 리플레이·재추출 후에도 유지
+# ---------------------------------------------------------------------------
+
+def _spec_from_induction(ind: Dict[str, Any]) -> Dict[str, Any]:
+    return {"classes": [{"name": c["name"], "description": c.get("description", "")} for c in ind.get("classes") or []],
+            "properties": [{"name": p["name"], "description": p.get("description", ""), "domain": p.get("domain", ""),
+                            "range": p.get("range", ""), "seed": p.get("seed", False),
+                            "aliases": [a for a in p.get("members") or [] if a != p["name"]]}
+                           for p in ind.get("properties") or []]}
+
+
+async def _add_to_schema(kb_id: str, new_class: Optional[Dict[str, Any]] = None,
+                         new_property: Optional[Dict[str, Any]] = None, note: str = "") -> Dict[str, Any]:
+    from app.models.knowledge_base import KnowledgeBase
+    kb = await KnowledgeBase.get(kb_id)
+    meta = kb.promotion_metadata or {}
+    spec = _spec_from_induction(meta.get("induction") or {})
+    if new_class:
+        spec["classes"].append({"name": new_class["name"], "description": new_class.get("description", "")})
+    if new_property:
+        spec["properties"].append({"name": new_property["name"], "description": new_property.get("description", ""),
+                                   "domain": new_property.get("domain", ""), "range": new_property.get("range", ""),
+                                   "aliases": []})
+    return await save_spec(kb_id, spec, base_version=int(meta.get("schema_version") or 1), replay=False, note=note)
+
+
+async def edit_triples(kb_id: str, action: str, triples: List[Dict[str, str]],
+                       target_property: Optional[str] = None,
+                       new_property: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """선택한 트리플을 다른 관계로 이동(move) 또는 삭제(delete). new_property 를 주면 그 관계를 스키마에 만들고 이동.
+
+    triple 규칙: pair=[주어, 관계, 목적어](그래프 표기), target_path=이동할 관계 (삭제면 None). 같은 트리플의 기존 규칙은 덮는다.
+    """
+    from app.models.knowledge_base import KnowledgeBase
+    from app.models.schema_mapping import SchemaMappingRule
+    kb = await KnowledgeBase.get(kb_id)
+    if not kb or kb.schema_source not in EDITABLE_SOURCES:
+        raise SchemaEditError(["텍스트(승격) KB 에서만 트리플을 편집할 수 있습니다 — 구조화 KB 는 YAML 원본에서"])
+    if action not in ("move", "delete"):
+        raise SchemaEditError([f"알 수 없는 동작: {action}"])
+    ind = (kb.promotion_metadata or {}).get("induction") or {}
+    names = {p["name"] for p in ind.get("properties") or []}
+    created = None
+    if action == "move":
+        if new_property:
+            nm = clean_prop_name(new_property.get("name"))
+            if not nm:
+                raise SchemaEditError(["새 관계 이름이 비었습니다"])
+            if nm in names:
+                raise SchemaEditError([f"관계 '{nm}' 은 이미 있습니다 — 기존 관계로 이동을 고르세요"])
+            r = await _add_to_schema(kb_id, new_property={**new_property, "name": nm},
+                                     note=f"트리플 이동용 관계 추가: {nm}")
+            created = {"property": nm, "version": r.get("version")}
+            target_property = nm
+        target_property = clean_prop_name(target_property)
+        if not target_property or (target_property not in names and not created):
+            raise SchemaEditError([f"이동할 관계 '{target_property}' 이 스키마에 없습니다"])
+    rows = [t for t in triples if t.get("subject") and t.get("predicate") and t.get("object")]
+    if not rows:
+        raise SchemaEditError(["선택한 트리플이 없습니다"])
+    n = 0
+    for t in rows:
+        pair = [t["subject"], t["predicate"], t["object"]]
+        if action == "move" and t["predicate"] == target_property:
+            continue
+        r = await SchemaMappingRule.find_one(SchemaMappingRule.kb_id == kb_id, SchemaMappingRule.rule_type == "triple",
+                                             SchemaMappingRule.pair == pair)
+        tgt = target_property if action == "move" else None
+        if r:
+            r.target_path, r.status = tgt, "active"
+            await r.save()
+        else:
+            await SchemaMappingRule(kb_id=kb_id, rule_type="triple", pair=pair, target_path=tgt,
+                                    origin=f"schema_editor:triple_{action}").insert()
+        n += 1
+    kb = await KnowledgeBase.get(kb_id)
+    kb.schema_rules_version = (kb.schema_rules_version or 0) + 1
+    await kb.save()
+    rp = await _replay_text_docs(kb_id)
+    return {"action": action, "edited": n, "target_property": target_property if action == "move" else None,
+            "created": created, **rp}
+
+
+async def create_class_with_members(kb_id: str, name: str, description: str, members: List[str]) -> Dict[str, Any]:
+    """새 클래스를 스키마에 추가하고 선택한 엔티티를 멤버로 지정 (멤버 누락 → 새 클래스)."""
+    from app.models.knowledge_base import KnowledgeBase
+    kb = await KnowledgeBase.get(kb_id)
+    if not kb or kb.schema_source not in EDITABLE_SOURCES:
+        raise SchemaEditError(["텍스트(승격) KB 에서만 클래스를 만들 수 있습니다"])
+    nm = clean_class_name(name)
+    if not nm:
+        raise SchemaEditError(["클래스 이름이 비었습니다 (영어 PascalCase 권장)"])
+    ind = (kb.promotion_metadata or {}).get("induction") or {}
+    if nm in {c["name"] for c in ind.get("classes") or []}:
+        raise SchemaEditError([f"클래스 '{nm}' 은 이미 있습니다 — 기존 클래스 멤버로 지정하세요"])
+    r = await _add_to_schema(kb_id, new_class={"name": nm, "description": description}, note=f"클래스 추가: {nm}")
+    out = await assign_members(kb_id, nm, members) if members else {"added": 0, "moved": 0}
+    return {"class": nm, "version": r.get("version"), **out}

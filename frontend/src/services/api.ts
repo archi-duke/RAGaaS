@@ -186,6 +186,11 @@ export const schemaApi = {
         api.get(`knowledge-bases/${kbId}/schema/spec/merge-candidates`, { params: { class_name: className } }),
     propertyTriples: (kbId: string, property: string, limit = 300) =>
         api.get(`knowledge-bases/${kbId}/schema/spec/triples`, { params: { property, limit } }),
+    editTriples: (kbId: string, body: { action: 'move' | 'delete'; triples: { subject: string; predicate: string; object: string }[];
+        target_property?: string; new_property?: { name: string; domain?: string; range?: string; description?: string } }) =>
+        api.post(`knowledge-bases/${kbId}/schema/spec/triples/edit`, body),
+    createClass: (kbId: string, name: string, description: string, members: string[]) =>
+        api.post(`knowledge-bases/${kbId}/schema/spec/classes`, { name, description, members }),
     mergeEntities: (kbId: string, canonical: string, aliases: string[]) =>
         api.post(`knowledge-bases/${kbId}/schema/spec/merge`, { canonical, aliases }),
     reingest: (kbId: string, docId: string, file: File) => {

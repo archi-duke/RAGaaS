@@ -52,12 +52,13 @@ async def load_rules_for_retrieval(kb_id: str) -> Dict[str, Any]:
 
 async def rules_for_ingest(kb_id: str, include_graph_rules: bool = False) -> List[Dict[str, Any]]:
     """인제스트·리플레이용 규칙. include_graph_rules=True 면 entity/class 규칙도 (텍스트 리플레이)."""
-    kinds = ("key", "value", "entity", "class") if include_graph_rules else ("key", "value")
+    kinds = ("key", "value", "entity", "class", "triple") if include_graph_rules else ("key", "value")
     return [
         {
             "id": str(r.id), "rule_type": r.rule_type, "source_path": r.source_path,
             "target_path": r.target_path, "source_value": r.source_value,
             "target_value": r.target_value, "scope_paths": r.scope_paths, "status": r.status,
+            **({"pair": r.pair} if r.rule_type == "triple" else {}),
         }
         for r in await active_rules(kb_id) if r.rule_type in kinds
     ]

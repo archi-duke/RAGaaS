@@ -220,6 +220,20 @@ LLM 병합 제안을 사람이 확인해야 하는 이유다.
   `운영 복잡도 → operational complexity` 가 남아 있어, 적용 순서(entity → value)상 병합 결과를 다시 영어로 바꿨다.
   `merge_entities` 가 대표 이름을 다른 이름으로 바꾸는 기존 entity·value 규칙을 끄도록 수정 (`conflicts_disabled`).
 
+## 12. 트리플 단위 편집 (검수 2단계 일부, 2026-11-16)
+
+트리플 목록에서 위반·누락을 바로 고친다. **그래프를 직접 수정하지 않는다** — 그래프는 리플레이·재추출 때 raw 트리플 +
+규칙으로 다시 만들어지므로, 직접 수정은 다음 리플레이에서 사라진다. 대신 사람이 고친 것을 규칙으로 남긴다.
+
+- 새 규칙 `triple`: `pair=[주어, 관계, 목적어]`(그래프 표기 = entity·key·value 적용 뒤), `target_path`=이동할 관계, 없으면 삭제.
+  `apply_rules_to_triples` 에서 entity → key → value 다음, class 전에 적용 (ingest `schema_normalizer`). 재추출도 같은 규칙을 받는다.
+- API: `POST schema/spec/triples/edit {action: move|delete, triples, target_property | new_property}`,
+  `POST schema/spec/classes {name, description, members}` (클래스 추가 + 멤버 지정). 새 관계·클래스는 편집기 저장 경로(`save_spec`)로 추가 — 이력·TBox 갱신.
+- 검증 (test-ontology2 `has_negative_effect_on`): 위반 `Modular Monolith → Microservices` 를 `관련_패턴` 으로 이동, 잡음 누락
+  `팀 규모가 작음 → 규율을 유지하기 어렵다` 삭제 → 위반 4→3, 누락 1→0, 이동한 트리플은 `관련_패턴` 에서 '일치'.
+  새 관계 생성 이동·새 클래스 생성은 시험 후 되돌림(이력 되돌리기 + 규칙 삭제).
+- 한계: 재추출이 같은 사실을 다른 표기로 뽑으면 triple 규칙이 맞지 않는다 (표기 정규화 키로 비교하므로 띄어쓰기·대소문자 차이는 견딤).
+
 ## 6. 남은 것
 
 - 재추출 후 결과 비교(전/후 트리플 차이)를 편집기 안에서 보여 주기

@@ -370,7 +370,10 @@ export default function SchemaEditor({ kbId }: { kbId: string }) {
 
             {triplesFor && (
                 <PropertyTriplesModal kbId={kbId} property={triplesFor} onClose={() => setTriplesFor(null)}
-                    onChanged={(m) => { setMessage(m); load(); }} />
+                    onChanged={(m) => { setMessage(m); load(); }}
+                    properties={props.filter((p) => orig.p[p.key]).map((p) => ({ name: orig.p[p.key], domain: p.domain, range: p.range }))}
+                    classes={classes.map((c) => orig.c[c.key] || c.name).filter(Boolean)}
+                    dirty={dirty} />
             )}
 
             {showReextract && (
