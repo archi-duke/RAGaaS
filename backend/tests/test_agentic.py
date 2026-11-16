@@ -124,3 +124,42 @@ def test_scratchpad_carried_and_finalized(monkeypatch):
     sp = out["graph_metadata"]["reasoning"]["agentic"]["scratchpad"]
     assert "| A | ✔ | ? |" in sp
     assert "스크래치패드" in out["graph_metadata"]["result_summary"]
+
+
+def test_count_unknown_cells():
+    sp = "## 후보 × 조건\n| 후보 | c1 | c2 |\n|---|---|---|\n| A | ✔ | ? |\n| B | ?(미확인) | ✘ |\n"
+    assert ag.count_unknown(sp) == 2
+    assert ag.count_unknown("") == 0
+
+
+def test_finish_with_unknown_is_deferred_once(monkeypatch):
+    plans = iter([
+        {"thought": "1", "action": "search", "calls": [{"tool": "graph_search", "query": "q1"}],
+         "scratchpad": "| 후보 | c |\n|---|---|\n| A | ? |"},
+        {"thought": "끝", "action": "finish", "calls": [], "scratchpad": "| 후보 | c |\n|---|---|\n| A | ? |"},
+        {"thought": "채우기", "action": "search", "calls": [{"tool": "graph_search", "query": "q2"}],
+         "scratchpad": "| 후보 | c |\n|---|---|\n| A | ? |"},
+        {"thought": "끝", "action": "finish", "calls": [], "scratchpad": "| 후보 | c |\n|---|---|\n| A | ✔ |"},
+    ])
+
+    async def fake_achat(cfg, messages, **kw):
+        return json.dumps(next(plans))
+
+    async def fake_describe(*a, **k):
+        return ""
+
+    import app.core.llm as llm
+    monkeypatch.setattr(llm, "achat", fake_achat)
+    monkeypatch.setattr(ag, "describe_kb", fake_describe)
+    calls = []
+
+    async def run_stage(st_type, params, query):
+        calls.append(query)
+        return [{"chunk_id": query, "content": "x"}], {"triples": []}
+
+    ctx = SimpleNamespace(query="q", kb_id="kb", graph_backend="ontology", metadata={}, logs=[])
+    out = asyncio.run(ag.run_agentic(ctx, {"max_steps": 6, "time_budget_s": 120},
+                                     {"graph_search": ("graph", {})}, run_stage, {"model": "m"}))
+    assert calls == ["q1", "q2"]                       # 첫 종료는 보류되고 q2 를 더 찾음
+    assert out["stop_reason"] == "근거 충분"
+    assert any("종료 보류" in l for l in ctx.logs)
