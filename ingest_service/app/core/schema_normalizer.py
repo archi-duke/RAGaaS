@@ -32,7 +32,9 @@ def compact(text: Any) -> str:
     t = unicodedata.normalize("NFKC", str(text or ""))
     t = _CAMEL_RE.sub(" ", t).lower()
     t = _SEP_RE.sub(" ", t).strip()
-    return "".join(_stem(x) for x in t.split() if len(x) > 1)
+    out = "".join(_stem(x) for x in t.split() if len(x) > 1)
+    # 1글자 이름('줄')이 빈 키가 되어 서로 충돌하지 않도록 (backend _compact 와 같은 규칙)
+    return out or t.replace(" ", "")
 
 
 def _segs(path: str) -> List[str]:

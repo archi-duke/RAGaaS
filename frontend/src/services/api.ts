@@ -180,6 +180,12 @@ export const schemaApi = {
     validateSpec: (kbId: string, spec: any) => api.post(`knowledge-bases/${kbId}/schema/spec/validate`, spec),
     saveSpec: (kbId: string, spec: any) => api.put(`knowledge-bases/${kbId}/schema/spec`, spec),
     revertSpec: (kbId: string, version: number) => api.post(`knowledge-bases/${kbId}/schema/spec/revert`, { version }),
+    assignMembers: (kbId: string, className: string, entities: string[]) =>
+        api.post(`knowledge-bases/${kbId}/schema/spec/members`, { class_name: className, entities }),
+    mergeCandidates: (kbId: string, className: string) =>
+        api.get(`knowledge-bases/${kbId}/schema/spec/merge-candidates`, { params: { class_name: className } }),
+    mergeEntities: (kbId: string, canonical: string, aliases: string[]) =>
+        api.post(`knowledge-bases/${kbId}/schema/spec/merge`, { canonical, aliases }),
     reingest: (kbId: string, docId: string, file: File) => {
         const formData = new FormData();
         formData.append('file', file);

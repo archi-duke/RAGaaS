@@ -157,48 +157,130 @@ def _usage_counts(kb_id: str) -> Dict[str, int]:
     return out
 
 
-RANGE_MIN_RATIO = 0.6
-RANGE_MIN_N = 3
+RANGE_MIN_RATIO = 0.6       # 데이터가 한 클래스를 이 비율 이상 지지하면 데이터가 이긴다
+RANGE_KEEP_RATIO = 0.3      # LLM·사람이 선언한 range 의 일치율이 이 미만이면 근거 없음으로 비운다 (사람 선언 제외)
+RANGE_MIN_N = 5             # 서로 다른 목적어(서술·수치 제외)가 이보다 적으면 판정하지 않는다
+_NUMERIC_RE = re.compile(r"^[+\-−]?\d")
+_FAMILY_TOKENS = re.compile(
+    r"(^|_)(very|strong|strongly|moderate|moderately|weak|weakly|slight|slightly|positive|negative|"
+    r"긍정|부정|강한|약한|중간|매우)(?=_|$)")
 
 
-async def infer_ranges(kb_id: str, prop_names: List[str]) -> Dict[str, Dict[str, Any]]:
-    """데이터 기반 range 추정 (텍스트 KB): 속성 목적어가 어느 클래스 멤버인지 센다.
+def family_key(name: str) -> str:
+    """부호·강도만 다른 관계 계열의 키 (has_moderate_negative_effect_on → has_effect_on)."""
+    k = _FAMILY_TOKENS.sub(r"\1", str(name or ""))
+    k = re.sub(r"_+", "_", k).strip("_")
+    return k or str(name)
 
-    목적어의 60% 이상(최소 3건)이 한 클래스면 그 클래스를 range 로 추천. 나머지(문장·값)는 값 속성.
-    클래스 멤버는 class 규칙(엔티티 → 클래스)으로 판정. 반환: {속성: {class, ratio, n}}
-    """
-    from app.core.fuseki import fuseki_client
+
+def _usable_object(label: str) -> bool:
+    from app.services.retrieval.entity_linking import _compact, is_sentence_like
+    t = (label or "").strip()
+    return bool(t) and len(t) <= 30 and not is_sentence_like(t) and not _NUMERIC_RE.match(t) and bool(_compact(t))
+
+
+async def _class_index(kb_id: str) -> Dict[str, str]:
     from app.services.retrieval.entity_linking import _compact
-    from app.services.schema_alignment.induction import REL_NS
     from app.services.schema_alignment.service import active_rules
-    cls = {_compact(r.source_value): r.target_value for r in await active_rules(kb_id)
-           if r.rule_type == "class" and r.source_value and r.target_value}
-    if not cls:
-        return {}
-    out = {}
-    for name in prop_names:
-        q = f"""SELECT ?o (SAMPLE(?l) AS ?lab) WHERE {{ GRAPH ?g {{ ?s <{REL_NS}{name}> ?o
+    return {_compact(r.source_value): r.target_value for r in await active_rules(kb_id)
+            if r.rule_type == "class" and r.source_value and r.target_value}
+
+
+def _objects_of(kb_id: str, pred_names: List[str]) -> Dict[str, int]:
+    """술어들(대표 + 별칭)의 목적어 라벨 → 등장 수 (문서 그래프)."""
+    from app.core.fuseki import fuseki_client
+    from app.services.schema_alignment.induction import REL_NS
+    out: Dict[str, int] = {}
+    for name in dict.fromkeys(pred_names):
+        uri = REL_NS + re.sub(r"[^0-9A-Za-z가-힣_]", "_", name.strip())
+        q = f"""SELECT ?o (SAMPLE(?l) AS ?lab) (COUNT(*) AS ?n) WHERE {{ GRAPH ?g {{ ?s <{uri}> ?o
                  OPTIONAL {{ ?o <http://www.w3.org/2000/01/rdf-schema#label> ?l }} }}
-                 FILTER(STRSTARTS(STR(?g), "urn:doc:")) }} GROUP BY ?o ?s LIMIT 1000"""
+                 FILTER(STRSTARTS(STR(?g), "urn:doc:")) }} GROUP BY ?o LIMIT 2000"""
         try:
             rows = fuseki_client.query_sparql(kb_id, q).get("results", {}).get("bindings", [])
         except Exception:
             continue
-        counts: Dict[str, int] = {}
         for b in rows:
             o = b["o"]["value"]
-            lab = b.get("lab", {}).get("value") or o.rstrip("/").rsplit("/", 1)[-1]
+            lab = b.get("lab", {}).get("value") or (o.rstrip("/").rsplit("/", 1)[-1] if o.startswith("http") else o)
+            out[lab] = out.get(lab, 0) + int(b["n"]["value"])
+    return out
+
+
+async def range_check(kb_id: str, props: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """속성별 range 데이터 검증 (docs/design-schema-editor.md §10).
+
+    - 목적어: 대표 이름 + 별칭 술어의 목적어 합산, 서술·수치·20자 초과 제외, 서로 다른 목적어 기준
+    - 부호·강도 계열(family_key 가 같은 속성 2개 이상)은 목적어를 합쳐 판정 → 같은 range
+    - 판정: 데이터 최다 클래스 비율 ≥ 0.6 → 데이터 채택 (선언과 다르면 충돌 기록)
+            선언 range 일치율 < 0.3 → 비움 (사람·시드 선언은 비우지 않고 경고만)
+            그 사이 → 선언 유지, 멤버 누락 제안 대상
+    반환: {속성: {n, data_class, data_ratio, declared, declared_ratio, decision, range, gaps:[...]}}
+    """
+    from app.services.retrieval.entity_linking import _compact
+    cls = await _class_index(kb_id)
+    objs = {p["name"]: _objects_of(kb_id, [p["name"]] + list(p.get("members") or [])) for p in props if p.get("name")}
+    fam: Dict[str, List[str]] = {}
+    for p in props:
+        fam.setdefault(family_key(p["name"]), []).append(p["name"])
+    out = {}
+    for p in props:
+        name = p["name"]
+        peers = fam.get(family_key(name)) or [name]
+        pooled: Dict[str, int] = {}
+        for x in (peers if len(peers) > 1 else [name]):
+            for lab, n in (objs.get(x) or {}).items():
+                pooled[lab] = pooled.get(lab, 0) + n
+        usable = {lab: n for lab, n in pooled.items() if _usable_object(lab)}
+        counts: Dict[str, int] = {}
+        for lab in usable:
             c = cls.get(_compact(lab))
             if c:
                 counts[c] = counts.get(c, 0) + 1
-        n = len(rows)
-        if not counts or n < RANGE_MIN_N:
-            continue
-        best = max(counts, key=counts.get)
-        ratio = counts[best] / n
-        if ratio >= RANGE_MIN_RATIO:
-            out[name] = {"class": best, "ratio": round(ratio, 2), "n": n, "hits": counts[best]}
+        n = len(usable)
+        declared = p.get("range") or ""
+        data_class = max(counts, key=counts.get) if counts else ""
+        data_ratio = round(counts.get(data_class, 0) / n, 2) if n else 0.0
+        declared_ratio = round(counts.get(declared, 0) / n, 2) if n and declared else None
+        source = p.get("range_source") or ("seed" if p.get("seed") else ("user" if declared else ""))
+        decision, rng = "keep", declared
+        if n < RANGE_MIN_N:
+            decision = "insufficient"
+        elif data_class and data_ratio >= RANGE_MIN_RATIO:
+            if declared and declared != data_class:
+                decision = "conflict" if source in ("seed", "user") else "data_override"
+                rng = declared if source in ("seed", "user") else data_class
+            else:
+                decision, rng = ("confirmed" if declared else "data"), data_class
+        elif declared and declared_ratio is not None and declared_ratio < RANGE_KEEP_RATIO:
+            if source in ("seed", "user"):
+                decision = "weak"          # 사람이 정한 range — 비우지 않고 멤버 누락을 먼저 의심
+            else:
+                decision, rng = "dropped", ""
+        elif declared:
+            decision = "weak" if (declared_ratio or 0) < RANGE_MIN_RATIO else "confirmed"
+        target = rng or ""
+        gaps = sorted(((lab, usable[lab]) for lab in usable if target and not cls.get(_compact(lab))),
+                      key=lambda x: -x[1]) if target else []
+        violations = sorted(((lab, cls.get(_compact(lab))) for lab in usable
+                             if target and cls.get(_compact(lab)) and cls.get(_compact(lab)) != target))
+        out[name] = {"n": n, "data_class": data_class, "data_ratio": data_ratio, "declared": declared,
+                     "declared_ratio": declared_ratio, "decision": decision, "range": rng,
+                     "family": peers if len(peers) > 1 else [],
+                     "gaps": [{"name": lab, "count": c} for lab, c in gaps[:60]],
+                     "violations": [{"name": lab, "class": c} for lab, c in violations[:30]]}
     return out
+
+
+async def infer_ranges(kb_id: str, prop_names: List[str]) -> Dict[str, Dict[str, Any]]:
+    """(호환) range 가 빈 속성의 데이터 추천: {속성: {class, ratio, n, hits}}."""
+    from app.models.knowledge_base import KnowledgeBase
+    kb = await KnowledgeBase.get(kb_id)
+    ind = ((kb.promotion_metadata or {}).get("induction") or {}) if kb else {}
+    props = [p for p in ind.get("properties") or [] if p["name"] in set(prop_names)]
+    chk = await range_check(kb_id, [{**p, "range": ""} for p in props])
+    return {k: {"class": v["range"], "ratio": v["data_ratio"], "n": v["n"], "hits": round(v["data_ratio"] * v["n"])}
+            for k, v in chk.items() if v["decision"] == "data" and v["range"]}
 
 
 async def get_spec(kb_id: str) -> Dict[str, Any]:
@@ -217,8 +299,19 @@ async def get_spec(kb_id: str) -> Dict[str, Any]:
         if r.rule_type == "class" and r.target_value:
             members[r.target_value] = members.get(r.target_value, 0) + 1
     usage = _usage_counts(kb_id) if editable else {}
-    suggest = await infer_ranges(kb_id, [p["name"] for p in ind.get("properties") or []
-                                         if not p.get("range")]) if editable else {}
+    chk = await range_check(kb_id, ind.get("properties") or []) if editable else {}
+    # 멤버 누락: range 클래스로 이어지는데 클래스가 없는 목적어 → 클래스별로 모아 사람이 체크 (§10)
+    member_gaps: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    violations: List[Dict[str, Any]] = []
+    for name, c in chk.items():
+        tgt = c["range"]
+        for g in c["gaps"]:
+            e = member_gaps.setdefault(tgt, {}).setdefault(g["name"], {"name": g["name"], "count": 0, "via": []})
+            e["count"] += g["count"]
+            if name not in e["via"]:
+                e["via"].append(name)
+        for v in c["violations"]:
+            violations.append({"property": name, "range": tgt, **v})
     classes = [{"name": c["name"], "description": c.get("description", ""), "member_count": members.get(c["name"], 0)}
                for c in ind.get("classes") or []]
     props = []
@@ -226,7 +319,15 @@ async def get_spec(kb_id: str) -> Dict[str, Any]:
         props.append({"name": p["name"], "description": p.get("description", ""), "domain": p.get("domain", ""),
                       "range": p.get("range", ""), "aliases": [a for a in p.get("members") or [] if a != p["name"]],
                       "seed": bool(p.get("seed")), "triple_count": usage.get(p["name"], 0),
-                      **({"range_suggestion": suggest[p["name"]]} if p["name"] in suggest else {})})
+                      "range_source": p.get("range_source", ""),
+                      **({"range_check": {k: chk[p["name"]][k] for k in
+                                          ("n", "data_class", "data_ratio", "declared_ratio", "decision", "family")}}
+                         if p["name"] in chk else {}),
+                      **({"range_suggestion": {"class": chk[p["name"]]["range"], "ratio": chk[p["name"]]["data_ratio"],
+                                               "n": chk[p["name"]]["n"],
+                                               "hits": round(chk[p["name"]]["data_ratio"] * chk[p["name"]]["n"])}}
+                         if p["name"] in chk and chk[p["name"]]["range"] and chk[p["name"]]["range"] != (p.get("range") or "")
+                         else {})})
     known = {p["name"] for p in props}
     out_of_schema = sorted(((k, v) for k, v in usage.items() if k not in known), key=lambda x: -x[1])[:30]
     hist = meta.get("schema_history") or []
@@ -239,6 +340,9 @@ async def get_spec(kb_id: str) -> Dict[str, Any]:
         "updated_at": meta.get("schema_updated_at") or meta.get("promoted_at"),
         "classes": classes, "properties": props,
         "out_of_schema": [{"name": k, "triple_count": v} for k, v in out_of_schema],
+        "member_gaps": {k: sorted(v.values(), key=lambda x: (-len(x["via"]), -x["count"]))[:80]
+                        for k, v in member_gaps.items()},
+        "range_violations": violations[:60],
         "history": [{"version": h["version"], "at": h.get("at"), "summary": h.get("summary")} for h in reversed(hist)],
     }
 
@@ -669,3 +773,115 @@ async def preview(kb_id: str, spec_in: Dict[str, Any]) -> Dict[str, Any]:
     ind = (kb.promotion_metadata or {}).get("induction") or {}
     diff = diff_spec({"classes": ind.get("classes") or [], "properties": ind.get("properties") or []}, spec)
     return {"errors": errors, "warnings": warnings, "diff": diff, "summary": _summary_text(diff)}
+
+
+
+# ---------------------------------------------------------------------------
+# §10 데이터 검증 후속: 멤버 지정·표기 병합 (사람 확인 후 규칙 + 리플레이)
+# ---------------------------------------------------------------------------
+
+async def _replay_text_docs(kb_id: str) -> Dict[str, Any]:
+    from app.models.document import Document
+    from app.services.schema_alignment.service import _is_structured_name, replay_documents
+    ids = [str(d.id) for d in await Document.find(Document.kb_id == kb_id).to_list() if not _is_structured_name(d.filename)]
+    rp = await replay_documents(kb_id, ids)
+    return {"replayed": len(rp["replayed"]), "errors": [r for r in rp["replayed"] if r.get("error")][:5]}
+
+
+async def assign_members(kb_id: str, class_name: str, entities: List[str]) -> Dict[str, Any]:
+    """선택한 엔티티를 클래스 멤버로 (class 규칙, origin=schema_editor:member_gap) + 리플레이."""
+    from app.models.knowledge_base import KnowledgeBase
+    from app.models.schema_mapping import SchemaMappingRule
+    from app.services.retrieval.entity_linking import _compact
+    kb = await KnowledgeBase.get(kb_id)
+    ind = ((kb.promotion_metadata or {}).get("induction") or {}) if kb else {}
+    if class_name not in {c["name"] for c in ind.get("classes") or []}:
+        raise SchemaEditError([f"클래스 '{class_name}' 이 스키마에 없습니다"])
+    existing = {_compact(r.source_value): r for r in await SchemaMappingRule.find(
+        SchemaMappingRule.kb_id == kb_id, SchemaMappingRule.rule_type == "class").to_list() if r.source_value}
+    added, moved = 0, 0
+    for e in dict.fromkeys(x.strip() for x in entities if x and x.strip()):
+        if not _compact(e):
+            continue
+        r = existing.get(_compact(e))
+        if r:
+            if r.target_value != class_name or r.status != "active":
+                r.target_value, r.status = class_name, "active"
+                await r.save()
+                moved += 1
+            continue
+        await SchemaMappingRule(kb_id=kb_id, rule_type="class", source_value=e, target_value=class_name,
+                                origin="schema_editor:member_gap").insert()
+        added += 1
+    if added or moved:
+        kb.schema_rules_version = (kb.schema_rules_version or 0) + 1
+        await kb.save()
+    rp = await _replay_text_docs(kb_id) if (added or moved) else {"replayed": 0, "errors": []}
+    return {"class": class_name, "added": added, "moved": moved, **rp}
+
+
+async def merge_candidates(kb_id: str, class_name: str) -> Dict[str, Any]:
+    """한 클래스의 멤버 + 그 클래스로 들어올 멤버 누락 후보 안에서 같은 개념 다른 표기(한·영 등)를 LLM 으로 묶는다.
+
+    범위를 한 클래스로 좁혀(150개 이하) 비용·오병합을 줄이고, 결과는 제안일 뿐 — 사람이 체크해야 병합된다.
+    """
+    import json as _json
+    from app.core.llm import achat, no_thinking_extra_body
+    from app.core.models_resolver import resolve_model_config
+    from app.models.knowledge_base import KnowledgeBase
+    from app.services.retrieval.entity_linking import _compact
+    from app.services.schema_alignment.service import _graph_llm_config, active_rules
+    kb = await KnowledgeBase.get(kb_id)
+    spec = await get_spec(kb_id)
+    members = [r.source_value for r in await active_rules(kb_id)
+               if r.rule_type == "class" and r.target_value == class_name and r.source_value]
+    gaps = [g["name"] for g in (spec.get("member_gaps") or {}).get(class_name, [])]
+    names = list(dict.fromkeys(members + gaps))[:150]
+    if len(names) < 2:
+        return {"class": class_name, "groups": []}
+    cfg = await resolve_model_config(await _graph_llm_config(kb))
+    msg = [{"role": "system", "content": "You group synonyms. Output JSON only."},
+           {"role": "user", "content": f"""다음은 '{class_name}' 클래스의 엔티티 이름들이다. 같은 개념을 다르게 적은 것
+(한국어/영어, 약어, 띄어쓰기·조사 차이)만 묶어라. 의미가 조금이라도 다르면 묶지 마라
+(예: '확장성' 과 '확장성 요구' 는 다르다 — 하나는 품질, 하나는 요구). 목록에 있는 이름만 써라.
+이름: {_json.dumps(names, ensure_ascii=False)}
+JSON: {{"groups": [["대표로 쓸 이름", "같은 개념 이름", ...]]}}"""}]
+    try:
+        raw = await achat(cfg, msg, model=cfg.get("model"), temperature=0, response_format={"type": "json_object"},
+                          extra_body=no_thinking_extra_body(cfg.get("model")), timeout=120)
+        data = _json.loads(raw[raw.find("{"): raw.rfind("}") + 1])
+    except Exception as e:
+        raise SchemaEditError([f"병합 후보 계산 실패: {str(e)[:150]}"], 502)
+    by = {_compact(n): n for n in names}
+    usage = {g["name"]: g["count"] for g in (spec.get("member_gaps") or {}).get(class_name, [])}
+    groups = []
+    for g in data.get("groups") or []:
+        real = list(dict.fromkeys(by[_compact(x)] for x in g if _compact(str(x)) in by))
+        if len(real) >= 2:
+            # 대표: 이미 멤버인 이름 우선, 그다음 등장 수
+            real.sort(key=lambda x: (x not in members, -usage.get(x, 0)))
+            groups.append({"canonical": real[0], "aliases": real[1:]})
+    return {"class": class_name, "groups": groups}
+
+
+async def merge_entities(kb_id: str, canonical: str, aliases: List[str]) -> Dict[str, Any]:
+    """표기 병합 (entity 규칙, origin=schema_editor:merge) + 리플레이."""
+    from app.models.knowledge_base import KnowledgeBase
+    from app.models.schema_mapping import SchemaMappingRule
+    kb = await KnowledgeBase.get(kb_id)
+    n = 0
+    for a in dict.fromkeys(x.strip() for x in aliases if x and x.strip() and x.strip() != canonical):
+        r = await SchemaMappingRule.find_one(SchemaMappingRule.kb_id == kb_id, SchemaMappingRule.rule_type == "entity",
+                                             SchemaMappingRule.source_value == a)
+        if r:
+            r.target_value, r.status = canonical, "active"
+            await r.save()
+        else:
+            await SchemaMappingRule(kb_id=kb_id, rule_type="entity", source_value=a, target_value=canonical,
+                                    origin="schema_editor:merge").insert()
+        n += 1
+    if n:
+        kb.schema_rules_version = (kb.schema_rules_version or 0) + 1
+        await kb.save()
+    rp = await _replay_text_docs(kb_id) if n else {"replayed": 0, "errors": []}
+    return {"canonical": canonical, "merged": n, **rp}

@@ -172,6 +172,45 @@ combines_well_with.style, conflicts_with.style)는 레코드 노드에 rdf:type 
 
 데이터(트리플·청크)는 바꾸지 않았다 — 데이터는 이미 올바른 엔티티를 가리키고 있었고, 스키마 설명만 빠져 있었다.
 
+## 10. 스키마 추출 지침 반영 (2026-11-16, 검토: Fable · 구현: Opus)
+
+지침은 `.claude/skills/ontology-schema-extraction/SKILL.md` (사람 절차 + 규칙 요약). 검토에서 지침보다 먼저 고칠 코드 결함이 나왔다.
+
+**결함 (코드 확인 → 수정)**
+| 결함 | 영향 | 수정 |
+|---|---|---|
+| `validate_induction` 이 range·정의를 시드에서만 채움, 프롬프트도 요구 안 함 | 시드 없는 KB 의 range·정의 전부 빈칸 | 프롬프트가 range(클래스명 또는 빈칸)·정의('A \| 관계 \| B')를 요구, 비시드는 LLM 값 채택(채택된 클래스명만) |
+| 프롬프트가 "members 는 주어 엔티티만" | 목적어로만 나오는 품질 속성 등이 클래스에 못 들어감 | 관계별 목적어 집계(서로 다른 수·상위 8·서술 비율)와 '목적어로만 나오는 엔티티' 블록 추가, 멤버는 주어·목적어 모두 |
+| range 추정이 리플레이 전에 실행 | 별칭→대표 반영 전 그래프를 세어 0건 | `apply_induction` 에서 리플레이 뒤 `range_check` |
+| `_compact` 가 1글자 이름을 '' 로 | class 규칙 '줄 → Person' 이 '암'·'빛' 등 1글자 엔티티 전부에 적용 | 토큰이 없으면 구분자만 지운 원문 (backend·ingest 둘 다) |
+| 재유도 적용 시 같은 대상의 옛 규칙이 남음 | 규칙 중복 → 적용 순서에 따라 결과가 달라짐 | 적용 전에 같은 source 의 이전 제안 규칙을 끔 (편집기 규칙은 유지) |
+| 재유도가 편집한 스키마를 덮음 | 사람 편집 유실 | 재유도 전 스키마를 편집기 이력에 보관 |
+
+**range 데이터 검증** (`schema_editor.range_check`)
+- 목적어: 대표 + 별칭 술어 합산, 서술·수치·30자 초과 제외, **서로 다른 목적어** 기준, 5개 미만은 판정 안 함
+- 판정: 데이터 최다 클래스 ≥ 60% → 데이터 채택(선언과 다르면 LLM 선언은 교체, 시드·사람 선언은 충돌 표시) /
+  선언 일치율 < 30% → LLM 선언은 비움, 시드·사람 선언은 경고 / 그 사이 → 유지 + 멤버 누락 제안
+- **부호·강도 계열**(`family_key`: has_moderate_negative_effect_on → has_effect_on)은 목적어를 합쳐 같은 range
+
+**부호·강도 계열을 묶지 않는다** — 프롬프트에 "묶지 마라"를 넣어도 GLM 이 moderate/strong 을 positive/negative 에 묶었다
+(key 규칙은 이름만 바꾸므로 강도가 사라짐). `validate_induction` 에서 결정적으로 분리하고, 분리된 관계는 대표와 같은 domain·range 로 둔다.
+
+**편집기 데이터 검증 카드** — 관계별 일치율 표시, 클래스별 멤버 누락 후보(체크 → class 규칙 + 리플레이),
+range 위반 목록, 클래스 범위 표기 중복 찾기(LLM 제안 → 체크 → entity 규칙 + 리플레이). 자동 수락 없음.
+API: `POST schema/spec/members`, `GET schema/spec/merge-candidates`, `POST schema/spec/merge`, `POST schema/induce/dry-run`.
+
+**적용 결과**
+| KB | 전 | 후 |
+|---|---|---|
+| test-ontology2 (재유도 + 검증) | 클래스 9, range 4/36, 정의 0/36, 그래프 관계 4 | 클래스 6, range 25/38, 정의 38/38, 그래프 관계 25. 검증 가능한 관계 10개 모두 일치율 ≥ 60%. 효과 관계 5개 모두 → QualityAttribute (계열 합산 77%) |
+| test-ontology (YAML) | 유형 1, 참조 관계 3 | 변화 없음 (유도 경로 아님) |
+| test-ontology3 (평가용) | 재유도 안 함 — 미리보기만: 시드 속성 이름·range 변화 0, domain 3개(시드에 domain 없는 반박함·기반함·시대)만 차이, 정의 18 → 27 | 1글자 키 수정 + 리플레이만 적용: 1글자 Person 이 '줄'·'빛'·'암' → '줄' 만. 물리학사 29 / 32 (2회, 이전 28~29), 사실 재현율 146/197 → 146/197 |
+
+test-ontology2 사람 확인 내역: 멤버 지정 12건(팀 자율성·consistency·참고문헌 5·요구 3·개념 2, 문장 조각·'중간' 등급 값 제외),
+표기 병합 3건 수락(운영 복잡도←operational complexity, 일관성←consistency, 확장성←scalability), 2건 거절
+(디버깅 용이성←debugging complexity, 운영 단순성←운영 복잡도 — **반대 개념**을 LLM 이 같은 것으로 묶음).
+LLM 병합 제안을 사람이 확인해야 하는 이유다.
+
 ## 6. 남은 것
 
 - 재추출 후 결과 비교(전/후 트리플 차이)를 편집기 안에서 보여 주기

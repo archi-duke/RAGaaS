@@ -266,3 +266,64 @@ async def revert_schema_spec(kb_id: str, body: SchemaRevertBody):
         return await se.revert_to(kb_id, body.version)
     except se.SchemaEditError as e:
         _edit_error(e)
+
+
+
+class MembersBody(BaseModel):
+    class_name: str
+    entities: List[str]
+
+
+class MergeBody(BaseModel):
+    canonical: str
+    aliases: List[str]
+
+
+@router.post("/{kb_id}/schema/spec/members")
+async def assign_schema_members(kb_id: str, body: MembersBody):
+    """멤버 누락 후보를 클래스 멤버로 지정 (class 규칙 + 리플레이)."""
+    from app.services.schema_alignment import schema_editor as se
+    try:
+        return await se.assign_members(kb_id, body.class_name, body.entities)
+    except se.SchemaEditError as e:
+        _edit_error(e)
+
+
+@router.get("/{kb_id}/schema/spec/merge-candidates")
+async def schema_merge_candidates(kb_id: str, class_name: str):
+    """한 클래스 범위의 같은 개념 다른 표기 후보 (LLM, 제안만)."""
+    from app.services.schema_alignment import schema_editor as se
+    try:
+        return await se.merge_candidates(kb_id, class_name)
+    except se.SchemaEditError as e:
+        _edit_error(e)
+
+
+@router.post("/{kb_id}/schema/spec/merge")
+async def merge_schema_entities(kb_id: str, body: MergeBody):
+    """표기 병합 (entity 규칙 + 리플레이)."""
+    from app.services.schema_alignment import schema_editor as se
+    try:
+        return await se.merge_entities(kb_id, body.canonical, body.aliases)
+    except se.SchemaEditError as e:
+        _edit_error(e)
+
+
+class InduceDryRunBody(BaseModel):
+    llm_model: Optional[dict] = None
+
+
+@router.post("/{kb_id}/schema/induce/dry-run")
+async def induce_dry_run(kb_id: str, body: InduceDryRunBody):
+    """스키마 재유도 미리보기 — 저장·제안 없이 결과와 현재 스키마의 차이 (평가용 KB 보호)."""
+    from app.models.knowledge_base import KnowledgeBase
+    from app.services.schema_alignment.induction import run_induction
+    from app.services.schema_alignment.service import _graph_llm_config
+    kb = await KnowledgeBase.get(kb_id)
+    if not kb:
+        raise HTTPException(status_code=404, detail="KB 없음")
+    cfg = body.llm_model or await _graph_llm_config(kb)
+    try:
+        return await run_induction(kb_id, cfg, dry_run=True)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))

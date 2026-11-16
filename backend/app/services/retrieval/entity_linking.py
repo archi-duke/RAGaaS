@@ -60,8 +60,15 @@ def tokens(text: str) -> List[str]:
 
 
 def _compact(text: str) -> str:
-    """구분자를 모두 제거한 형태 ("micro-service" → "microservice")."""
-    return "".join(tokens(text))
+    """구분자를 모두 제거한 형태 ("micro-service" → "microservice").
+
+    1글자 이름('줄', '암', '빛')은 tokens 가 버려 빈 문자열이 되면, 서로 다른 이름이 같은 키('')로
+    충돌한다 (예: class 규칙 '줄 → Person' 이 1글자 엔티티 전부에 적용). 토큰이 없으면 구분자만 지운 원문.
+    """
+    out = "".join(tokens(text))
+    if out:
+        return out
+    return re.sub(r"[\s_\-·.,/()\[\]]+", "", normalize_text(text))
 
 
 def is_sentence_like(label: str) -> bool:

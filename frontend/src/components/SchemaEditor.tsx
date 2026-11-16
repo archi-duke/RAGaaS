@@ -3,6 +3,7 @@ import { Plus, Trash2, RefreshCw, Save, RotateCcw, AlertTriangle, Share2 } from 
 import { schemaApi } from '../services/api';
 import ReextractModal from './ReextractModal';
 import SchemaGraph from './SchemaGraph';
+import SchemaChecks from './SchemaChecks';
 
 // 스키마 편집기 — 승격된 텍스트 KB 의 클래스·속성을 사람이 직접 고친다 (docs/design-schema-editor.md)
 // 저장 시: 검증 → 이전 버전 이력 보관 → TBox 재생성. 이름 변경은 규칙 + 리플레이로 기존 그래프에 반영.
@@ -14,10 +15,13 @@ interface PropRow {
     aliases: string; seed?: boolean; triple_count?: number; renamed_from?: string;
     kind?: string; type?: string; values?: string[]; value_count?: number; ref_kind?: string;
     range_suggestion?: { class: string; ratio: number; n: number; hits: number };
+    range_check?: { n: number; data_class: string; data_ratio: number; declared_ratio: number | null; decision: string; family: string[] };
 }
 interface Spec {
     editable: boolean; reason?: string; schema_source: string; version: number; updated_at?: string;
     mode?: 'induced' | 'structured'; notes?: string[];
+    member_gaps?: Record<string, { name: string; count: number; via: string[] }[]>;
+    range_violations?: { property: string; range: string; name: string; class: string }[];
     classes: any[]; properties: any[]; out_of_schema: { name: string; triple_count: number }[];
     history: { version: number; at?: string; summary?: string }[];
 }
@@ -53,7 +57,7 @@ export default function SchemaEditor({ kbId }: { kbId: string }) {
             key: nextKey(), name: x.name, description: x.description || '', domain: x.domain || '', range: x.range || '',
             aliases: (x.aliases || []).join(', '), seed: x.seed, triple_count: x.triple_count,
             kind: x.kind, type: x.type, values: x.values, value_count: x.value_count, ref_kind: x.ref_kind,
-            range_suggestion: x.range_suggestion,
+            range_suggestion: x.range_suggestion, range_check: x.range_check,
         }));
         setClasses(c);
         setProps(p);
@@ -176,6 +180,11 @@ export default function SchemaEditor({ kbId }: { kbId: string }) {
             )}
             {message && <div style={{ fontSize: '0.85rem', color: '#1e40af' }}>{message}</div>}
 
+            {!structured && (
+                <SchemaChecks kbId={kbId} memberGaps={spec.member_gaps || {}} violations={spec.range_violations || []}
+                    onChanged={(m) => { setMessage(m); load(); }} />
+            )}
+
             <div style={{ display: 'flex', gap: 0 }}>
                 {(['table', 'graph'] as const).map((v) => (
                     <button key={v} className={`btn ${view === v ? 'btn-primary' : 'btn-secondary'}`}
@@ -276,11 +285,17 @@ export default function SchemaEditor({ kbId }: { kbId: string }) {
                                             <input style={input} list={`ranges-${kbId}`} value={p.range} placeholder="클래스 또는 값"
                                                 onChange={(e) => upd({ range: e.target.value })} />
                                         </div>
-                                        {p.range_suggestion && !p.range && (
+                                        {p.range_check && p.range && p.range_check.n >= 5 && (
+                                            <div style={{ fontSize: '0.68rem', color: (p.range_check.declared_ratio ?? 0) >= 0.6 ? '#15803d' : '#b45309' }}
+                                                title={`목적어 ${p.range_check.n}개 중 ${p.range} 멤버 비율${p.range_check.family?.length ? ` (계열 합산: ${p.range_check.family.join(', ')})` : ''}`}>
+                                                일치 {Math.round((p.range_check.declared_ratio ?? 0) * 100)}% / {p.range_check.n}
+                                            </div>
+                                        )}
+                                        {p.range_suggestion && p.range_suggestion.class !== p.range && (
                                             <button className="btn btn-secondary" style={{ ...btn, padding: '0.1rem 0.4rem', marginTop: '0.2rem', fontSize: '0.7rem' }}
                                                 title={`목적어 ${p.range_suggestion.n}건 중 ${p.range_suggestion.hits}건이 ${p.range_suggestion.class} 멤버`}
                                                 onClick={() => upd({ range: p.range_suggestion!.class })}>
-                                                추천: → {p.range_suggestion.class} ({Math.round(p.range_suggestion.ratio * 100)}%)
+                                                {p.range ? '데이터는' : '추천:'} → {p.range_suggestion.class} ({Math.round(p.range_suggestion.ratio * 100)}%)
                                             </button>
                                         )}
                                     </td>}
