@@ -8,13 +8,15 @@
 사전지식 판별: answer_hit=True 인데 evidence_hit=False 면 '기억으로 맞힘' 의심.
 """
 import json
+import os
 import re
 import sys
 import time
 import urllib.request
 
-BASE = "http://192.168.219.114:44300/ragaas/api/v2/knowledge-bases/"
-D = "/private/tmp/claude-501/-Users-dukekimm-Works-RAGaaS/503152e9-a23b-429e-ac1f-71a13cb65ae9/scratchpad/physics/"
+BASE = os.getenv("RAGAAS_BASE", "http://localhost:44300/ragaas/api/v2/knowledge-bases/")
+HERE = os.path.dirname(os.path.abspath(__file__)) + "/"
+D = os.path.dirname(HERE.rstrip("/")) + "/"   # 데이터셋 폴더 (facts.json, questions.json)
 NEG_PAT = re.compile(r"(없습니다|없다|포함되어 있지 않|찾을 수 없|언급되어 있지 않|알 수 없|정보가 없|couldn't find|not)", re.I)
 
 
@@ -22,8 +24,23 @@ def norm(s):
     return re.sub(r"[\s\-_·.,()\[\]'\"]", "", str(s)).lower()
 
 
+def strip_note(a):
+    """정답 항목의 괄호 주석 제거: '플랑크 복사 법칙(확인)' → '플랑크 복사 법칙'."""
+    return re.sub(r"\s*\([^)]*\)\s*$", "", str(a))
+
+
 def get(url):
     return json.load(urllib.request.urlopen(url, timeout=120))
+
+
+def _trace(rs):
+    """추론 과정 요약 (링킹·라우팅·홉) — 실패 원인 분석용."""
+    tg = rs.get("targeting") or {}
+    return {"linking": [{k: l.get(k) for k in ("entity", "uri", "equivalents") if l.get(k)}
+                        for l in rs.get("linking") or []],
+            "reason": tg.get("reason"), "paths": tg.get("selected_paths"),
+            "warnings": tg.get("warnings"), "adjustments": tg.get("adjustments"),
+            "n_triples": len(rs.get("triples") or [])}
 
 
 def main(kb_id, label, only=None):
@@ -32,12 +49,18 @@ def main(kb_id, label, only=None):
     docs = get(BASE + kb_id + "/documents")
     docs = docs if isinstance(docs, list) else docs.get("documents", [])
     id_by_name = {d["filename"]: d["id"] for d in docs}
+    # AGENTIC=auto|always 이면 KB 파이프라인 앞에 에이전틱 필터를 붙여 요청 (docs/design-agentic-filter.md)
+    agentic = os.getenv("AGENTIC")
+    pipeline = None
+    if agentic:
+        stages = [s for s in (get(BASE + kb_id).get("pipeline_config") or {}).get("stages", []) if s["type"] != "agentic"]
+        pipeline = {"stages": [{"type": "agentic", "params": {"mode": agentic}}] + stages}
     rows = []
     for q in qs:
         if only and q["id"] not in only:
             continue
         t = time.time()
-        req = urllib.request.Request(BASE + kb_id + "/chat", data=json.dumps({"query": q["question"]}).encode(),
+        req = urllib.request.Request(BASE + kb_id + "/chat", data=json.dumps({"query": q["question"], **({"pipeline": pipeline} if pipeline else {})}).encode(),
                                      headers={"Content-Type": "application/json"})
         try:
             d = json.load(urllib.request.urlopen(req, timeout=900))
@@ -52,7 +75,7 @@ def main(kb_id, label, only=None):
             answer_hit = bool(NEG_PAT.search(ans))
             partial = answer_hit
         else:
-            hits = [a for a in q["answer"] if norm(a) and norm(a) in norm(ans)]
+            hits = [a for a in q["answer"] if norm(strip_note(a)) and norm(strip_note(a)) in norm(ans)]
             answer_hit = len(hits) == len(q["answer"])
             partial = len(hits) > 0
         want_docs = {id_by_name.get(n) for fid in q.get("fact_ids", []) for n in facts.get(fid, {}).get("docs", [])}
@@ -62,12 +85,12 @@ def main(kb_id, label, only=None):
         rows.append({"id": q["id"], "type": q["type"], "hops": q.get("hops"), "mode": mode,
                      "answer_hit": answer_hit, "partial": partial, "evidence_hit": evidence_hit,
                      "sec": round(time.time() - t, 1), "q": q["question"], "expected": q["answer"],
-                     "answer": ans[:300]})
+                     "answer": ans[:300], "trace": _trace(g.get("reasoning") or {})})
         r = rows[-1]
         print(f"{r['id']:4} {r['type']:10} mode={str(r['mode']):9} ans={'O' if r['answer_hit'] else ('△' if r['partial'] else 'X')} "
               f"evid={'O' if r['evidence_hit'] else ('-' if r['evidence_hit'] is None else 'X')} {r['sec']}s | {q['question'][:50]}",
               flush=True)
-    out = D + f"eval_{label}.json"
+    out = HERE + f"eval_{label}.json"
     json.dump(rows, open(out, "w"), ensure_ascii=False, indent=1)
     by = {}
     for r in rows:

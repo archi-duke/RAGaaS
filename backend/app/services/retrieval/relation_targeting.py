@@ -72,6 +72,17 @@ def _iri(uri: str) -> str:
     return f"<{uri}>"
 
 
+def _anchor_term(anchor, var: str = "?anchor") -> Tuple[str, str]:
+    """앵커 1개면 (<uri>, ""), 동일 엔티티 묶음(여러 URI)이면 (?anchor, "VALUES ?anchor {…} ").
+
+    VALUES 는 UNION 각 분기 안 맨 앞에 넣는다 — 분기 안의 BIND(?anchor AS ?s) 가 바인딩을 보도록.
+    """
+    uris = [anchor] if isinstance(anchor, str) else list(dict.fromkeys(anchor))
+    if len(uris) == 1:
+        return _iri(uris[0]), ""
+    return var, f"VALUES {var} {{ {' '.join(_iri(u) for u in uris)} }} "
+
+
 def _val(b: Dict[str, Any], key: str) -> Optional[str]:
     v = b.get(key)
     return v.get("value") if isinstance(v, dict) else None
@@ -115,26 +126,26 @@ def parse_json_loose(text: str) -> Optional[Dict[str, Any]]:
 # 1. 관계 경로 카탈로그
 # ---------------------------------------------------------------------------
 
-def build_catalog_query(anchor_uri: str) -> str:
+def build_catalog_query(anchor_uri) -> str:
     """앵커의 관계 경로 카탈로그 SPARQL.
 
     out: depth1(값 노드) / depth2·3(구조 노드 경유), in: depth1.
     결과: ?dir ?p0 ?p1 ?p2 ?n ?ex
     """
-    a = _iri(anchor_uri)
+    a, v = _anchor_term(anchor_uri)
     excluded = ", ".join(_EXCLUDED_PREDICATES)
     return f"""{_PREFIXES}
 SELECT ?dir ?p0 ?p1 ?p2 (COUNT(*) AS ?n) (SAMPLE(?o) AS ?ex)
 FROM <urn:x-arq:UnionGraph>
 WHERE {{
   {{
-    BIND("out" AS ?dir)
+    {v}BIND("out" AS ?dir)
     {a} ?p0 ?o .
     FILTER(!REGEX(STR(?o), "{STRUCT_NODE_REGEX}"))
   }}
   UNION
   {{
-    BIND("out" AS ?dir)
+    {v}BIND("out" AS ?dir)
     {a} ?p0 ?m .
     FILTER(REGEX(STR(?m), "{STRUCT_NODE_REGEX}"))
     ?m ?p1 ?o .
@@ -143,7 +154,7 @@ WHERE {{
   }}
   UNION
   {{
-    BIND("out" AS ?dir)
+    {v}BIND("out" AS ?dir)
     {a} ?p0 ?m .
     FILTER(REGEX(STR(?m), "{STRUCT_NODE_REGEX}"))
     ?m ?p1 ?m2 .
@@ -153,7 +164,7 @@ WHERE {{
   }}
   UNION
   {{
-    BIND("in" AS ?dir)
+    {v}BIND("in" AS ?dir)
     ?o ?p0 {a} .
     FILTER(!STRSTARTS(STR(?o), "{STMT_PREFIX}"))
   }}
@@ -443,9 +454,12 @@ _TAIL = """  OPTIONAL { ?s rdfs:label ?sLabel }
   }"""
 
 
-def build_targeted_query(anchor_uri: str, paths: List[Dict[str, Any]]) -> str:
-    """선택 경로만 조회 + 리프 트리플의 s-p-o 정확 일치 statement 로 청크 조인."""
-    a = _iri(anchor_uri)
+def build_targeted_query(anchor_uri, paths: List[Dict[str, Any]]) -> str:
+    """선택 경로만 조회 + 리프 트리플의 s-p-o 정확 일치 statement 로 청크 조인.
+
+    anchor_uri 는 URI 하나 또는 동일 엔티티 묶음(URI 목록).
+    """
+    a, v = _anchor_term(anchor_uri)
     branches = []
     for p in paths:
         u = p["uris"]
@@ -465,7 +479,7 @@ def build_targeted_query(anchor_uri: str, paths: List[Dict[str, Any]]) -> str:
             # 구조 경로 간선(앵커 → 첫 구조 노드)의 근거 청크 — 깊은 분기 안에서만 조인
             body += (f" OPTIONAL {{ ?est rdf:subject {a} ; rdf:predicate <{u[0]}> ; "
                      f"rdf:object ?mid ; meta:sourceNodeId ?edgeChunk . }}")
-        branches.append(f"  {{ {body} BIND(\"{key}\" AS ?path) }}")
+        branches.append(f"  {{ {v}{body} BIND(\"{key}\" AS ?path) }}")
     union = "\n  UNION\n".join(branches)
     return f"""{_PREFIXES}
 SELECT DISTINCT ?path ?s ?p ?o ?sLabel ?oLabel ?chunk ?edgeChunk
@@ -477,34 +491,35 @@ WHERE {{
 LIMIT {MAX_TARGETED_TRIPLES}"""
 
 
-def build_overview_query(anchor_uri: str) -> str:
+def build_overview_query(anchor_uri) -> str:
     """개요 질문: 앵커의 depth-1 이웃 (구조 노드로 가는 간선 제외)."""
-    a = _iri(anchor_uri)
+    a, v = _anchor_term(anchor_uri)
     excluded = ", ".join(_EXCLUDED_PREDICATES)
     return f"""{_PREFIXES}
 SELECT DISTINCT ?path ?s ?p ?o ?sLabel ?oLabel ?chunk
 FROM <urn:x-arq:UnionGraph>
 WHERE {{
-  {{ BIND({a} AS ?s) ?s ?p ?o . FILTER(!REGEX(STR(?o), "{STRUCT_NODE_REGEX}")) BIND("overview" AS ?path) }}
+  {{ {v}BIND({a} AS ?s) ?s ?p ?o . FILTER(!REGEX(STR(?o), "{STRUCT_NODE_REGEX}")) BIND("overview" AS ?path) }}
   UNION
-  {{ BIND({a} AS ?o) ?s ?p ?o . FILTER(!STRSTARTS(STR(?s), "{STMT_PREFIX}")) BIND("overview-in" AS ?path) }}
+  {{ {v}BIND({a} AS ?o) ?s ?p ?o . FILTER(!STRSTARTS(STR(?s), "{STMT_PREFIX}")) BIND("overview-in" AS ?path) }}
   FILTER(?p NOT IN ({excluded}))
 {_TAIL}
 }}
 LIMIT {OVERVIEW_LIMIT * 3}"""
 
 
-def build_pair_query(uri1: str, uri2: str) -> str:
-    """두 엔티티 사이의 직접 관계 (양방향, URI 고정)."""
-    a, b = _iri(uri1), _iri(uri2)
+def build_pair_query(uri1, uri2) -> str:
+    """두 엔티티 사이의 직접 관계 (양방향, URI 고정). 각 쪽은 URI 하나 또는 동일 엔티티 묶음."""
+    a, va = _anchor_term(uri1, "?anchorA")
+    b, vb = _anchor_term(uri2, "?anchorB")
     excluded = ", ".join(_EXCLUDED_PREDICATES)
     return f"""{_PREFIXES}
 SELECT DISTINCT ?path ?s ?p ?o ?sLabel ?oLabel ?chunk
 FROM <urn:x-arq:UnionGraph>
 WHERE {{
-  {{ BIND({a} AS ?s) BIND({b} AS ?o) ?s ?p ?o . BIND("pair" AS ?path) }}
+  {{ {va}{vb}BIND({a} AS ?s) BIND({b} AS ?o) ?s ?p ?o . BIND("pair" AS ?path) }}
   UNION
-  {{ BIND({b} AS ?s) BIND({a} AS ?o) ?s ?p ?o . BIND("pair" AS ?path) }}
+  {{ {va}{vb}BIND({b} AS ?s) BIND({a} AS ?o) ?s ?p ?o . BIND("pair" AS ?path) }}
   FILTER(?p NOT IN ({excluded}))
 {_TAIL}
 }}
@@ -608,6 +623,9 @@ MODE_LABELS = {
     "pair": "pair(두 엔티티 직접 관계)",
     "none": "none(일치 관계 없음)",
     "P": "P(질의 계획 — 유형 수준)",
+    "H": "H(다단계 체인 — 홉별 관계 고정 조회)",
+    "E": "E(앵커별 관계 조회 — 두 엔티티를 각각 조회해 비교·계산)",
+    "V": "V(그래프로 답할 수 없음 → 문서 검색)",
 }
 ROLE_LABELS = {"filter": "필터", "aggregate": "집계", "return": "반환"}
 TIER_LABELS = {1: "완전일치", 2: "어간일치", 3: "토큰포함"}
@@ -654,6 +672,9 @@ def render_reasoning_report(reasoning: Dict[str, Any], max_triples: int = 15) ->
             note = ""
             if l.get("value_node"):
                 note = " (값 노드 — 부분일치라 조건 힌트로 쓰지 않음)" if l.get("hint_dropped") else " (값 노드 — 조건 값으로 사용)"
+            eq = l.get("equivalents") or []
+            if eq:
+                note += f" (동일 엔티티 {len(eq)}개 함께 조회: {', '.join(local_name(u) for u in eq)})"
             parts.append(f"'{l['entity']}' → inst:{local_name(l['uri'])}{note}")
         lines.append(f"[Graph 2/5 엔티티 링킹] {' | '.join(parts)}{kinds_txt}")
     else:
@@ -718,7 +739,7 @@ def render_reasoning_report(reasoning: Dict[str, Any], max_triples: int = 15) ->
     for i, c in enumerate(chunks, 1):
         idx = ",".join(str(x) for x in c.get("triple_idx") or [])
         kind = " (구조 간선)" if c.get("kind") == "edge" else ""
-        missing = " — 벡터 저장소에 본문 없음" if c.get("missing") else ""
+        missing = " — top_k 밖 (답변에 미사용)" if c.get("missing") else ""
         lines.append(f"  #{i} {_short_chunk(c['chunk_id'])} ⟵ 트리플 {idx}{kind}{missing}")
     if reasoning.get("note"):
         lines.append(f"[Graph] 참고: {reasoning['note']}")

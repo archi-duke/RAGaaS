@@ -6,7 +6,7 @@ import { useModelSettings } from '../hooks/useModelSettings';
 import config from '../platform/config';
 
 // Stage type definitions
-export type StageType = 'smalltalk' | 'ann' | 'bm25' | 'brute_force' | 'graph' | 'rerank' | 'ner_filter';
+export type StageType = 'smalltalk' | 'agentic' | 'ann' | 'bm25' | 'brute_force' | 'graph' | 'rerank' | 'ner_filter';
 
 export interface PipelineStage {
     type: StageType;
@@ -33,7 +33,10 @@ const SEARCH_STAGES: { type: StageType; label: string; category: 'search' }[] = 
     { type: 'graph', label: 'Graph', category: 'search' },
 ];
 
+// agentic: 등록된 검색 스테이지를 도구로 삼아 검색 방식·순서를 정하고 단계별로 진행 (docs/design-agentic-filter.md).
+// 파이프라인에 하나만, Gate 뒤·검색 스테이지 앞에 자동 배치.
 const FILTER_STAGES: { type: StageType; label: string; category: 'filter' }[] = [
+    { type: 'agentic', label: 'Agentic', category: 'filter' },
     { type: 'rerank', label: 'Re-Rank', category: 'filter' },
     { type: 'ner_filter', label: 'NER Filter', category: 'filter' },
 ];
@@ -46,6 +49,7 @@ const GATE_STAGES: { type: StageType; label: string; category: 'gate' }[] = [
 
 const DEFAULT_PARAMS: Record<StageType, Record<string, any>> = {
     smalltalk: { llm_model: DEFAULT_LLM_CONFIG },
+    agentic: { llm_model: DEFAULT_LLM_CONFIG, mode: 'auto', max_steps: 6, time_budget_s: 40 },
     ann: { top_k: 10, threshold: 0.5, index_type: 'IVF_FLAT', embedding_model: DEFAULT_EMBEDDING_CONFIG },
     bm25: { top_k: 50, use_multi_pos: true },
     brute_force: { top_k: 3, threshold: 1.5 },
@@ -144,8 +148,11 @@ export default function PipelineBuilder({
     const gateStages = hasSmalltalk ? [] : GATE_STAGES;
 
     // Available stages based on current state
+    // agentic 도 하나만 의미가 있다
+    const hasAgentic = stages.some(s => s.type === 'agentic');
+    const filterStages = hasAgentic ? FILTER_STAGES.filter(s => s.type !== 'agentic') : FILTER_STAGES;
     const availableStages = hasSearchStage
-        ? [...gateStages, ...SEARCH_STAGES, ...FILTER_STAGES]
+        ? [...gateStages, ...SEARCH_STAGES, ...filterStages]
         : [...gateStages, ...SEARCH_STAGES];
 
     // Filter graph if no graph backend
@@ -317,13 +324,26 @@ export default function PipelineBuilder({
         if (type === 'rerank') {
             params.llm_model = settings.chat_llm; // or a dedicated rerank_llm if we add one
         }
+        if (type === 'agentic') {
+            // 기본은 그래프 질의 모델 — 사용자가 카드에서 바꿀 수 있다
+            params.llm_model = settings.graph_query_llm;
+        }
 
         const newStage: PipelineStage = {
             type,
             params
         };
         // smalltalk 는 검색 앞단 게이트 → 맨 앞에 배치, 그 외는 맨 뒤에 추가
-        setStages(type === 'smalltalk' ? [newStage, ...stages] : [...stages, newStage]);
+        // agentic 은 검색 과정을 이끄는 필터 → Gate 바로 뒤(없으면 맨 앞)
+        if (type === 'smalltalk') {
+            setStages([newStage, ...stages]);
+        } else if (type === 'agentic') {
+            const gateIdx = stages.findIndex(s => s.type === 'smalltalk');
+            const at = gateIdx >= 0 ? gateIdx + 1 : 0;
+            setStages([...stages.slice(0, at), newStage, ...stages.slice(at)]);
+        } else {
+            setStages([...stages, newStage]);
+        }
         setShowDropdown(false);
     };
 
@@ -355,17 +375,18 @@ export default function PipelineBuilder({
 
         const usesLLM =
             stage.type === 'smalltalk' ||
+            stage.type === 'agentic' ||
             stage.type === 'graph' ||
             (stage.type === 'rerank' && stage.params.use_llm);
 
         const baseStyle = usesLLM ? cardStyleLLM : cardStyle;
         const cardStyles: React.CSSProperties = {
             ...baseStyle,
-            paddingBottom: stage.type === 'graph' ? 0 : '0.65rem',
+            paddingBottom: (stage.type === 'graph' || stage.type === 'agentic') ? 0 : '0.65rem',
             width: 'fit-content',
             minWidth: '180px',
             flexShrink: 0,
-            ...(stage.type === 'graph' && { height: 'auto', minHeight: '160px' }),
+            ...((stage.type === 'graph' || stage.type === 'agentic') && { height: 'auto', minHeight: '160px' }),
         };
 
         return (
@@ -529,6 +550,50 @@ export default function PipelineBuilder({
                             value={params.llm_model || DEFAULT_LLM_CONFIG}
                             onChange={(cfg) => handleParamChange(index, 'llm_model', cfg)}
                         />
+                    </div>
+                );
+
+            case 'agentic':
+                // Graph 카드와 같은 배치: 슬라이더 왼쪽 고정, 옆에 Mode → Model
+                return (
+                    <div style={{ display: 'flex', flexDirection: 'row', gap: '0.3rem', alignItems: 'flex-start' }}>
+                        <div style={{ display: 'flex', flexDirection: 'row', gap: '0.3rem', flexShrink: 0 }}>
+                            <ParamSlider
+                                label="Max Steps"
+                                value={params.max_steps ?? 6}
+                                min={1} max={10}
+                                onChange={(v) => handleParamChange(index, 'max_steps', v)}
+                            />
+                            <ParamSlider
+                                label="Time (s)"
+                                value={params.time_budget_s ?? 40}
+                                min={10} max={120} step={5}
+                                onChange={(v) => handleParamChange(index, 'time_budget_s', v)}
+                            />
+                        </div>
+                        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '0.3rem', minWidth: 0 }}>
+                            <div style={{ display: 'flex', alignItems: 'center' }} title="auto: 복합 질문이거나 단일 실행이 근거 없이 끝날 때만 단계 진행 / always: 항상 단계 진행">
+                                <ParamSelect
+                                    label="Mode"
+                                    layout="inline"
+                                    minWidth="80px"
+                                    value={params.mode || 'auto'}
+                                    options={[
+                                        { value: 'auto', label: 'Auto' },
+                                        { value: 'always', label: 'Always' }
+                                    ]}
+                                    onChange={(v) => handleParamChange(index, 'mode', v)}
+                                />
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', flexWrap: 'wrap' }}>
+                                <span style={{ fontSize: '0.7rem', color: '#475569', flexShrink: 0 }}>Model</span>
+                                <ModelSelector
+                                    type="llm"
+                                    value={params.llm_model || DEFAULT_LLM_CONFIG}
+                                    onChange={(cfg) => handleParamChange(index, 'llm_model', cfg)}
+                                />
+                            </div>
+                        </div>
                     </div>
                 );
 

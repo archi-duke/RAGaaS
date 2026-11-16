@@ -1,3 +1,5 @@
+import asyncio
+import os
 import re
 import urllib.parse
 import logging
@@ -86,10 +88,20 @@ class FusekiBackend(GraphBackend):
             return None
         conds = [f'CONTAINS({var}, "{escape_sparql_literal(t)}")' for t in toks[:8]]
         conds.append(f'(STRLEN({var}) >= 3 && CONTAINS("{escape_sparql_literal(norm_entity)}", {var}))')
+        # 띄어쓰기 차이 ('광전효과' ↔ 라벨 '광전 효과'): 공백 제거 후 포함 비교
+        compact = norm_entity.replace(" ", "")
+        if len(compact) >= 2:
+            cv = f'REPLACE({var}, " ", "")'
+            conds.append(f'CONTAINS({cv}, "{escape_sparql_literal(compact)}")')
         return " || ".join(conds)
 
     def _resolve_entity_to_uri(self, kb_id: str, entity_text: str) -> Optional[str]:
-        """텍스트 엔티티를 그래프 URI로 매핑.
+        """텍스트 엔티티를 그래프 URI로 매핑 (최고점 후보 1개). _resolve_entity_candidates 참고."""
+        ranked = self._resolve_entity_candidates(kb_id, entity_text)
+        return ranked[0] if ranked else None
+
+    def _resolve_entity_candidates(self, kb_id: str, entity_text: str, k: int = 5) -> List[str]:
+        """텍스트 엔티티의 그래프 URI 후보를 점수순으로 최대 k개.
 
         Args:
             kb_id: Knowledge Base ID
@@ -106,10 +118,10 @@ class FusekiBackend(GraphBackend):
         try:
             from app.services.retrieval.entity_linking import is_linkable
             if not is_linkable(entity_text):
-                return None
+                return []
             label_filter = self._link_candidate_filter("?nl", entity_text)
             if not label_filter:
-                return None
+                return []
 
             # 1. rdfs:label 기준 후보
             label_query = f"""
@@ -130,9 +142,9 @@ class FusekiBackend(GraphBackend):
             """
             results = fuseki_client.query_sparql(kb_id, label_query)
             bindings = results.get("results", {}).get("bindings", [])
-            best_uri = self._pick_best_uri_binding(entity_text, bindings, value_key="label")
-            if best_uri:
-                return best_uri
+            ranked = self._rank_uri_bindings(entity_text, bindings, value_key="label")
+            if ranked:
+                return [u for u, _ in ranked[:k]]
 
             # 2. URI 로컬네임 기준 후보 (라벨이 없는 노드 대비)
             local_filter = self._link_candidate_filter("?nl", entity_text)
@@ -154,28 +166,93 @@ class FusekiBackend(GraphBackend):
             """
             results = fuseki_client.query_sparql(kb_id, uri_query)
             bindings = results.get("results", {}).get("bindings", [])
-            best_uri = self._pick_best_uri_binding(entity_text, bindings, value_key=None)
-            if best_uri:
-                return best_uri
+            ranked = self._rank_uri_bindings(entity_text, bindings, value_key=None)
+            if ranked:
+                return [u for u, _ in ranked[:k]]
 
             print(f"[Fuseki] Entity Resolution: '{entity_text}' not found in graph")
-            return None
+            return []
 
         except Exception as e:
             print(f"[Fuseki] Error resolving entity '{entity_text}': {e}")
-            return None
+            return []
 
     def _pick_best_uri_binding(self, entity_text: str, bindings: List[Dict], value_key: Optional[str]) -> Optional[str]:
         """SPARQL 바인딩 후보들에서 entity_text 와 가장 잘 매칭되는 URI 선택.
 
         value_key 가 지정되면 그 변수(예: label)의 값을 비교 기준으로 삼고,
         None 이면 URI 의 로컬네임(마지막 path 세그먼트, URL 디코드)을 기준으로 삼는다.
-        랭킹은 entity_linking.score_candidate + out-degree 보너스(최대 8점, ?deg 가
+        랭킹은 entity_linking.score_candidate + 관계 수 보너스(degree_bonus, ?deg 가
         있을 때). 최고점이 _MIN_LINK_SCORE 미만이면 None.
         """
-        from app.services.retrieval.entity_linking import score_candidate
+        ranked = self._rank_uri_bindings(entity_text, bindings, value_key)
+        return ranked[0][0] if ranked else None
 
-        best_uri, best_score = None, 0.0
+    _EQUIV_CACHE: Dict[Tuple[str, str], Tuple[float, List[str]]] = {}
+    _EQUIV_TTL = 300.0
+    _MAX_EQUIV = 5
+
+    def _equivalent_uris(self, kb_id: str, uri: str) -> List[str]:
+        """uri 와 같은 대상으로 볼 노드들 (자신 포함, 자신이 맨 앞). entity_linking.equivalent_names 규칙.
+
+        추출 그래프는 '볼츠만'/'루트비히_볼츠만', '양자_전기역학'/'양자전기역학' 처럼 같은 대상을
+        여러 노드로 만든다. 앵커·체인 프론티어를 묶음으로 확장해 다른 노드에 달린 사실도 조회한다.
+        """
+        import time
+        from app.services.retrieval.entity_linking import _compact, equivalent_names, tokens
+
+        inst = "http://rag.local/inst/"
+        if not uri.startswith(inst):
+            return [uri]
+        key = (kb_id, uri)
+        hit = self._EQUIV_CACHE.get(key)
+        if hit and time.time() - hit[0] < self._EQUIV_TTL:
+            return hit[1]
+        name = urllib.parse.unquote(uri[len(inst):])
+        toks = tokens(name)
+        if not toks:
+            return [uri]
+        last, compact = toks[-1], _compact(name)
+        q = f"""
+        PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+        SELECT DISTINCT ?u ?t
+        FROM <urn:x-arq:UnionGraph>
+        WHERE {{
+          ?u ?p ?o .
+          FILTER(STRSTARTS(STR(?u), "{inst}"))
+          FILTER(!REGEX(STR(?u), "/inst/root_[0-9]+_"))
+          BIND(LCASE(REPLACE(REPLACE(STRAFTER(STR(?u), "{inst}"), "_", ""), "-", "")) AS ?cu)
+          FILTER(CONTAINS(LCASE(STR(?u)), "{escape_sparql_literal(last)}") || CONTAINS(?cu, "{escape_sparql_literal(compact)}"))
+          OPTIONAL {{ ?u rdf:type ?t }}
+        }}
+        LIMIT 300
+        """
+        out = [uri]
+        try:
+            cands: Dict[str, set] = {}
+            uri_of: Dict[str, str] = {}
+            for b in fuseki_client.query_sparql(kb_id, q).get("results", {}).get("bindings", []):
+                u = b["u"]["value"]
+                t = b.get("t", {}).get("value")
+                n = urllib.parse.unquote(u[len(inst):])
+                uri_of.setdefault(n, u)
+                cands.setdefault(n, set())
+                if t:
+                    cands[n].add(t.rsplit("/", 1)[-1].rsplit("#", 1)[-1])
+            own = cands.pop(name, set())
+            for n in equivalent_names(name, own, cands)[: self._MAX_EQUIV]:
+                out.append(uri_of[n])
+        except Exception as e:
+            print(f"[Fuseki] equivalent lookup failed for {uri}: {e}")
+        self._EQUIV_CACHE[key] = (time.time(), out)
+        return out
+
+    def _rank_uri_bindings(self, entity_text: str, bindings: List[Dict], value_key: Optional[str]
+                           ) -> List[Tuple[str, float]]:
+        """후보 URI 를 점수 내림차순으로 (URI 중복 제거, _MIN_LINK_SCORE 미만 제외)."""
+        from app.services.retrieval.entity_linking import degree_bonus, score_candidate
+
+        best: Dict[str, float] = {}
         for b in bindings:
             uri = b.get("uri", {}).get("value")
             if not uri:
@@ -191,12 +268,11 @@ class FusekiBackend(GraphBackend):
                 deg = int(b.get("deg", {}).get("value", 0))
             except (TypeError, ValueError):
                 deg = 0
-            score += min(8.0, float(deg))
-            if score > best_score:
-                best_uri, best_score = uri, score
-        if best_score < self._MIN_LINK_SCORE:
-            return None
-        return best_uri
+            score += degree_bonus(deg)
+            if score > best.get(uri, 0.0):
+                best[uri] = score
+        ranked = sorted(((u, sc) for u, sc in best.items() if sc >= self._MIN_LINK_SCORE), key=lambda x: -x[1])
+        return ranked
 
     def _fetch_entity_predicates(self, kb_id: str, entity_uri: str) -> Dict[str, List[str]]:
         """엔티티 URI에 연결된 모든 Predicate 조회.
@@ -559,7 +635,9 @@ class FusekiBackend(GraphBackend):
 
             log_trace(f"[Fuseki] Calling LLM SPARQL Generator (retry={'yes' if retry_context else 'no'})")
             print(f"[DEBUG] Calling SPARQLGenerator.generate() with inv_mode={inv_mode}", flush=True)
-            gen_result = active_generator.generate(
+            # generate() 는 동기 HTTP 호출 — 스레드로 넘겨 이벤트 루프(다른 요청)를 막지 않는다
+            gen_result = await asyncio.to_thread(
+                active_generator.generate,
                 question=question,
                 context=f"Entities: {', '.join(entities)}",
                 mode="ontology",
@@ -617,7 +695,8 @@ class FusekiBackend(GraphBackend):
             from app.services.retrieval.query_validation import sparql_schema_hint
             return sparql_schema_hint(failed_query, allowed_predicates)
 
-        loop = QueryGenerationLoop(max_retries=2)
+        # C 는 H·A·B·P 가 모두 안 될 때의 마지막 경로 — 재시도는 1회만 (평가에서 재시도 성공이 드물고 문항당 1~2분 소모)
+        loop = QueryGenerationLoop(max_retries=1)
         loop_result = await loop.run(query_text, generate_fn, execute_fn, schema_hint_fn=schema_hint_fn)
 
         try:
@@ -804,15 +883,49 @@ class FusekiBackend(GraphBackend):
         trace_logs = kwargs.get("_trace_logs_ref")
         reasoning: Dict[str, Any] = dict(kwargs.get("_reasoning") or {})
 
+        # 동일 엔티티 묶음: 앵커와 같은 대상인 다른 노드도 함께 조회 (리포트에 표시)
+        anchor_sets: Dict[str, List[str]] = {}
+        for _, u in resolved[:2]:
+            anchor_sets[u] = self._equivalent_uris(kb_id, u)
+        for l in reasoning.get("linking") or []:
+            eq = [x for x in anchor_sets.get(l.get("uri"), []) if x != l.get("uri")]
+            if eq:
+                l["equivalents"] = eq
+
         # 두 엔티티 관계: 양 끝 URI 를 고정한 직접 관계 조회
         if len(resolved) >= 2:
             (n1, u1), (n2, u2) = resolved[0], resolved[1]
-            sparql = rt.build_pair_query(u1, u2)
+            sparql = rt.build_pair_query(anchor_sets[u1], anchor_sets[u2])
             triples = self._run_triple_query(kb_id, sparql, "")
             log_trace(f"[Fuseki] Pair query {n1} ↔ {n2}: {len(triples)} triples")
             if triples:
                 reasoning["targeting"] = {"mode": "pair", "matches": [], "selected_paths": [f"{n1} ↔ {n2}"]}
                 return self._targeted_result(sparql, triples, reasoning, trace_logs), []
+            # 직접 관계가 없으면 앵커별로 관계를 조회해 합친다 (E) — "A와 B는 같은 해인가", "몇 년 걸렸나" 형.
+            # 비교·계산은 근거 청크를 보고 답변 LLM 이 한다.
+            merged, parts, sqls = [], [], []
+            for idx, (n, u) in enumerate(resolved[:2], 1):
+                sub, _ = await self._relation_targeted_query(kb_id, query_text, [(n, u)], kwargs, log_trace)
+                st = ((sub or {}).get("reasoning") or {}).get("targeting") or {}
+                if sub and st.get("mode") in ("A", "B") and sub["reasoning"].get("triples"):
+                    for t in sub["reasoning"]["triples"]:
+                        merged.append({**t, "hop": idx})
+                    parts += [f"{n}: {sp}" for sp in st.get("selected_paths") or []]
+                    sqls.append(sub["sparql_query"])
+            if merged:
+                from app.services.retrieval import chain_query as cq
+                log_trace(f"[Fuseki] Per-anchor query {n1} / {n2}: {len(merged)} triples")
+                reasoning["targeting"] = {"mode": "E", "matches": [], "selected_paths": parts,
+                                          "reason": f"{n1}와 {n2} 사이 직접 관계 없음 → 앵커별 조회"}
+                ranked = cq.order_chunks_by_hop(merged)
+                sparql = "\n# ---- next anchor ----\n".join(sqls)
+                reasoning.update({"sparql": sparql, "triples": merged, "chunks": ranked,
+                                  "chunk_order_label": "앵커별 교차 (두 엔티티의 근거 포함)"})
+                public = [{"subject": t["subject"], "predicate": t["predicate"], "object": t["object"],
+                           "chunk_ids": t["chunk_ids"], "path": t["path"]} for t in merged]
+                return {"chunk_ids": [c["chunk_id"] for c in ranked], "chunk_order": "linkage",
+                        "sparql_query": sparql, "triples": public, "found_entities": [],
+                        "used_fallback": False, "reasoning": reasoning, "trace_logs": trace_logs}, []
             preds = list(set(self._fetch_outgoing_predicates(kb_id, u1) + self._fetch_incoming_predicates(kb_id, u1)
                              + self._fetch_outgoing_predicates(kb_id, u2) + self._fetch_incoming_predicates(kb_id, u2)))
             kwargs["_reasoning"] = {**reasoning, "targeting": {
@@ -823,7 +936,8 @@ class FusekiBackend(GraphBackend):
         anchor_label = rt.local_name(anchor_uri)
         role = self._entity_role(entity_name, query_text, kwargs)
 
-        cat_res = fuseki_client.query_sparql(kb_id, rt.build_catalog_query(anchor_uri))
+        anchor_set = anchor_sets.get(anchor_uri) or [anchor_uri]
+        cat_res = fuseki_client.query_sparql(kb_id, rt.build_catalog_query(anchor_set))
         catalog = rt.parse_catalog(cat_res.get("results", {}).get("bindings", []))
         catalog_preds = list(dict.fromkeys(u for p in catalog for u in p["uris"]))
         log_trace(f"[Fuseki] Relation catalog for {anchor_label}: {len(catalog)} paths (role={role})")
@@ -878,14 +992,14 @@ class FusekiBackend(GraphBackend):
                 targeting["reason"] = "앵커에 연결된 관계 경로 없음"
 
         if mode == "overview":
-            sparql = rt.build_overview_query(anchor_uri)
+            sparql = rt.build_overview_query(anchor_set)
             triples = self._run_triple_query(kb_id, sparql, anchor_label, limit=rt.OVERVIEW_LIMIT)
             targeting.update({"mode": "overview", "selected_paths": ["depth-1 이웃 (구조 노드 하위 제외)"]})
             reasoning["targeting"] = targeting
             return self._targeted_result(sparql, triples, reasoning, trace_logs), []
 
         if mode in ("A", "B") and selected:
-            sparql = rt.build_targeted_query(anchor_uri, selected)
+            sparql = rt.build_targeted_query(anchor_set, selected)
             triples = self._run_triple_query(kb_id, sparql, anchor_label)
             targeting.update({"mode": mode, "selected_paths": [rt.path_label(p) for p in selected]})
             reasoning["targeting"] = targeting
@@ -899,6 +1013,191 @@ class FusekiBackend(GraphBackend):
         )
         reasoning["targeting"] = targeting
         return self._targeted_result("", [], reasoning, trace_logs), []
+
+    # ------------------------------------------------------------------
+    # 다단계 질문 — 홉별 결정적 체인 (docs/design-graph-multihop-chain.md)
+    # ------------------------------------------------------------------
+
+    async def _chain_query(self, kb_id: str, query_text: str, kwargs: Dict[str, Any], log_trace
+                           ) -> Optional[Dict[str, Any]]:
+        from app.core.llm import achat, no_thinking_extra_body
+        from app.core.models_resolver import resolve_model_config
+        from app.services.retrieval import chain_query as cq
+        from app.services.retrieval import relation_targeting as rt
+
+        trace_logs = kwargs.get("_trace_logs_ref")
+        reasoning: Dict[str, Any] = dict(kwargs.get("_reasoning") or {})
+        schema_props: List[Dict[str, Any]] = []
+        try:
+            from app.models.knowledge_base import KnowledgeBase
+            kb = await KnowledgeBase.get(kb_id)
+            if kb and kb.schema_status == "active":
+                schema_props = ((kb.promotion_metadata or {}).get("induction") or {}).get("properties") or []
+        except Exception:
+            pass
+        vocab = cq.build_vocab(self._bindings(kb_id, cq.build_vocab_query()), schema_props)
+        if not vocab:
+            return None
+        try:
+            cfg = await resolve_model_config(kwargs.get("llm_model_config") or {})
+            content = await achat(cfg, cq.build_plan_messages(query_text, vocab), model=cfg.get("model"),
+                                  temperature=0, response_format={"type": "json_object"},
+                                  extra_body=no_thinking_extra_body(cfg.get("model")))
+        except Exception as e:
+            log_trace(f"[Fuseki] Chain plan LLM unavailable ({e}) → LLM SPARQL generation")
+            return None
+        plan, notes = cq.validate_plan(rt.parse_json_loose(content), vocab)
+        targeting: Dict[str, Any] = {"mode": "H", "catalog_size": len(vocab), "adjustments": notes}
+        if plan is None:
+            log_trace(f"[Fuseki] Chain plan rejected: {notes}")
+            kwargs["_reasoning"] = {**reasoning, "targeting": {
+                **targeting, "mode": "C", "reason": f"체인 계획 불가({'; '.join(notes[-1:])}) → LLM SPARQL 생성"}}
+            return None
+
+        cands = [u for u in self._resolve_entity_candidates(kb_id, plan["start"], k=3) if "/inst/" in u]
+        if not cands:
+            kwargs["_reasoning"] = {**reasoning, "targeting": {
+                **targeting, "mode": "C", "reason": f"출발 엔티티 '{plan['start']}' 를 그래프에서 찾지 못함 → LLM SPARQL 생성"}}
+            return None
+
+        def run_hop(frontier: List[str], h: Dict[str, Any]):
+            """홉 1회: (트리플, 쿼리들, 실제 쓴 홉, 반대 방향 재시도 여부)."""
+            tag = f"hop{h['no']}"
+            dirs = ["out", "in"] if h.get("both") else [h["direction"]]
+            triples, qs = [], []
+            for d in dirs:
+                q = cq.build_hop_query(frontier, h["relations"], d, tag)
+                qs.append(q)
+                triples += cq.parse_hop(self._bindings(kb_id, q), h["no"])
+            if not triples and not h.get("both"):
+                d2 = "in" if h["direction"] == "out" else "out"
+                q2 = cq.build_hop_query(frontier, h["relations"], d2, tag)
+                t2 = cq.parse_hop(self._bindings(kb_id, q2), h["no"])
+                if t2:
+                    return t2, [q2], {**h, "direction": d2}, True
+            return triples, qs, h, False
+
+        async def repick(frontier: List[str], h: Dict[str, Any]):
+            """끊긴 홉: 프론티어에 실제로 달린 관계 중에서 LLM 이 대신할 관계를 고른다."""
+            opts = cq.parse_frontier_relations(self._bindings(kb_id, cq.build_frontier_relations_query(frontier)))
+            if not opts:
+                return None
+            try:
+                content = await achat(cfg, cq.build_repick_messages(query_text, h, cq.frontier_names(frontier), opts),
+                                      model=cfg.get("model"), temperature=0, response_format={"type": "json_object"},
+                                      extra_body=no_thinking_extra_body(cfg.get("model")))
+            except Exception as e:
+                log_trace(f"[Fuseki] Chain repick LLM unavailable ({e})")
+                return None
+            picks = cq.validate_repick(rt.parse_json_loose(content), opts)
+            if not picks:
+                return None
+            triples, qs = [], []
+            for d in ("out", "in"):
+                rels = [p["relation"] for p in picks if p["direction"] == d]
+                if rels:
+                    q = cq.build_hop_query(frontier, rels, d, f"hop{h['no']}")
+                    qs.append(q)
+                    triples += cq.parse_hop(self._bindings(kb_id, q), h["no"])
+            dirs = {p["direction"] for p in picks}
+            h2 = {**h, "relations": [p["relation"] for p in picks], "direction": picks[0]["direction"],
+                  "both": len(dirs) > 1, "repicked": True}
+            return triples, qs, h2, False
+
+        def expand(uris: List[str]) -> List[str]:
+            out: List[str] = []
+            for u in uris:
+                for e in self._equivalent_uris(kb_id, u):
+                    if e not in out:
+                        out.append(e)
+            return out[: cq.MAX_FRONTIER * 2]
+
+        hops = [{**h, "no": i} for i, h in enumerate(plan["hops"], 1)]
+        finals = [{**f, "no": len(hops) + 1} for f in plan["finals"]]
+        repick_used = False
+
+        # 출발 후보: 첫 홉이 성립하는 첫 후보 (링킹 1순위가 문장·복합어 노드일 때 대비)
+        start_uri, frontier, first = None, [], None
+        tried: List[str] = []
+        for u in cands:
+            fr = self._equivalent_uris(kb_id, u)
+            res = run_hop(fr, hops[0])
+            tried.append(rt.local_name(u))
+            if res[0]:
+                start_uri, frontier, first = u, fr, res
+                break
+        if start_uri is None:
+            fr = self._equivalent_uris(kb_id, cands[0])
+            res = await repick(fr, hops[0])
+            repick_used = True
+            if res and res[0]:
+                start_uri, frontier, first = cands[0], fr, res
+        if start_uri is None:
+            kwargs["_reasoning"] = {**reasoning, "targeting": {
+                **targeting, "mode": "C",
+                "reason": f"첫 홉에서 일치 관계 없음 (출발 후보: {', '.join(tried)}) → LLM SPARQL 생성"}}
+            return None
+        if rt.local_name(start_uri) != tried[0]:
+            notes.append(f"출발 후보 {', '.join(tried)} 중 첫 홉이 성립한 '{rt.local_name(start_uri)}' 에서 출발")
+        reasoning["linking"] = [{"entity": plan["start"], "uri": start_uri, "primary": True,
+                                 "equivalents": [x for x in frontier if x != start_uri]}]
+
+        all_triples: List[Dict[str, Any]] = []
+        sparqls: List[str] = []
+        steps: List[str] = []
+        visited = set(frontier)
+        reached = 0
+        for h in hops + finals:
+            if not frontier:
+                break
+            base = frontier
+            if first is not None:
+                triples, qs, h, flipped = first
+                first = None
+            else:
+                triples, qs, h, flipped = run_hop(base, h)
+                if not triples and not h.get("final") and not repick_used:
+                    repick_used = True
+                    res = await repick(base, h)
+                    if res:
+                        triples, qs, h, flipped = res
+            sparqls.extend(qs)
+            if h.get("final"):
+                nxt: List[str] = []
+            else:
+                nxt = expand(cq.next_frontier(triples, h["direction"], frontier=base, visited=visited))
+            label = cq.hop_label(h, len(base), len(triples), len(nxt), flipped)
+            if h.get("repicked"):
+                label += " (계획 관계가 0건이라 노드의 실제 관계 중 재선택)"
+            steps.append(label + (f" | 다음: {cq.frontier_names(nxt)}" if nxt else ""))
+            log_trace(f"[Fuseki] Chain {steps[-1]}")
+            all_triples.extend(triples)
+            if not h.get("final"):
+                if not triples:
+                    break
+                reached = h["no"]
+                visited.update(nxt)
+                frontier = nxt
+
+        if reached == 0:
+            kwargs["_reasoning"] = {**reasoning, "targeting": {
+                **targeting, "mode": "C", "selected_paths": steps,
+                "reason": "첫 홉에서 일치 관계 없음 → LLM SPARQL 생성"}}
+            return None
+        if reached < len(hops):
+            targeting["warnings"] = [f"체인이 홉{reached} 까지만 이어짐 (전체 {len(hops)}홉) — 답변은 찾은 범위의 근거로 제한"]
+        targeting.update({"selected_paths": steps,
+                          "reason": f"출발 '{plan['start']}' → {len(hops)}홉 계획, {reached}홉 도달"})
+        reasoning["targeting"] = targeting
+        ranked = cq.order_chunks_by_hop(all_triples)
+        sparql = "\n# ---- next hop ----\n".join(x.strip() for x in sparqls)
+        reasoning.update({"sparql": sparql, "triples": all_triples, "chunks": ranked,
+                          "chunk_order_label": "홉별 교차 (모든 홉의 근거 포함)"})
+        public = [{"subject": t["subject"], "predicate": t["predicate"], "object": t["object"],
+                   "chunk_ids": t["chunk_ids"], "path": t["path"]} for t in all_triples]
+        return {"chunk_ids": [c["chunk_id"] for c in ranked], "chunk_order": "linkage",
+                "sparql_query": sparql, "triples": public, "found_entities": [],
+                "used_fallback": False, "reasoning": reasoning, "trace_logs": trace_logs}
 
     # ------------------------------------------------------------------
     # 유형 수준 질문 — 질의 계획 (docs/design-graph-class-query.md)
@@ -923,6 +1222,37 @@ class FusekiBackend(GraphBackend):
         return True  # 판별 불가 시 기존 동작(앵커 경로) 유지
 
     _EQUIV_LLM_CACHE: Dict[str, Tuple[List[Tuple[str, str]], List[List[str]]]] = {}
+    # 재시작해도 남도록 파일에 보관 — 빈 캐시에서 유형 카탈로그를 만들면 LLM 5회로 약 35초 걸린다
+    _EQUIV_LLM_CACHE_PATH = os.getenv("EQUIV_LLM_CACHE_PATH", "data/cache/equiv_llm_cache.json")
+    _EQUIV_LLM_CACHE_LOADED = False
+
+    @classmethod
+    def _equiv_cache_load(cls) -> None:
+        if cls._EQUIV_LLM_CACHE_LOADED:
+            return
+        cls._EQUIV_LLM_CACHE_LOADED = True
+        try:
+            import json as _json
+            with open(cls._EQUIV_LLM_CACHE_PATH, encoding="utf-8") as f:
+                for k, (pairs, groups) in _json.load(f).items():
+                    cls._EQUIV_LLM_CACHE.setdefault(k, ([tuple(x) for x in pairs], groups))
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            logger.warning(f"equivalence LLM cache load failed: {e}")
+
+    @classmethod
+    def _equiv_cache_save(cls) -> None:
+        try:
+            import json as _json
+            os.makedirs(os.path.dirname(cls._EQUIV_LLM_CACHE_PATH) or ".", exist_ok=True)
+            tmp = cls._EQUIV_LLM_CACHE_PATH + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                _json.dump({k: [list(map(list, v[0])), v[1]] for k, v in cls._EQUIV_LLM_CACHE.items()},
+                           f, ensure_ascii=False)
+            os.replace(tmp, cls._EQUIV_LLM_CACHE_PATH)
+        except Exception as e:
+            logger.warning(f"equivalence LLM cache save failed: {e}")
 
     @classmethod
     def invalidate_class_catalog(cls, kb_id: str) -> None:
@@ -933,6 +1263,7 @@ class FusekiBackend(GraphBackend):
         """LLM 동치 패스 — 스키마 시그니처당 1회 (캐시). 실패 시 빈 결과."""
         from app.services.schema_alignment import equivalence as eq
         sig = f"{kb_id}:{kind_name}:{eq.catalog_signature(paths)}"
+        self._equiv_cache_load()
         if sig in self._EQUIV_LLM_CACHE:
             return self._EQUIV_LLM_CACHE[sig]
         if not any(len(p.get("member_ids") or ()) < total_members for p in paths):
@@ -953,6 +1284,7 @@ class FusekiBackend(GraphBackend):
             log_trace(f"[Fuseki] Equivalence LLM pass skipped: {e}")
             return [], []
         self._EQUIV_LLM_CACHE[sig] = result
+        self._equiv_cache_save()
         return result
 
     async def _class_catalog(self, kb_id: str, log_trace, kwargs: Optional[Dict[str, Any]] = None):
@@ -974,8 +1306,11 @@ class FusekiBackend(GraphBackend):
             return cached[2], cached[3]
 
         rules = await self._load_schema_rules(kb_id)
+        overlay = await self._load_schema_overlay(kb_id)
         use_llm = os.getenv("SCHEMA_EQUIV_LLM_AUTO_USE", "true").lower() != "false"
         kinds = cq.infer_kinds(self._bindings(kb_id, cq.build_member_query()))[: self._MAX_KINDS]
+        # 사람이 고친 유형 이름·설명 (스키마 편집기, 구조화 KB) — docs/design-schema-editor.md §7
+        cq.apply_kind_overlay(kinds, overlay)
         catalogs = {}
         for k in kinds:
             paths = cq.parse_kind_catalog(self._bindings(kb_id, cq.build_kind_catalog_query(k["members"])))
@@ -1004,10 +1339,21 @@ class FusekiBackend(GraphBackend):
                 for x in grp:
                     x["value_equiv"] = vmap
             k["equiv_groups"] = groups
+            cq.apply_path_overlay(paths, overlay)
             catalogs[k["name"]] = paths
+        cq.attach_ref_kinds(kinds, catalogs)
         self._CLASS_CATALOG_CACHE[kb_id] = (fingerprint, _time.time(), kinds, catalogs)
         log_trace(f"[Fuseki] Class catalog built: {[(k['name'], len(k['members']), len(k['equiv_groups'])) for k in kinds]}")
         return kinds, catalogs
+
+    async def _load_schema_overlay(self, kb_id: str) -> Dict[str, Any]:
+        """스키마 편집기 덧씌우기 (promotion_metadata.schema_overlay). 없거나 실패하면 빈 dict."""
+        try:
+            from app.models.knowledge_base import KnowledgeBase
+            kb = await KnowledgeBase.get(kb_id)
+            return ((kb.promotion_metadata or {}).get("schema_overlay") or {}) if kb else {}
+        except Exception:
+            return {}
 
     async def _load_schema_rules(self, kb_id: str) -> Dict[str, Any]:
         """KB 매핑 규칙 (Part 2). 규칙 저장소가 없거나 실패하면 빈 규칙."""
@@ -1097,9 +1443,28 @@ class FusekiBackend(GraphBackend):
         plan = checked["plan"]
         member_sparql = cq.compile_member_query(plan)
         entities = [cq._val(b, "e") for b in self._bindings(kb_id, member_sparql) if cq._val(b, "e")]
+        sparql_parts = [f"# 1) 조건을 만족하는 엔티티\n{member_sparql}"]
+        # 조건 완화: 계획 LLM 은 한 개념을 여러 신호로 풀어 AND 로 거는 경우가 있다
+        # ("서비스를 빠르게 추가" → release_frequency=high AND modifiability=high). 둘 다 만족하는
+        # 엔티티가 없으면 조건별 합집합(OR)으로 다시 조회하고 리포트에 남긴다. 부정 조건이 있으면 하지 않는다.
+        relaxed_note = None
+        if (not entities and len(plan["filters"]) >= 2 and not plan.get("aggregate")
+                and all(f["op"] not in ("ne", "not_exists") for f in plan["filters"])):
+            union: List[str] = []
+            for f in plan["filters"]:
+                q1 = cq.compile_member_query({**plan, "filters": [f]})
+                for b in self._bindings(kb_id, q1):
+                    e = cq._val(b, "e")
+                    if e and e not in union:
+                        union.append(e)
+            if union:
+                entities = union
+                plan = {**plan, "match": "any"}
+                relaxed_note = f"조건 완화: 모든 조건(AND)을 만족하는 엔티티 0개 → 조건 중 하나 이상(OR) {len(union)}개"
+                sparql_parts.append("# 1-b) AND 결과 0건 → 조건별로 다시 조회해 합집합(OR)")
+                log_trace(f"[Fuseki] {relaxed_note}")
         truncated = len(entities) > cq.MAX_RESULT_ENTITIES
         entities = entities[: cq.MAX_RESULT_ENTITIES]
-        sparql_parts = [f"# 1) 조건을 만족하는 엔티티\n{member_sparql}"]
 
         agg_values = None
         agg = plan.get("aggregate")
@@ -1146,7 +1511,7 @@ class FusekiBackend(GraphBackend):
                               + ([f"집계: {summary['aggregate']}"] if summary["aggregate"] else [])
                               + [f"반환: {r}" for r in summary["returns"]],
             "reason": plan.get("reason") or "",
-            "adjustments": checked.get("adjustments") or [],
+            "adjustments": (checked.get("adjustments") or []) + ([relaxed_note] if relaxed_note else []),
             "equivalences": summary.get("equivalences") or [],
             "warnings": warnings,
             "result_entities": [cq.local_name(e) for e in entities],
@@ -1252,6 +1617,7 @@ class FusekiBackend(GraphBackend):
                 intent = (kwargs.get("intent") or "").lower()
                 is_class_query = intent == "class_query"
                 is_multihop_pattern = False
+                chain_failed, chain_reason = False, None
                 if not is_class_query:
                     # [OPTION 3] '의' x2 휴리스틱 — 유형 질문("…의 …스타일")은 제외
                     if query_text and query_text.count("의") >= 2:
@@ -1260,8 +1626,34 @@ class FusekiBackend(GraphBackend):
                     # 분석기가 멀티홉으로 판정한 질문도 LLM SPARQL 생성 경로(C)로 보낸다.
                     if query_type == "multi_hop" or intent == "multi_hop" or (kwargs.get("hop_count") or 1) >= 2:
                         if not is_multihop_pattern:
-                            log_trace("[Fuseki] Multi-hop by query analysis. Delegating to LLM SPARQL generation.")
+                            log_trace("[Fuseki] Multi-hop by query analysis.")
                         is_multihop_pattern = True
+                    # 분석기 판정이 흔들리는 경우 보조: 관계 서술 관형절 2개 이상 ('발견한 … 제안한'),
+                    # 집계형('모두', '나열')은 제외. 체인이 안 되면 앵커 조회로 넘어가므로 오판 비용은 지연뿐.
+                    if not is_multihop_pattern and query_text and not re.search(r"모두|나열|몇 명", query_text):
+                        from app.services.retrieval.entity_linking import relative_clause_count
+                        if relative_clause_count(query_text) >= 2:
+                            is_multihop_pattern = True
+                            log_trace("[Fuseki] Multi-hop by relative clauses (>=2).")
+
+                if entity_centric_enabled and query_text and is_multihop_pattern:
+                    # 다단계: 홉별 결정적 체인 (H). 계획 불가·출발점 없음·첫 홉 0건이면 C 로.
+                    chain_result = await self._chain_query(kb_id, query_text, kwargs, log_trace)
+                    if chain_result is not None:
+                        return chain_result
+                    # 체인 불가 → 앵커 관계 조회(A/B/E)를 먼저 해 보고, 근거가 없을 때만 C
+                    chain_failed = True
+                    chain_reason = ((kwargs.get("_reasoning") or {}).get("targeting") or {}).get("reason")
+                    kwargs.get("_reasoning", {}).pop("targeting", None)
+                    is_multihop_pattern = False
+                elif entity_centric_enabled and query_text and is_class_query and (kwargs.get("hop_count") or 1) >= 2:
+                    # 유형 질문이라도 분석기가 다단계(hop≥2)로 본 질문은 체인을 먼저 시도한다
+                    # ("뉴턴이 소속된 대학에 소속된 천체물리학자 가운데 …"). 안 되면 유형 경로로 계속.
+                    log_trace("[Fuseki] class_query with hop_count>=2 → try chain (H) first")
+                    chain_result = await self._chain_query(kb_id, query_text, kwargs, log_trace)
+                    if chain_result is not None:
+                        return chain_result
+                    kwargs.get("_reasoning", {}).pop("targeting", None)
 
                 if entity_centric_enabled and query_text and not is_multihop_pattern:
                     resolved_uris = self._resolve_anchors(kb_id, query_text, entities, kwargs, log_trace)
@@ -1286,6 +1678,13 @@ class FusekiBackend(GraphBackend):
                             kb_id, query_text, resolved_uris, kwargs, log_trace
                         )
                         t_mode = ((targeted or {}).get("reasoning") or {}).get("targeting", {}).get("mode")
+                        if targeted is not None and chain_failed:
+                            tg = targeted["reasoning"].setdefault("targeting", {})
+                            if targeted.get("triples"):
+                                tg.setdefault("warnings", []).append(
+                                    f"다단계 체인 불가({chain_reason or '-'}) → 앵커 관계 조회로 대신함 (부분 근거일 수 있음)")
+                                return targeted
+                            targeted, catalog_preds = None, catalog_preds  # 근거 없음 → C
                         if targeted is not None and not (is_class_query and t_mode == "none"):
                             return targeted
                         if targeted is not None:
@@ -1308,6 +1707,19 @@ class FusekiBackend(GraphBackend):
                 # 생성 실패/0건 시 최대 2회까지 에러 되먹임 재시도한다.
                 loop_result: Optional[Dict[str, Any]] = None
                 emb_service = kwargs.get("embedding_service", default_embedding_service)
+                # 결정적 경로(A/B/P/H/E)가 모두 근거를 못 찾았다. 기본 정책은 LLM SPARQL 생성(C) 대신
+                # 문서 검색(V)으로 넘기는 것 — C 는 문항당 40초 이상 걸리고 정답률이 낮았다
+                # (docs/design-graph-multihop-chain.md §7.9). graph_fallback="llm_sparql" 이면 기존 C.
+                if not skip_llm_generation and (kwargs.get("graph_fallback") or "vector") == "vector":
+                    rs = kwargs.setdefault("_reasoning", {})
+                    prev = (rs.get("targeting") or {}).get("reason") or chain_reason
+                    why = "그래프의 결정적 경로로 표현할 수 없거나 근거 없음"
+                    rs["targeting"] = {**(rs.get("targeting") or {}), "mode": "V",
+                                       "reason": f"{why}" + (f" ({prev})" if prev else "") + " → 문서 검색으로 답함"}
+                    rs.setdefault("warnings", [])
+                    log_trace("[Fuseki] 결정적 경로 근거 없음 → LLM SPARQL 생성(C) 대신 문서 검색(V)")
+                    return {"chunk_ids": [], "sparql_query": "", "triples": [], "found_entities": [],
+                            "fallback": "vector", "reasoning": rs, "trace_logs": trace_logs}
                 if not skip_llm_generation:
                     log_trace(f"[Fuseki] Calling LLM SPARQL Generator (skip_llm_generation={skip_llm_generation})")
 

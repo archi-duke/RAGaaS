@@ -208,3 +208,228 @@ async def reingest(kb_id: str, doc_id: str, file: UploadFile = File(...)):
     doc.source_retained = True
     await doc.save()
     return await renormalize_documents(kb_id, [doc_id])
+
+
+# ---------------------------------------------------------------------------
+# 스키마 편집기 (사람 검수 1단계, docs/design-schema-editor.md)
+# ---------------------------------------------------------------------------
+
+class SchemaSpecBody(BaseModel):
+    classes: List[dict] = []
+    properties: List[dict] = []
+    base_version: Optional[int] = None
+    replay: bool = True
+    note: str = ""
+
+
+class SchemaRevertBody(BaseModel):
+    version: int
+
+
+def _edit_error(e):
+    raise HTTPException(status_code=e.status, detail={"errors": e.errors})
+
+
+@router.get("/{kb_id}/schema/spec")
+async def get_schema_spec(kb_id: str):
+    from app.services.schema_alignment import schema_editor as se
+    try:
+        return await se.get_spec(kb_id)
+    except se.SchemaEditError as e:
+        _edit_error(e)
+
+
+@router.post("/{kb_id}/schema/spec/validate")
+async def validate_schema_spec(kb_id: str, body: SchemaSpecBody):
+    """저장 전 미리보기: 오류·경고·변경 요약."""
+    from app.services.schema_alignment import schema_editor as se
+    try:
+        return await se.preview(kb_id, body.model_dump())
+    except se.SchemaEditError as e:
+        _edit_error(e)
+
+
+@router.put("/{kb_id}/schema/spec")
+async def save_schema_spec(kb_id: str, body: SchemaSpecBody):
+    from app.services.schema_alignment import schema_editor as se
+    try:
+        return await se.save_spec(kb_id, {"classes": body.classes, "properties": body.properties},
+                                  base_version=body.base_version, replay=body.replay, note=body.note)
+    except se.SchemaEditError as e:
+        _edit_error(e)
+
+
+@router.post("/{kb_id}/schema/spec/revert")
+async def revert_schema_spec(kb_id: str, body: SchemaRevertBody):
+    from app.services.schema_alignment import schema_editor as se
+    try:
+        return await se.revert_to(kb_id, body.version)
+    except se.SchemaEditError as e:
+        _edit_error(e)
+
+
+
+class MembersBody(BaseModel):
+    class_name: str
+    entities: List[str]
+
+
+class MergeBody(BaseModel):
+    canonical: str
+    aliases: List[str]
+
+
+@router.post("/{kb_id}/schema/spec/members")
+async def assign_schema_members(kb_id: str, body: MembersBody):
+    """멤버 누락 후보를 클래스 멤버로 지정 (class 규칙 + 리플레이)."""
+    from app.services.schema_alignment import schema_editor as se
+    try:
+        return await se.assign_members(kb_id, body.class_name, body.entities)
+    except se.SchemaEditError as e:
+        _edit_error(e)
+
+
+@router.get("/{kb_id}/schema/spec/merge-candidates")
+async def schema_merge_candidates(kb_id: str, class_name: str):
+    """한 클래스 범위의 같은 개념 다른 표기 후보 (LLM, 제안만)."""
+    from app.services.schema_alignment import schema_editor as se
+    try:
+        return await se.merge_candidates(kb_id, class_name)
+    except se.SchemaEditError as e:
+        _edit_error(e)
+
+
+@router.post("/{kb_id}/schema/spec/merge")
+async def merge_schema_entities(kb_id: str, body: MergeBody):
+    """표기 병합 (entity 규칙 + 리플레이)."""
+    from app.services.schema_alignment import schema_editor as se
+    try:
+        return await se.merge_entities(kb_id, body.canonical, body.aliases)
+    except se.SchemaEditError as e:
+        _edit_error(e)
+
+
+class InduceDryRunBody(BaseModel):
+    llm_model: Optional[dict] = None
+
+
+@router.post("/{kb_id}/schema/induce/dry-run")
+async def induce_dry_run(kb_id: str, body: InduceDryRunBody):
+    """스키마 재유도 미리보기 — 저장·제안 없이 결과와 현재 스키마의 차이 (평가용 KB 보호)."""
+    from app.models.knowledge_base import KnowledgeBase
+    from app.services.schema_alignment.induction import run_induction
+    from app.services.schema_alignment.service import _graph_llm_config
+    kb = await KnowledgeBase.get(kb_id)
+    if not kb:
+        raise HTTPException(status_code=404, detail="KB 없음")
+    cfg = body.llm_model or await _graph_llm_config(kb)
+    try:
+        return await run_induction(kb_id, cfg, dry_run=True)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/{kb_id}/schema/spec/triples")
+async def schema_property_triples(kb_id: str, property: str, limit: int = 200):
+    """속성 하나의 트리플 목록 + range 기준 상태 (편집기: 트리플 수 클릭)."""
+    from app.services.schema_alignment import schema_editor as se
+    try:
+        return await se.property_triples(kb_id, property, limit)
+    except se.SchemaEditError as e:
+        _edit_error(e)
+
+
+class TripleEditBody(BaseModel):
+    action: str                       # move | delete
+    triples: List[dict]               # [{subject, predicate, object}]
+    target_property: Optional[str] = None
+    new_property: Optional[dict] = None   # {name, domain, range, description} — 새 관계를 만들어 이동
+
+
+class NewClassBody(BaseModel):
+    name: str
+    description: str = ""
+    members: List[str] = []
+
+
+@router.post("/{kb_id}/schema/spec/triples/edit")
+async def edit_schema_triples(kb_id: str, body: TripleEditBody):
+    """트리플 이동·삭제 (triple 규칙 + 리플레이) — 리플레이·재추출 뒤에도 유지된다."""
+    from app.services.schema_alignment import schema_editor as se
+    try:
+        return await se.edit_triples(kb_id, body.action, body.triples, body.target_property, body.new_property)
+    except se.SchemaEditError as e:
+        _edit_error(e)
+
+
+@router.post("/{kb_id}/schema/spec/classes")
+async def create_schema_class(kb_id: str, body: NewClassBody):
+    """새 클래스 추가 + 멤버 지정."""
+    from app.services.schema_alignment import schema_editor as se
+    try:
+        return await se.create_class_with_members(kb_id, body.name, body.description, body.members)
+    except se.SchemaEditError as e:
+        _edit_error(e)
+
+
+
+class ReextractPreviewBody(BaseModel):
+    classes: List[dict] = []
+    properties: List[dict] = []
+    triples: List[dict] = []          # [{subject, predicate, object, source, doc_id, doc}]
+
+
+@router.post("/{kb_id}/schema/spec/reextract-preview")
+async def schema_reextract_preview(kb_id: str, body: ReextractPreviewBody):
+    """편집 중인(저장 전) 스키마로 선택 트리플의 근거 청크만 재추출해 사라지는지 비교 — 저장 없음, 청크당 LLM 1회."""
+    from app.services.schema_alignment import schema_editor as se
+    try:
+        return await se.reextract_preview(kb_id, {"classes": body.classes, "properties": body.properties}, body.triples)
+    except se.SchemaEditError as e:
+        _edit_error(e)
+
+
+# ---------------------------------------------------------------------------
+# AI 추천 (docs/design-schema-editor.md §14) — 추천 → 체크 → 효과 미리보기 → 승인 반영
+# ---------------------------------------------------------------------------
+
+class RecommendBody(BaseModel):
+    triples: Optional[List[dict]] = None      # 트리플 창에서 호출하면 그 트리플만 대상으로
+
+
+class RecommendActionsBody(BaseModel):
+    actions: List[dict]
+    problems: List[dict] = []
+    base_version: Optional[int] = None
+
+
+@router.post("/{kb_id}/schema/recommend")
+async def schema_recommend(kb_id: str, body: RecommendBody):
+    from app.services.schema_alignment import recommend as rc
+    from app.services.schema_alignment.schema_editor import SchemaEditError
+    try:
+        return await rc.recommend(kb_id, {"triples": body.triples} if body.triples else None)
+    except SchemaEditError as e:
+        _edit_error(e)
+
+
+@router.post("/{kb_id}/schema/recommend/preview")
+async def schema_recommend_preview(kb_id: str, body: RecommendActionsBody):
+    """체크한 처리안을 가상 적용해 문제 청크를 재추출 — 저장 없음."""
+    from app.services.schema_alignment import recommend as rc
+    from app.services.schema_alignment.schema_editor import SchemaEditError
+    try:
+        return await rc.preview(kb_id, body.actions, body.problems)
+    except SchemaEditError as e:
+        _edit_error(e)
+
+
+@router.post("/{kb_id}/schema/recommend/apply")
+async def schema_recommend_apply(kb_id: str, body: RecommendActionsBody):
+    """승인한 처리안 반영: 스키마 저장 + 규칙 + 리플레이."""
+    from app.services.schema_alignment import recommend as rc
+    from app.services.schema_alignment.schema_editor import SchemaEditError
+    try:
+        return await rc.apply(kb_id, body.actions, body.base_version)
+    except SchemaEditError as e:
+        _edit_error(e)

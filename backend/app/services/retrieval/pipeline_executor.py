@@ -69,6 +69,8 @@ class PipelineExecutor:
             ctx.metadata["embedding_service"] = embedding_service
         if llm_model_config:
             ctx.metadata["llm_model_config"] = llm_model_config
+        import time as _time
+        ctx.metadata["_started_at"] = _time.time()
         
         log_msg = f"[Pipeline] Executing {len(config.stages)} stages for query: {query[:50]}..."
         print(log_msg)
@@ -77,7 +79,22 @@ class PipelineExecutor:
         # Log the full pipeline config for verification
         ctx.logs.append(f"[Pipeline Configuration] {config}")
         
-        for i, stage in enumerate(config.stages):
+        agentic_stage = next((st for st in config.stages if st.type == "agentic"), None)
+        search_stages = [st for st in config.stages if st.type != "agentic"]
+        if agentic_stage is not None:
+            ctx = await self._execute_agentic(ctx, agentic_stage.params or {}, search_stages)
+        else:
+            ctx = await self._run_sequential(ctx, search_stages)
+
+        # Sort final results by the latest score
+        if ctx.results:
+            ctx.results.sort(key=lambda x: x.get('score', 0), reverse=True)
+            
+        return ctx
+    
+    async def _run_sequential(self, ctx: ExecutionContext, stages: List[PipelineStage]) -> ExecutionContext:
+        """스테이지를 순서대로 실행 (기본 경로)."""
+        for i, stage in enumerate(stages):
             handler = self._handlers.get(stage.type)
             if not handler:
                 msg = f"[Pipeline] Unknown stage type: {stage.type}, skipping"
@@ -85,7 +102,7 @@ class PipelineExecutor:
                 ctx.logs.append(msg)
                 continue
                 
-            msg = f"[Pipeline] Stage {i+1}/{len(config.stages)}: {stage.type} (params: {stage.params})"
+            msg = f"[Pipeline] Stage {i+1}/{len(stages)}: {stage.type} (params: {stage.params})"
             print(msg)
             ctx.logs.append(msg)
             
@@ -101,12 +118,65 @@ class PipelineExecutor:
                 # Decide whether to continue or break. For now, continuing with previous results might be safer or break.
                 # Let's verify if we should stop. Generally pipeline failure should be noted.
         
-        # Sort final results by the latest score
-        if ctx.results:
-            ctx.results.sort(key=lambda x: x.get('score', 0), reverse=True)
-            
         return ctx
-    
+
+    def _sub_context(self, ctx: ExecutionContext, query: str) -> ExecutionContext:
+        sub = ExecutionContext(query=query, kb_id=ctx.kb_id, graph_backend=ctx.graph_backend, metric_type=ctx.metric_type)
+        for k in ("embedding_service", "llm_model_config"):
+            if k in ctx.metadata:
+                sub.metadata[k] = ctx.metadata[k]
+        return sub
+
+    async def _execute_agentic(self, ctx: ExecutionContext, params: dict,
+                               stages: List[PipelineStage]) -> ExecutionContext:
+        """에이전틱 필터 — 검색 스테이지를 도구로 삼아 단계별로 검색 (docs/design-agentic-filter.md)."""
+        from app.services.retrieval import agentic as ag
+        from app.core.models_resolver import resolve_model_config
+
+        mode = params.get("mode") or "auto"
+        tool_stages = {}
+        for st in stages:
+            tool = ag.STAGE_TOOL.get(st.type)
+            if tool and tool not in tool_stages:
+                tool_stages[tool] = (st.type, st.params or {})
+        if not tool_stages:
+            ctx.logs.append("[Agentic] 도구로 쓸 검색 스테이지(graph/ann/bm25)가 없음 → 순차 실행")
+            return await self._run_sequential(ctx, stages)
+        skipped = [st.type for st in stages if st.type not in ag.STAGE_TOOL]
+        if skipped:
+            ctx.logs.append(f"[Agentic] 단계 진행 시 쓰지 않는 스테이지: {', '.join(skipped)}")
+
+        first = None
+        if mode != "always":
+            if not ag.looks_complex(ctx.query):
+                ctx.logs.append("[Agentic] auto: 단순 질문 → 단일 실행")
+                ctx = await self._run_sequential(ctx, stages)
+                if not ag.single_run_failed(ctx.results, ctx.metadata.get("graph_metadata")):
+                    return ctx
+                ctx.logs.append("[Agentic] auto: 단일 실행이 근거 없이 끝남 → 단계 진행으로 승격")
+                first = {"results": list(ctx.results), "meta": ctx.metadata.get("graph_metadata")}
+            else:
+                ctx.logs.append("[Agentic] auto: 복합 질문 → 단계 진행")
+
+        # 계획 모델: 필터 지정 → graph 스테이지 모델 → 실행 컨텍스트 모델
+        graph_params = (tool_stages.get("graph_search") or (None, {}))[1]
+        cfg = params.get("llm_model") if (params.get("llm_model") or {}).get("model") else None
+        cfg = cfg or (graph_params.get("llm_model") if (graph_params.get("llm_model") or {}).get("model") else None)
+        cfg = cfg or ctx.metadata.get("llm_model_config") or {}
+        planner_cfg = await resolve_model_config(cfg)
+        if not planner_cfg.get("model"):
+            ctx.logs.append("[Agentic] 계획 모델 미설정 → 순차 실행")
+            return ctx if first is not None else await self._run_sequential(ctx, stages)
+
+        async def run_stage(st_type, st_params, query):
+            sub = await self._handlers[st_type](self._sub_context(ctx, query), st_params)
+            return sub.results, sub.metadata.get("graph_metadata")
+
+        out = await ag.run_agentic(ctx, params, tool_stages, run_stage, planner_cfg, first=first)
+        ctx.results = out["results"]
+        ctx.metadata["graph_metadata"] = out["graph_metadata"]
+        return ctx
+
     async def _execute_ann(self, ctx: ExecutionContext, params: dict) -> ExecutionContext:
         """Execute ANN (vector) search stage
         

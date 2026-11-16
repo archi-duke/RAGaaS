@@ -202,161 +202,98 @@ async def get_schema(
     if backend != "ontology":
         raise HTTPException(status_code=400, detail="Schema view only supported for ontology backend")
     
-    nodes = {}
-    links = []
-    
-    # Named Graph URI for promoted ontology schema
-    graph_uri = f"urn:ontology:{kb_id}"
-    
-    # SPARQL query to get classes and their relationships from Named Graph
-    sparql = f"""
-    PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-    PREFIX owl: <http://www.w3.org/2002/07/owl#>
-    PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
-    
-    SELECT DISTINCT ?class ?classLabel ?relType ?relatedClass ?relatedLabel ?propLabel
-    WHERE {{
-      GRAPH <{graph_uri}> {{
-        # Get all classes
-        ?class a owl:Class .
-        OPTIONAL {{ ?class rdfs:label ?classLabel }}
-        
-        # Get relationships between classes
-        OPTIONAL {{
-          {{
-            # Subclass relationships
-            ?class rdfs:subClassOf ?relatedClass .
-            FILTER (!isBlank(?relatedClass))
-            BIND("subClassOf" AS ?relType)
-          }}
-          UNION
-          {{
-            # Property domain/range relationships
-            ?prop rdfs:domain ?class ;
-                  rdfs:range ?relatedClass .
-            FILTER (!isBlank(?relatedClass))
-            ?relatedClass a owl:Class .
-            OPTIONAL {{ ?prop rdfs:label ?propLabel }}
-            BIND(COALESCE(?propLabel, STRAFTER(STR(?prop), "#"), STRAFTER(STR(?prop), "/")) AS ?relType)
-          }}
-        }}
-        
-        OPTIONAL {{ ?relatedClass rdfs:label ?relatedLabel }}
-        
-        # Filter out blank nodes and generic top-level classes
-        FILTER (!isBlank(?class))
-        FILTER (?class != owl:Thing && ?class != owl:Class && ?class != rdfs:Resource)
-      }}
-    }}
-    LIMIT 100
-    """
-    
+    # 승격 스키마(TBox, urn:ontology:{kb})를 클래스 노드 + 속성 링크로 (docs/design-schema-editor.md §8)
+    # - 클래스: label·comment(설명)
+    # - 속성: range 가 클래스면 클래스 간 링크, 아니면 domain 클래스 노드의 attributes 로
+    # 질의를 둘로 나눠 OPTIONAL 조합으로 행이 불어나 LIMIT 에 잘리던 문제를 없앴다.
+    # 구조화(YAML/JSON) KB: 중첩 블록은 클래스가 아니라 레코드의 속성 묶음 → 유형 노드 안의 값 속성(경로)으로 접고,
+    # 다른 레코드를 가리키는 경로만 유형 간 링크로 (§8)
     try:
-        results = fuseki_client.query_sparql(kb_id, sparql)
-        bindings = results.get("results", {}).get("bindings", [])
-        
-        if not bindings:
-            print("No OWL classes found, attempting fallback to raw predicates...")
-            # Fallback: Query for distinct predicates and check if object is literal
-            fallback_sparql = """
-            PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-            SELECT DISTINCT ?p ?label (SAMPLE(isLiteral(?o)) as ?isLit) WHERE {
-              ?s ?p ?o .
-              OPTIONAL { ?p rdfs:label ?label }
-            } GROUP BY ?p ?label LIMIT 100
-            """
-            fb_results = fuseki_client.query_sparql(kb_id, fallback_sparql)
-            fb_bindings = fb_results.get("results", {}).get("bindings", [])
-            
-            if fb_bindings:
-                # Create base nodes
-                nodes["Entity"] = GraphNode(id="Entity", label="Entity", group="Class")
-                nodes["Literal"] = GraphNode(id="Literal", label="Literal (Value)", group="Class")
-                
-                # We can differentiate colors in frontend if group is different, but for now both Class
-                # Let's verify existing frontend logic: if group=='Class' -> Orange.
-                
-                for b in fb_bindings:
-                    p_uri = b["p"]["value"]
-                    p_label = b.get("label", {}).get("value")
-                    if not p_label:
-                        p_label = urllib.parse.unquote(p_uri.split("/")[-1].split("#")[-1]).replace("_", " ")
-                    
-                    is_lit = b.get("isLit", {}).get("value") == "true"
-                    
-                    target_id = "Literal" if is_lit else "Entity"
-                    
-                    # For Entity->Entity, source=Entity, target=Entity (Self loop visual)
-                    # For Entity->Literal, source=Entity, target=Literal
-                    
-                    links.append(GraphLink(
-                        source="Entity",
-                        target=target_id,
-                        label=p_label
-                    ))
-            
-            
-        else:
-            # First pass: Collect all valid owl:Class URIs
-            valid_class_uris = set()
-            for b in bindings:
-                class_uri = b["class"]["value"]
-                valid_class_uris.add(class_uri)
-            
-            print(f"[Schema] Found {len(valid_class_uris)} valid owl:Class definitions")
-            
-            # Second pass: Build nodes and links
-            for b in bindings:
-                # Process class node
-                class_uri = b["class"]["value"]
-                class_label = b.get("classLabel", {}).get("value")
-                if not class_label:
-                    class_label = urllib.parse.unquote(class_uri.split("/")[-1].split("#")[-1]).replace("_", " ")
-                
-                if class_uri not in nodes:
-                    nodes[class_uri] = GraphNode(
-                        id=class_uri,
-                        label=class_label,
-                        group="Class",
-                        properties={"uri": class_uri}
-                    )
-                
-                # Process relationship if exists - only if related class is also a valid owl:Class
-                if "relatedClass" in b and b.get("relatedClass"):
-                    related_uri = b["relatedClass"]["value"]
-                    
-                    # Skip if related class is not a valid owl:Class
-                    if related_uri not in valid_class_uris:
-                        continue
-                    
-                    related_label = b.get("relatedLabel", {}).get("value")
-                    if not related_label:
-                        related_label = urllib.parse.unquote(related_uri.split("/")[-1].split("#")[-1]).replace("_", " ")
-                    
-                    if related_uri not in nodes:
-                        nodes[related_uri] = GraphNode(
-                            id=related_uri,
-                            label=related_label,
-                            group="Class",
-                            properties={"uri": related_uri}
-                        )
-                    
-                    # Add link (skip self-referencing links like A subClassOf A)
-                    if class_uri == related_uri:
-                        continue
-                    rel_type = b.get("relType", {}).get("value", "related")
-                    links.append(GraphLink(
-                        source=class_uri,
-                        target=related_uri,
-                        label=rel_type
-                    ))
-        
-        print(f"Schema query returned {len(nodes)} classes and {len(links)} relationships")
-        
+        from app.models.knowledge_base import KnowledgeBase
+        _kb = await KnowledgeBase.get(kb_id)
+    except Exception:
+        _kb = None
+    if _kb and _kb.schema_source == "structured":
+        return await _structured_schema_graph(kb_id)
+
+    nodes: Dict[str, GraphNode] = {}
+    links: List[GraphLink] = []
+    graph_uri = f"urn:ontology:{kb_id}"
+    RDFS, OWL, SKOS = ("http://www.w3.org/2000/01/rdf-schema#", "http://www.w3.org/2002/07/owl#",
+                       "http://www.w3.org/2004/02/skos/core#")
+
+    def local(u: str) -> str:
+        return urllib.parse.unquote(u.rstrip("/").split("/")[-1].split("#")[-1])
+
+    try:
+        cls_rows = fuseki_client.query_sparql(kb_id, f"""
+            SELECT ?c (SAMPLE(?l) AS ?label) (SAMPLE(?cm) AS ?comment) WHERE {{ GRAPH <{graph_uri}> {{
+              ?c a <{OWL}Class> OPTIONAL {{ ?c <{RDFS}label> ?l }} OPTIONAL {{ ?c <{RDFS}comment> ?cm }} }}
+              FILTER(!isBlank(?c)) }} GROUP BY ?c LIMIT 2000""").get("results", {}).get("bindings", [])
+        prop_rows = fuseki_client.query_sparql(kb_id, f"""
+            SELECT ?p (SAMPLE(?l) AS ?label) (SAMPLE(?cm) AS ?comment) (SAMPLE(?d) AS ?domain) (SAMPLE(?r) AS ?range)
+                   (GROUP_CONCAT(DISTINCT ?al; separator="|") AS ?aliases) WHERE {{ GRAPH <{graph_uri}> {{
+              ?p a ?pt FILTER(?pt IN (<{OWL}ObjectProperty>, <{OWL}DatatypeProperty>))
+              OPTIONAL {{ ?p <{RDFS}label> ?l }} OPTIONAL {{ ?p <{RDFS}comment> ?cm }}
+              OPTIONAL {{ ?p <{RDFS}domain> ?d }} OPTIONAL {{ ?p <{RDFS}range> ?r }}
+              OPTIONAL {{ ?p <{SKOS}altLabel> ?al }} }} }} GROUP BY ?p LIMIT 5000""").get("results", {}).get("bindings", [])
+        sub_rows = fuseki_client.query_sparql(kb_id, f"""
+            SELECT DISTINCT ?c ?sup WHERE {{ GRAPH <{graph_uri}> {{ ?c <{RDFS}subClassOf> ?sup FILTER(!isBlank(?sup)) }} }}
+            LIMIT 2000""").get("results", {}).get("bindings", [])
     except Exception as e:
         print(f"Fuseki schema query error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-    
+
+    for b in cls_rows:
+        u = b["c"]["value"]
+        if u in (f"{OWL}Thing", f"{OWL}Class", f"{RDFS}Resource"):
+            continue
+        nodes[u] = GraphNode(id=u, label=b.get("label", {}).get("value") or local(u), group="Class",
+                             properties={"uri": u, "description": b.get("comment", {}).get("value", ""),
+                                         "attributes": []})
+    for b in prop_rows:
+        p = b["p"]["value"]
+        label = b.get("label", {}).get("value") or local(p)
+        dom, rng = b.get("domain", {}).get("value"), b.get("range", {}).get("value")
+        info = {"name": label, "description": b.get("comment", {}).get("value", ""),
+                "aliases": [a for a in (b.get("aliases", {}).get("value") or "").split("|") if a]}
+        if dom in nodes and rng in nodes:   # 자기 관계(ArchitectureStyle → ArchitectureStyle)도 링크
+            links.append(GraphLink(source=dom, target=rng, label=label))
+        elif dom in nodes:
+            nodes[dom].properties["attributes"].append({**info, **({"range": local(rng)} if rng else {})})
+    for b in sub_rows:
+        c, sup = b["c"]["value"], b["sup"]["value"]
+        if c in nodes and sup in nodes and c != sup:
+            links.append(GraphLink(source=c, target=sup, label="subClassOf"))
+    for n in nodes.values():
+        n.properties["attribute_count"] = len(n.properties["attributes"])
+    print(f"[Schema] {len(nodes)} classes, {len(links)} links for KB {kb_id}")
+    return GraphData(nodes=list(nodes.values()), links=links)
+
+
+async def _structured_schema_graph(kb_id: str) -> "GraphData":
+    from app.services.retrieval.graph_backends.fuseki import FusekiBackend
+    kinds, catalogs = await FusekiBackend()._class_catalog(kb_id, lambda _m: None, {})
+    nodes: Dict[str, GraphNode] = {}
+    links: List[GraphLink] = []
+    for k in kinds:
+        uri = f"http://rag.local/class/{k['name']}"
+        attrs, groups = [], {}
+        for p in catalogs.get(k["name"]) or []:
+            if p.get("equiv_rep") and p["equiv_rep"] != p["key"]:
+                continue
+            if p.get("ref_kind"):
+                links.append(GraphLink(source=uri, target=f"http://rag.local/class/{p['ref_kind']}", label=p["key"]))
+                continue
+            attrs.append({"name": p["key"], "description": p.get("description", ""), "aliases": p.get("aliases") or [],
+                          "group": p["segments"][0] if len(p["segments"]) > 1 else ""})
+            if len(p["segments"]) > 1:
+                groups[p["segments"][0]] = groups.get(p["segments"][0], 0) + 1
+        nodes[uri] = GraphNode(id=uri, label=k["name"], group="Class",
+                               properties={"uri": uri, "description": k.get("description", ""), "attributes": attrs,
+                                           "attribute_count": len(attrs), "nested_groups": groups,
+                                           "member_count": len(k["members"])})
+    links = [l for l in links if l.target in nodes]
     return GraphData(nodes=list(nodes.values()), links=links)
 
 
@@ -382,13 +319,16 @@ async def get_class_instances(
         PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
         PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
         
-        SELECT ?instance ?label WHERE {{
-            GRAPH <{graph_uri}> {{
+        SELECT ?instance (SAMPLE(?l) AS ?label) WHERE {{
+            GRAPH ?g {{
                 ?instance rdf:type <{class_uri}> .
-                OPTIONAL {{ ?instance rdfs:label ?label }}
+                OPTIONAL {{ ?instance rdfs:label ?l }}
                 FILTER (!isBlank(?instance))
             }}
+            # 데이터는 문서 그래프(urn:doc:*)에 있다 — 옛 승격 방식은 온톨로지 그래프에 ABox 를 넣었으므로 둘 다
+            FILTER (STRSTARTS(STR(?g), "urn:doc:") || ?g = <{graph_uri}>)
         }}
+        GROUP BY ?instance
         LIMIT {limit}
         """
         
@@ -406,7 +346,18 @@ async def get_class_instances(
             return GraphData(nodes=[], links=[])
         
         bindings = response.json().get("results", {}).get("bindings", [])
-        
+        if not bindings:
+            # rdf:type 이 없는 레코드(구조화 KB 최상위 등): 클래스 카탈로그의 유형 멤버로 (유형 이름 덧씌우기 포함)
+            try:
+                from app.services.retrieval.graph_backends.fuseki import FusekiBackend
+                kinds, _ = await FusekiBackend()._class_catalog(kb_id, lambda _m: None, {})
+                cname = urllib.parse.unquote(class_uri.split("/")[-1].split("#")[-1])
+                k = next((k for k in kinds if k["name"] == cname or k.get("orig_name") == cname), None)
+                if k:
+                    bindings = [{"instance": {"value": m}} for m in k["members"][:limit]]
+            except Exception as e:
+                print(f"[Schema] kind member fallback skipped: {e}")
+
         # Add class node first
         class_label = urllib.parse.unquote(class_uri.split("/")[-1].split("#")[-1]).replace("_", " ")
         nodes[class_uri] = GraphNode(

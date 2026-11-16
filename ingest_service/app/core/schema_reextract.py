@@ -21,11 +21,14 @@ def build_schema_text(spec: Dict[str, Any]) -> str:
     for c in spec.get("classes") or []:
         mem = ", ".join((c.get("members") or [])[:40])
         lines.append(f"- {c['name']}: {c.get('description') or ''}" + (f" (알려진 멤버: {mem})" if mem else ""))
-    lines.append("\n[속성] 이름 (domain) — 같은 뜻의 다른 표기 / 허용 값")
+    lines.append("\n[속성] 이름 (domain → range): 정의 — 같은 뜻의 다른 표기 / 허용 값")
     for p in spec.get("properties") or []:
         aliases = ", ".join(a for a in (p.get("aliases") or []) if a != p["name"])
         vals = ", ".join((p.get("values") or [])[:15])
-        line = f"- {p['name']}" + (f" ({p['domain']})" if p.get("domain") else "")
+        dom, rng = p.get("domain") or "", p.get("range") or ""
+        line = f"- {p['name']}" + (f" ({dom or '?'} → {rng or '?'})" if (dom or rng) else "")
+        if p.get("description"):
+            line += f": {p['description']}"
         if aliases:
             line += f" — 별칭: {aliases}"
         if vals:
@@ -42,10 +45,15 @@ def build_messages(schema_text: str, text: str) -> List[Dict[str, str]]:
 규칙:
 1. 사실 하나 = 트리플 하나. "A이거나 B이거나 C일 때" 같은 묶음은 조건마다 따로 트리플을 만든다.
 2. predicate 는 위 [속성] 이름만 쓴다 (별칭이 보이면 대표 이름으로). 개수 제한 없음.
+   정의가 있는 속성은 정의의 의미와 방향(subject=domain, object=range)을 지킨다. 예: 정의가 '스승 → 제자' 이면
+   "B는 A의 지도로 학위를 받았다" 는 subject=A, object=B. 일반 동사(소속·발표 등)로 뭉뚱그리지 말고 가장 구체적인 속성을 고른다.
+   정의에 'A | 속성 | B' 형태가 있으면 그 자리 그대로 쓴다. 예: '계승_발전' 이 'A | 계승_발전 | B (A가 선행)' 이면
+   "B는 A를 이어받아 발전시켰다" 는 subject=A, object=B — 문장의 주어(B)를 subject 로 쓰지 않는다.
 3. subject 는 알려진 멤버 이름 그대로 (같은 대상의 다른 표기도 대표 이름으로).
 4. object 는 허용 값이 있으면 그 표기로 (예: 높다 → 목록에 '높다'가 있으면 '높다'). 없으면 짧은 명사구로.
 5. 위 속성으로 표현할 수 없는 사실은 out_of_schema 에 넣는다 (predicate 는 짧은 명사구로 지어도 된다). 버리지 마라.
-6. 텍스트에 없는 사실을 만들지 마라.
+6. 텍스트에 없는 사실을 만들지 마라. 속성에 억지로 맞추지 마라 — 예: "1931년 세상을 떠났다" 는 수상이 아니다.
+   텍스트가 그 속성의 의미를 직접 말할 때만 그 속성을 쓰고, 아니면 out_of_schema 로.
 
 텍스트:
 {text[:MAX_CHUNK_CHARS]}
@@ -77,7 +85,74 @@ def _parse_json(text: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def parse_response(data: Optional[Dict[str, Any]], node_id: str, allowed: set) -> List[Dict[str, Any]]:
+def _ck(x: str) -> str:
+    return re.sub(r"[\s_\-]", "", str(x or "")).lower()
+
+
+def build_type_index(spec: Dict[str, Any]) -> Tuple[Dict[str, str], Dict[str, Tuple[str, str]]]:
+    """(멤버 이름 → 클래스, 속성 → (domain, range)) — 도메인·방향 검사용."""
+    cls: Dict[str, str] = {}
+    for c in spec.get("classes") or []:
+        for m in c.get("members") or []:
+            cls.setdefault(_ck(m), c["name"])
+    dr = {p["name"]: (p.get("domain") or "", p.get("range") or "") for p in spec.get("properties") or []}
+    return cls, dr
+
+
+def check_domain(t: Dict[str, Any], cls: Dict[str, str], dr: Dict[str, Tuple[str, str]]) -> Dict[str, Any]:
+    """알려진 멤버의 클래스로 domain·range 를 검사한다.
+
+    - 주어·목적어 클래스가 정확히 (range, domain) 이면 방향이 뒤집힌 것 → 바꾼다.
+    - 주어 클래스가 domain 과 다르면 그 속성의 사실이 아니다 → out_of_schema
+      (예: '드브로이(인물) —계승_발전→ 광양자_가설' — 계승_발전 은 이론 → 이론).
+    클래스를 모르는 이름은 검사하지 않는다.
+    """
+    if t["out_of_schema"] or t["predicate"] not in dr:
+        return t
+    dom, rng = dr[t["predicate"]]
+    sc, oc = cls.get(_ck(t["subject"])), cls.get(_ck(t["object"]))
+    if dom and rng and dom != rng and sc == rng and oc == dom:
+        return {**t, "subject": t["object"], "object": t["subject"], "direction_fixed": True}
+    if dom and sc and sc != dom:
+        # 저장 단계는 out_of_schema 도 같은 관계 이름으로 넣으므로, 표시만 하면 그래프가 오염된다 → 제외
+        return {**t, "drop": "domain", "domain_violation": f"{sc} ≠ {dom}"}
+    return t
+
+
+_YEAR_RE = re.compile(r"^\d{2,4}(?:년|년도|년대)?$")
+
+
+def is_grounded(obj: str, text: str, allowed_values: Optional[set] = None) -> bool:
+    """목적어의 핵심 토큰이 원문에 있는가 — 스키마 맞춤 환각 차단.
+
+    예) 원문 "1931년 세상을 떠났다" → '1931년도_노벨_물리학상' 은 '노벨'·'물리학상' 이 원문에 없어 거부.
+    - 허용 값 어휘(스키마 값 목록)에 있는 표기는 정규화 결과이므로 검사하지 않는다.
+    - 연도 토큰은 숫자만 원문에 있으면 된다.
+    - 핵심 토큰의 절반 이상이 원문(공백 무시)에 있어야 한다.
+    """
+    if allowed_values and _ck(obj) in allowed_values:
+        return True
+    compact_text = _ck(text)
+    toks = [x for x in re.split(r"[\s_\-·,()『』「」]+", obj) if x]
+    if not toks:
+        return True
+    hit = 0
+    for tok in toks:
+        if _YEAR_RE.match(tok):
+            hit += re.sub(r"\D", "", tok) in compact_text
+        elif len(tok) < 2:
+            hit += 1
+        else:
+            # 조사·어미 차이 허용: 앞 2글자 이상이 원문에 있으면 인정 ('측정한' ↔ '측정')
+            hit += any(_ck(tok[:k]) in compact_text for k in range(len(tok), 1, -1))
+    return hit * 2 >= len(toks)
+
+
+def parse_response(data: Optional[Dict[str, Any]], node_id: str, allowed: set,
+                   type_index: Optional[Tuple[Dict[str, str], Dict[str, Tuple[str, str]]]] = None,
+                   text: Optional[str] = None, allowed_values: Optional[set] = None
+                   ) -> List[Dict[str, Any]]:
+    """drop 표시(domain 위반·원문 근거 없음)가 붙은 트리플도 반환한다 — 호출부가 걸러 내고 집계한다."""
     out = []
     if not data:
         return out
@@ -90,9 +165,13 @@ def parse_response(data: Optional[Dict[str, Any]], node_id: str, allowed: set) -
                 continue
             # 스키마 속성이라고 했는데 목록에 없으면 스키마 밖으로 분류
             is_oos = oos or p not in allowed
-            out.append({"subject": s, "predicate": p, "object": o, "source_node_id": node_id,
-                        "confidence": 0.9 if not is_oos else 0.7, "out_of_schema": is_oos,
-                        "extraction": "schema_reextract"})
+            t = {"subject": s, "predicate": p, "object": o, "source_node_id": node_id,
+                 "confidence": 0.9 if not is_oos else 0.7, "out_of_schema": is_oos,
+                 "extraction": "schema_reextract"}
+            t = check_domain(t, *type_index) if type_index else t
+            if text is not None and not t.get("drop") and not is_grounded(o, text, allowed_values):
+                t = {**t, "drop": "ungrounded"}
+            out.append(t)
     return out
 
 
@@ -103,6 +182,8 @@ async def reextract_chunks(
 
     schema_text = build_schema_text(spec)
     allowed = {p["name"] for p in spec.get("properties") or []}
+    type_index = build_type_index(spec)
+    allowed_values = {_ck(v) for p in spec.get("properties") or [] for v in (p.get("values") or [])}
     sem = asyncio.Semaphore(CONCURRENCY)
     failures = []
 
@@ -115,14 +196,19 @@ async def reextract_chunks(
                 extra = {"thinking": {"type": "disabled"}} if "glm" in str(llm_cfg.get("model", "")).lower() else None
                 content = await achat(llm_cfg, build_messages(schema_text, text), model=llm_cfg.get("model"),
                                       temperature=0, response_format={"type": "json_object"}, extra_body=extra)
-                return parse_response(_parse_json(content), ch.get("node_id"), allowed)
+                return parse_response(_parse_json(content), ch.get("node_id"), allowed, type_index,
+                                      text[:MAX_CHUNK_CHARS], allowed_values)
             except Exception as e:
                 failures.append({"node_id": ch.get("node_id"), "reason": str(e)[:200]})
                 return []
 
     results = await asyncio.gather(*(one(c) for c in chunks))
-    triples = [t for r in results for t in r]
+    raw = [t for r in results for t in r]
+    triples = [t for t in raw if not t.get("drop")]
     stats = {"chunks": len(chunks), "triples": len(triples),
+             "dropped_domain": sum(1 for t in raw if t.get("drop") == "domain"),
+             "dropped_ungrounded": sum(1 for t in raw if t.get("drop") == "ungrounded"),
              "out_of_schema": sum(1 for t in triples if t["out_of_schema"]),
+             "direction_fixed": sum(1 for t in triples if t.get("direction_fixed")),
              "chunk_failures": failures}
     return triples, stats

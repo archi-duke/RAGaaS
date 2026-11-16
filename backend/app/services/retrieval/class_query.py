@@ -138,6 +138,76 @@ def infer_kinds(bindings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return kinds
 
 
+def match_overlay_class(kind: Dict[str, Any], overlay_classes: Sequence[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """사람이 붙인 유형 이름(스키마 덧씌우기)을 유형에 대응시킨다.
+
+    유형 이름(K1 …)은 멤버 수 순서로 매번 다시 매겨지므로, 저장 당시 멤버(로컬네임)와
+    겹치는 비율(Jaccard ≥ 0.5)로 찾는다. 클래스가 있는 유형은 원래 이름(orig)이 같으면 대응.
+    """
+    names = {local_name(m) for m in kind.get("members") or []}
+    best, best_j = None, 0.0
+    for oc in overlay_classes or []:
+        if kind.get("class_uri") and oc.get("orig") == local_name(kind["class_uri"]):
+            return oc
+        mem = set(oc.get("members") or [])
+        if not mem or not names:
+            continue
+        j = len(mem & names) / len(mem | names)
+        if j > best_j:
+            best, best_j = oc, j
+    return best if best_j >= 0.5 else None
+
+
+def apply_kind_overlay(kinds: List[Dict[str, Any]], overlay: Optional[Dict[str, Any]]) -> None:
+    """유형 이름·설명 덧씌우기 (제자리). 원래 이름은 orig_name 에 남긴다."""
+    if not overlay:
+        return
+    used = set()
+    for k in kinds:
+        oc = match_overlay_class(k, [c for c in overlay.get("classes") or [] if id(c) not in used])
+        if oc and oc.get("name"):
+            used.add(id(oc))
+            k["orig_name"] = k["name"]
+            k["name"] = oc["name"]
+            if oc.get("description"):
+                k["description"] = oc["description"]
+
+
+def attach_ref_kinds(kinds: List[Dict[str, Any]], catalogs: Dict[str, List[Dict[str, Any]]],
+                     min_ratio: float = 0.6) -> None:
+    """값이 다른 레코드(유형 멤버)를 가리키는 경로에 ref_kind 를 붙인다 (제자리).
+
+    예: 구조화 KB 의 related_patterns 값 = 다른 스타일 레코드 → ref_kind=ArchitectureStyle.
+    스키마 그래프에서 유형 간 관계로 그리고, TBox range 로 쓴다. 비율은 값을 가진 멤버 수 기준.
+    """
+    owner = {m: k["name"] for k in kinds for m in k.get("members") or []}
+    for k in kinds:
+        for p in catalogs.get(k["name"]) or []:
+            tot, hit = 0, {}
+            for v in p.get("values") or []:
+                n = int(v.get("members") or 1)
+                tot += n
+                o = owner.get(v.get("uri"))
+                if o:
+                    hit[o] = hit.get(o, 0) + n
+            if tot and hit:
+                best = max(hit, key=hit.get)
+                if hit[best] / tot >= min_ratio:
+                    p["ref_kind"] = best
+
+
+def apply_path_overlay(paths: List[Dict[str, Any]], overlay: Optional[Dict[str, Any]]) -> None:
+    """경로(속성) 정의·별칭 덧씌우기 (제자리)."""
+    props = (overlay or {}).get("properties") or {}
+    for p in paths:
+        o = props.get(p["key"])
+        if o:
+            if o.get("description"):
+                p["description"] = o["description"]
+            if o.get("aliases"):
+                p["aliases"] = list(o["aliases"])
+
+
 # ---------------------------------------------------------------------------
 # 2. 유형별 경로 카탈로그 (값 종류·값 어휘)
 # ---------------------------------------------------------------------------
@@ -270,6 +340,16 @@ def parse_kind_catalog(bindings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 def _path_line(i: int, p: Dict[str, Any], index: Optional[Dict[str, int]] = None) -> str:
+    line = _path_line_base(i, p, index)
+    extra = []
+    if p.get("description"):
+        extra.append(f"정의: {p['description']}")
+    if p.get("aliases"):
+        extra.append(f"별칭: {', '.join(p['aliases'])}")
+    return line + (f" — {' / '.join(extra)}" if extra else "")
+
+
+def _path_line_base(i: int, p: Dict[str, Any], index: Optional[Dict[str, int]] = None) -> str:
     if p.get("equiv") and p.get("equiv_rep") and p["equiv_rep"] != p["key"]:
         rep_no = (index or {}).get(p["equiv_rep"])
         ref = f"{rep_no}번" if rep_no is not None else p["equiv_rep"]
@@ -298,7 +378,8 @@ def build_plan_messages(
     kind_lines = []
     for k in kinds:
         cls = f" (class {k['name']})" if k.get("class_uri") else " (rdf:type 없음 · 경로 시그니처로 묶음)"
-        kind_lines.append(f"- {k['name']}{cls}: 멤버 {len(k['members'])}개, 예: {', '.join(k['examples'])}")
+        desc = f" — {k['description']}" if k.get("description") else ""
+        kind_lines.append(f"- {k['name']}{cls}{desc}: 멤버 {len(k['members'])}개, 예: {', '.join(k['examples'])}")
     path_blocks = []
     for k in kinds:
         cat = catalogs.get(k["name"], [])[:MAX_PATHS_FOR_LLM]
@@ -930,7 +1011,7 @@ def result_summary(entities: Sequence[str], plan: Dict[str, Any], agg_values: Op
                    truncated: bool = False) -> str:
     names = [local_name(e) for e in entities]
     s = plan_summary(plan)
-    cond = " AND ".join(s["filters"]) or "(조건 없음)"
+    cond = (" OR " if plan.get("match") == "any" else " AND ").join(s["filters"]) or "(조건 없음)"
     head = f"질의 계획 결과 — 유형 {s['kind']}(전체 {s['kind_members']}개) 중 조건 [{cond}]"
     if plan.get("aggregate") and plan["aggregate"]["fn"] == "count_members":
         return f"{head} 을 만족하는 엔티티 수: {len(names)}{'+' if truncated else ''}개 — {', '.join(names)}"

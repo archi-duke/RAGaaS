@@ -52,12 +52,13 @@ async def load_rules_for_retrieval(kb_id: str) -> Dict[str, Any]:
 
 async def rules_for_ingest(kb_id: str, include_graph_rules: bool = False) -> List[Dict[str, Any]]:
     """인제스트·리플레이용 규칙. include_graph_rules=True 면 entity/class 규칙도 (텍스트 리플레이)."""
-    kinds = ("key", "value", "entity", "class") if include_graph_rules else ("key", "value")
+    kinds = ("key", "value", "entity", "class", "triple") if include_graph_rules else ("key", "value")
     return [
         {
             "id": str(r.id), "rule_type": r.rule_type, "source_path": r.source_path,
             "target_path": r.target_path, "source_value": r.source_value,
             "target_value": r.target_value, "scope_paths": r.scope_paths, "status": r.status,
+            **({"pair": r.pair} if r.rule_type == "triple" else {}),
         }
         for r in await active_rules(kb_id) if r.rule_type in kinds
     ]
@@ -545,28 +546,79 @@ async def mark_structured_ontology(kb_id: str) -> Dict[str, Any]:
     def lit(x: str) -> str:
         return '"' + str(x).replace("\\", "\\\\").replace('"', '\\"') + '"'
 
+    # 사람이 고친 유형 이름·설명은 카탈로그(apply_kind_overlay)에서 이미 반영됨 — orig_name 이 있으면 덧씌운 이름
+    def kind_class(k):
+        if k.get("orig_name"):
+            return k["name"]
+        return local_name(k["class_uri"]) if k.get("class_uri") else "Record"
+
     classes: Dict[str, Dict[str, Any]] = {}
     for k in kinds:
-        name = local_name(k["class_uri"]) if k.get("class_uri") else "Record"
+        name = kind_class(k)
         classes[name] = {"label": name, "count": len(k["members"]),
-                         "description": "구조화 문서의 최상위 레코드" if not k.get("class_uri") else ""}
+                         "description": k.get("description") or (
+                             "구조화 문서의 최상위 레코드" if not k.get("class_uri") else "")}
     for name, n in struct_classes.items():
         classes.setdefault(name, {"label": name, "count": n, "description": "구조화 문서의 중첩 항목"})
     props: Dict[str, str] = {}
+    prop_notes: Dict[str, Dict[str, Any]] = {}   # 마지막 세그먼트 → 정의·별칭 (덧씌우기)
+    ref_ranges: Dict[str, str] = {}               # 마지막 세그먼트 → 가리키는 유형 클래스
     for k in kinds:
-        dom = local_name(k["class_uri"]) if k.get("class_uri") else "Record"
+        dom = kind_class(k)
         for p in catalogs.get(k["name"], []):
             for i, seg in enumerate(p["segments"]):
                 props.setdefault(seg, dom if i == 0 else "")
+            if p.get("description") or p.get("aliases"):
+                prop_notes.setdefault(p["segments"][-1], {"description": p.get("description"), "aliases": p.get("aliases")})
+            if p.get("ref_kind"):
+                # 다른 레코드를 가리키는 경로 → 마지막 세그먼트의 range = 그 유형 (예: related_patterns → ArchitectureStyle)
+                ref = next((kind_class(x) for x in kinds if x["name"] == p["ref_kind"]), None)
+                if ref:
+                    ref_ranges[p["segments"][-1]] = ref
+
+    # 중첩 구조의 방향 (스키마 그래프용): 속성 → 값 노드의 rdf:type = range, 주어 노드의 rdf:type = domain
+    #   예: fit_signals (ArchitectureStyle → Fit_signals), modifiability (Fit_signals → 값)
+    ranges: Dict[str, str] = {}
+    nested_dom: Dict[str, str] = {}
+    try:
+        q_rng = """SELECT ?p (SAMPLE(?ot) AS ?t) WHERE { GRAPH ?g { ?s ?p ?o . ?o a ?ot }
+                   FILTER(STRSTARTS(STR(?g), "urn:doc:")) FILTER(STRSTARTS(STR(?ot), "http://rag.local/class/"))
+                   FILTER(STRSTARTS(STR(?p), "http://rag.local/rel/")) } GROUP BY ?p"""
+        for b in fuseki_client.query_sparql(kb_id, q_rng).get("results", {}).get("bindings", []):
+            ranges[local_name(b["p"]["value"])] = local_name(b["t"]["value"])
+        q_dom = """SELECT ?p (SAMPLE(?st) AS ?t) WHERE { GRAPH ?g { ?s ?p ?o . ?s a ?st }
+                   FILTER(STRSTARTS(STR(?g), "urn:doc:")) FILTER(STRSTARTS(STR(?st), "http://rag.local/class/"))
+                   FILTER(STRSTARTS(STR(?p), "http://rag.local/rel/")) } GROUP BY ?p"""
+        for b in fuseki_client.query_sparql(kb_id, q_dom).get("results", {}).get("bindings", []):
+            nested_dom[local_name(b["p"]["value"])] = local_name(b["t"]["value"])
+    except Exception as e:
+        logger.warning(f"[Schema] structured domain/range scan skipped: {e}")
+    for seg in list(props):
+        if not props[seg] and nested_dom.get(seg) in classes:
+            props[seg] = nested_dom[seg]
+    ranges.update(ref_ranges)
+    kind_names = {kind_class(k) for k in kinds}
 
     lines = ["@prefix owl: <http://www.w3.org/2002/07/owl#> .",
              "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .", ""]
     for name, c in classes.items():
+        # 중첩 블록 타입(Fit_signals …)은 독립 대상이 아니라 레코드에 붙은 속성 묶음 → 구조 노드로 표시
+        structural = name not in kind_names
+        if structural:
+            c["structural"] = True
         lines.append(f"<http://rag.local/class/{uri_part(name)}> a owl:Class ; rdfs:label {lit(name)}"
-                     + (f" ; rdfs:comment {lit(c['description'])}" if c.get("description") else "") + " .")
+                     + (f" ; rdfs:comment {lit(c['description'])}" if c.get("description") else "")
+                     + (" ; <http://rag.local/schema/structural> true" if structural else "") + " .")
+    lines.insert(2, "@prefix skos: <http://www.w3.org/2004/02/skos/core#> .")
     for seg, dom in props.items():
+        note = prop_notes.get(seg) or {}
         lines.append(f"<http://rag.local/rel/{uri_part(seg)}> a owl:ObjectProperty ; rdfs:label {lit(seg)}"
-                     + (f" ; rdfs:domain <http://rag.local/class/{uri_part(dom)}>" if dom else "") + " .")
+                     + (f" ; rdfs:domain <http://rag.local/class/{uri_part(dom)}>" if dom else "")
+                     + (f" ; rdfs:range <http://rag.local/class/{uri_part(ranges[seg])}>"
+                        if ranges.get(seg) in classes else "")
+                     + (f" ; rdfs:comment {lit(note['description'])}" if note.get("description") else "")
+                     + "".join(f" ; skos:altLabel {lit(a)}" for a in note.get("aliases") or [])
+                     + " .")
     ttl = "\n".join(lines) + "\n"
     graph_uri = f"urn:ontology:{kb_id}"
     tbox_ok = False

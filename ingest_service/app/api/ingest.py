@@ -173,24 +173,29 @@ async def send_pipeline_status(callback_url: str, job_id: str, doc_id: str, kb_i
                                progress: Optional[int] = None, error: Optional[str] = None):
     """Helper to send granular pipeline status to backend"""
     if not callback_url: return
+    import asyncio
     import httpx
-    try:
-        # ✅ COMPLETED/FAILED 상태에 따라 overall status 결정
-        overall_status = {"COMPLETED": "completed", "FAILED": "failed"}.get(status, "processing")
+    from app.core.platform_auth import service_headers
 
-        from app.core.platform_auth import service_headers
-        async with httpx.AsyncClient() as client:
-            await client.post(callback_url, headers=service_headers(), json={
-                "job_id": job_id,
-                "doc_id": doc_id,
-                "kb_id": kb_id,
-                "status": overall_status,
-                "pipeline_status": status,
-                "progress": progress,
-                "error": error
-            })
-    except Exception as e:
-        print(f"[Callback] Failed to send status {status}: {e}")
+    # ✅ COMPLETED/FAILED 상태에 따라 overall status 결정
+    overall_status = {"COMPLETED": "completed", "FAILED": "failed"}.get(status, "processing")
+    payload = {"job_id": job_id, "doc_id": doc_id, "kb_id": kb_id, "status": overall_status,
+               "pipeline_status": status, "progress": progress, "error": error}
+    # 최종 상태(COMPLETED/FAILED)는 놓치면 문서가 '처리 중'으로 영구히 남는다 (2026-11-15: 백엔드가 잠시 바쁠 때
+    # httpx 기본 타임아웃 5초에 걸려 유실). 타임아웃을 늘리고 최종 상태만 재시도한다.
+    attempts = 4 if status in ("COMPLETED", "FAILED") else 1
+    for i in range(attempts):
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                r = await client.post(callback_url, headers=service_headers(), json=payload)
+            if r.status_code < 500:
+                return
+            last = f"HTTP {r.status_code}"
+        except Exception as e:
+            last = repr(e)
+        if i + 1 < attempts:
+            await asyncio.sleep(2 ** i * 3)
+    print(f"[Callback] Failed to send status {status} after {attempts} attempt(s): {last}")
 
 
 async def process_ingest_job(job_id: str, request: IngestRequest):
@@ -604,6 +609,39 @@ async def reextract(request: ReextractRequest):
     await temp_storage.save_triples(request.kb_id, request.doc_id, applied)
     print(f"[Reextract] doc {request.doc_id}: {stats} → {report}")
     return {"doc_id": request.doc_id, **stats, "after_rules": report["output"]}
+
+
+class ReextractPreviewRequest(BaseModel):
+    """재추출 미리보기: 지정한 청크만 (편집 중인) 스키마로 다시 추출해 결과만 돌려준다 — 저장·그래프 변경 없음."""
+    kb_id: str
+    doc_id: str
+    node_ids: List[str]
+    schema_spec: Dict[str, Any]
+    llm: Dict[str, Any]
+    schema_rules: Optional[List[Dict[str, Any]]] = None
+
+
+@router.post("/reextract/preview")
+async def reextract_preview(request: ReextractPreviewRequest):
+    import json as _json
+    import os as _os
+    from app.utils.temp_storage import temp_storage
+    from app.core.schema_reextract import reextract_chunks
+    from app.core.schema_normalizer import apply_rules_to_triples
+
+    chunks_path = temp_storage._get_file_path(request.kb_id, request.doc_id, "_chunks.json")
+    if not _os.path.exists(chunks_path):
+        raise HTTPException(status_code=404, detail=f"저장된 청크가 없음: {request.doc_id}")
+    with open(chunks_path, encoding="utf-8") as f:
+        chunks = _json.load(f)
+    want = set(request.node_ids)
+    chunks = [c for c in chunks if c.get("node_id") in want][:10]
+    if not chunks:
+        raise HTTPException(status_code=404, detail="해당 청크를 찾지 못했습니다")
+    triples, stats = await reextract_chunks(chunks, request.schema_spec, request.llm)
+    applied, report = apply_rules_to_triples(triples, request.schema_rules)
+    return {"doc_id": request.doc_id, "chunks": [c.get("node_id") for c in chunks], "triples": applied,
+            "stats": stats, "after_rules": report}
 
 
 class ReextractRevertRequest(BaseModel):

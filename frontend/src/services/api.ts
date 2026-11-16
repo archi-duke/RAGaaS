@@ -175,6 +175,32 @@ export const schemaApi = {
         api.post(`knowledge-bases/${kbId}/schema/reextract`, { doc_ids: docIds, model }),
     reextractStatus: (kbId: string) => api.get(`knowledge-bases/${kbId}/schema/reextract/status`),
     reextractRevert: (kbId: string, docIds?: string[]) => api.post(`knowledge-bases/${kbId}/schema/reextract/revert`, { doc_ids: docIds }),
+    // 스키마 편집기 (docs/design-schema-editor.md)
+    getSpec: (kbId: string) => api.get(`knowledge-bases/${kbId}/schema/spec`),
+    validateSpec: (kbId: string, spec: any) => api.post(`knowledge-bases/${kbId}/schema/spec/validate`, spec),
+    saveSpec: (kbId: string, spec: any) => api.put(`knowledge-bases/${kbId}/schema/spec`, spec),
+    revertSpec: (kbId: string, version: number) => api.post(`knowledge-bases/${kbId}/schema/spec/revert`, { version }),
+    assignMembers: (kbId: string, className: string, entities: string[]) =>
+        api.post(`knowledge-bases/${kbId}/schema/spec/members`, { class_name: className, entities }),
+    mergeCandidates: (kbId: string, className: string) =>
+        api.get(`knowledge-bases/${kbId}/schema/spec/merge-candidates`, { params: { class_name: className } }),
+    propertyTriples: (kbId: string, property: string, limit = 300) =>
+        api.get(`knowledge-bases/${kbId}/schema/spec/triples`, { params: { property, limit } }),
+    editTriples: (kbId: string, body: { action: 'move' | 'delete'; triples: { subject: string; predicate: string; object: string }[];
+        target_property?: string; new_property?: { name: string; domain?: string; range?: string; description?: string } }) =>
+        api.post(`knowledge-bases/${kbId}/schema/spec/triples/edit`, body),
+    createClass: (kbId: string, name: string, description: string, members: string[]) =>
+        api.post(`knowledge-bases/${kbId}/schema/spec/classes`, { name, description, members }),
+    reextractPreview: (kbId: string, body: { classes: any[]; properties: any[]; triples: any[] }) =>
+        api.post(`knowledge-bases/${kbId}/schema/spec/reextract-preview`, body, { timeout: 900000 }),
+    recommend: (kbId: string, triples?: any[]) =>
+        api.post(`knowledge-bases/${kbId}/schema/recommend`, triples ? { triples } : {}, { timeout: 900000 }),
+    recommendPreview: (kbId: string, actions: any[], problems: any[]) =>
+        api.post(`knowledge-bases/${kbId}/schema/recommend/preview`, { actions, problems }, { timeout: 900000 }),
+    recommendApply: (kbId: string, actions: any[], baseVersion?: number) =>
+        api.post(`knowledge-bases/${kbId}/schema/recommend/apply`, { actions, base_version: baseVersion }, { timeout: 900000 }),
+    mergeEntities: (kbId: string, canonical: string, aliases: string[]) =>
+        api.post(`knowledge-bases/${kbId}/schema/spec/merge`, { canonical, aliases }),
     reingest: (kbId: string, docId: string, file: File) => {
         const formData = new FormData();
         formData.append('file', file);

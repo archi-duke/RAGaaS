@@ -21,12 +21,19 @@ def _is_text(filename: str) -> bool:
     return str(filename or "").lower().rsplit(".", 1)[-1] not in ("json", "yaml", "yml")
 
 
-async def build_schema_spec(kb) -> Dict[str, Any]:
-    """확정 스키마 명세: 클래스(설명·멤버), 속성(domain·별칭·관측 값 어휘)."""
+async def build_schema_spec(kb, override: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """확정 스키마 명세: 클래스(설명·멤버), 속성(domain·별칭·관측 값 어휘).
+
+    override={classes, properties} 를 주면 저장된 스키마 대신 그것으로 (편집기의 저장 전 스키마로 재추출 테스트).
+    """
     from app.core.fuseki import fuseki_client
     from app.services.schema_alignment.service import active_rules
 
     ind = (kb.promotion_metadata or {}).get("induction") or {}
+    if override:
+        ind = {"classes": override.get("classes") or [],
+               "properties": [{**p, "members": [p["name"]] + [a for a in (p.get("aliases") or []) if a != p["name"]]}
+                              for p in override.get("properties") or []]}
     rules = await active_rules(str(kb.id))
     members: Dict[str, List[str]] = {}
     for r in rules:
@@ -47,7 +54,8 @@ async def build_schema_spec(kb) -> Dict[str, Any]:
                     vals.append(v)
         except Exception:
             pass
-        props.append({"name": p["name"], "domain": p.get("domain", ""), "aliases": p.get("members", []),
+        props.append({"name": p["name"], "domain": p.get("domain", ""), "range": p.get("range", ""),
+                      "description": p.get("description", ""), "aliases": p.get("members", []),
                       "values": vals[:15]})
     return {"classes": classes, "properties": props}
 

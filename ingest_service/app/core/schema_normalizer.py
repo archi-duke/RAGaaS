@@ -32,7 +32,9 @@ def compact(text: Any) -> str:
     t = unicodedata.normalize("NFKC", str(text or ""))
     t = _CAMEL_RE.sub(" ", t).lower()
     t = _SEP_RE.sub(" ", t).strip()
-    return "".join(_stem(x) for x in t.split() if len(x) > 1)
+    out = "".join(_stem(x) for x in t.split() if len(x) > 1)
+    # 1글자 이름('줄')이 빈 키가 되어 서로 충돌하지 않도록 (backend _compact 와 같은 규칙)
+    return out or t.replace(" ", "")
 
 
 def _segs(path: str) -> List[str]:
@@ -337,8 +339,14 @@ def apply_rules_to_triples(
     value_rules = [r for r in active if r.get("rule_type") == "value" and r.get("source_value")]
     class_map = {compact(r["source_value"]): r["target_value"] for r in active
                  if r.get("rule_type") == "class" and r.get("source_value") and r.get("target_value")}
+    # triple 규칙: 사람이 트리플 단위로 고친 것 (스키마 편집기 트리플 목록) — pair=[주어, 관계, 목적어] 는
+    # entity·key·value 적용 뒤의 표기(화면에 보이는 그래프 표기)로 맞춘다. target_path=새 관계(이동), 없으면 삭제.
+    triple_map = {}
+    for r in active:
+        if r.get("rule_type") == "triple" and r.get("pair") and len(r["pair"]) == 3:
+            triple_map[tuple(compact(x) for x in r["pair"])] = r.get("target_path") or None
 
-    counts = {"entity": 0, "key": 0, "value": 0, "class": 0}
+    counts = {"entity": 0, "key": 0, "value": 0, "class": 0, "triple_moved": 0, "triple_deleted": 0}
     out: List[Dict[str, Any]] = []
     seen = set()
     for t in triples:
@@ -359,6 +367,16 @@ def apply_rules_to_triples(
                 n["object"] = r["target_value"]
                 counts["value"] += 1
                 break
+        if triple_map:
+            tk = (compact(n.get("subject")), compact(n.get("predicate")), compact(n.get("object")))
+            if tk in triple_map:
+                tgt = triple_map[tk]
+                if tgt is None:
+                    counts["triple_deleted"] += 1
+                    continue
+                n["predicate"] = tgt
+                n["edited"] = "moved"
+                counts["triple_moved"] += 1
         for side, tkey in (("subject", "subject_type"), ("object", "object_type")):
             cls = class_map.get(compact(n.get(side)))
             if cls:

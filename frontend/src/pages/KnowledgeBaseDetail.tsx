@@ -8,6 +8,7 @@ import DocumentsTab from '../components/DocumentsTab';
 import ChatInterface from '../components/ChatInterface';
 import ChunksModal from '../components/ChunksModal';
 import HorizontalConfig from '../components/HorizontalConfig';
+import SchemaEditor from '../components/SchemaEditor';
 import PipelineBuilder from '../components/PipelineBuilder';
 import type { PipelineConfig } from '../components/PipelineBuilder';
 import SearchResults from '../components/SearchResults';
@@ -95,6 +96,8 @@ export default function KnowledgeBaseDetail() {
         version_tag: 'v1.0'
     });
     const [isPromoting, setIsPromoting] = useState(false);
+    // 시드 스키마 (선택): 사람이 정한 핵심 클래스·관계 어휘. 있으면 유도가 기존 관계를 이 어휘에 매핑한다.
+    const [seedSchemaText, setSeedSchemaText] = useState('');
 
     // Resizable Panel State
     const [chatPanelWidth, setChatPanelWidth] = useState(50); // percentage
@@ -301,7 +304,16 @@ export default function KnowledgeBaseDetail() {
         if (!id) return;
         setIsPromoting(true);
         try {
-            const res = await kbApi.promote(id, { config: promoteConfig });
+            let seed_schema: any = undefined;
+            if (seedSchemaText.trim()) {
+                try {
+                    seed_schema = JSON.parse(seedSchemaText);
+                } catch {
+                    alert('시드 스키마 JSON 형식이 올바르지 않습니다.');
+                    return;
+                }
+            }
+            const res = await kbApi.promote(id, { config: promoteConfig, ...(seed_schema ? { seed_schema } : {}) });
             await loadKB(); // Refresh KB data
             const d = res?.data || {};
             if (d.run_id) {
@@ -586,6 +598,14 @@ export default function KnowledgeBaseDetail() {
                         Graph Data
                     </button>
                 )}
+                {kb.graph_backend === 'ontology' && kb.is_promoted && (
+                    <button
+                        className={clsx('tab', activeTab === 'schema' && 'active')}
+                        onClick={() => setActiveTab('schema')}
+                    >
+                        Schema
+                    </button>
+                )}
                 <button
                     className={clsx('tab', activeTab === 'chat' && 'active')}
                     onClick={() => setActiveTab('chat')}
@@ -645,6 +665,12 @@ export default function KnowledgeBaseDetail() {
                         kbId={id!}
                         backend={kb.graph_backend === 'ontology' ? 'fuseki' : (kb.graph_backend || 'neo4j')}
                     />
+                </div>
+            )}
+
+            {activeTab === 'schema' && (
+                <div style={{ flex: 1, overflow: 'auto' }}>
+                    <SchemaEditor kbId={id!} />
                 </div>
             )}
 
@@ -847,6 +873,33 @@ export default function KnowledgeBaseDetail() {
                                 </div>
                             </div>
 
+                            {(kb as any).schema_source !== 'structured' && (
+                                <div>
+                                    <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 500 }}>시드 스키마 (선택)</label>
+                                    <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', margin: '0 0 0.5rem', lineHeight: 1.5 }}>
+                                        핵심 클래스와 관계(이름·정의·방향)를 직접 정해 주면, 유도가 기존 관계 이름을 이 어휘에 매핑하고
+                                        재추출도 이 정의를 따릅니다. 내용이 다양한 문서는 자동 유도만으로는 일반 동사(소속·발표 등) 위주의
+                                        스키마가 나오기 쉬워 시드를 권장합니다.
+                                    </p>
+                                    <textarea
+                                        className="input"
+                                        rows={6}
+                                        style={{ fontFamily: 'monospace', fontSize: '0.78rem', width: '100%' }}
+                                        placeholder={'{"classes": [{"name": "Person", "description": "인물"}],\n "properties": [{"name": "지도교수_of", "description": "스승 → 제자", "domain": "Person", "range": "Person"}]}'}
+                                        value={seedSchemaText}
+                                        onChange={e => setSeedSchemaText(e.target.value)}
+                                    />
+                                    <input
+                                        type="file"
+                                        accept=".json,application/json"
+                                        style={{ fontSize: '0.8rem', marginTop: '0.4rem' }}
+                                        onChange={async e => {
+                                            const f = e.target.files?.[0];
+                                            if (f) setSeedSchemaText(await f.text());
+                                        }}
+                                    />
+                                </div>
+                            )}
                             {(kb as any).schema_source === 'structured' && (
                                 <div style={{ marginTop: '1rem', fontSize: '0.85rem', background: '#eef2ff', color: '#1e3a8a', borderRadius: '6px', padding: '0.75rem', lineHeight: 1.55 }}>
                                     <b>구조화 문서로 스키마가 정의된 온톨로지입니다.</b> YAML/JSON 의 필드 구조가 곧 스키마라 승격(스키마 유도)이 필요하지 않습니다.

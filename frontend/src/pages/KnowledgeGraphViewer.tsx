@@ -551,7 +551,19 @@ const GraphViewer: React.FC = () => {
             <ForceGraph2D
                 ref={fgRef}
                 graphData={visibleGraphData}
-                nodeLabel="label"
+                nodeLabel={(node: any) => {
+                    // 스키마 모드: 클래스 설명 + 값 속성(attributes) 목록을 툴팁으로 (docs/design-schema-editor.md §8)
+                    const esc = (x: any) => String(x ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string));
+                    const pr = node.properties || {};
+                    if (!isSchemaMode || !(pr.description || (pr.attributes || []).length)) return esc(node.label);
+                    const attrs = (pr.attributes || []).slice(0, 25).map((a: any) =>
+                        `<div>· <b>${esc(a.name)}</b>${a.description ? ` — ${esc(a.description)}` : ''}${(a.aliases || []).length ? ` <i>(${esc(a.aliases.join(', '))})</i>` : ''}</div>`).join('');
+                    const more = (pr.attributes || []).length > 25 ? `<div>… 외 ${pr.attributes.length - 25}개</div>` : '';
+                    return `<div style="max-width:420px;font-size:12px;line-height:1.45"><div style="font-weight:700">${esc(node.label)}</div>`
+                        + (pr.description ? `<div style="margin:2px 0 6px">${esc(pr.description)}</div>` : '')
+                        + ((pr.attributes || []).length ? `<div style="opacity:.8">값 속성 ${pr.attributes.length}개</div>${attrs}${more}` : '')
+                        + `</div>`;
+                }}
                 nodeColor="color"
                 nodeRelSize={8}
 

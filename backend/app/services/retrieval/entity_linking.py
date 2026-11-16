@@ -60,8 +60,15 @@ def tokens(text: str) -> List[str]:
 
 
 def _compact(text: str) -> str:
-    """구분자를 모두 제거한 형태 ("micro-service" → "microservice")."""
-    return "".join(tokens(text))
+    """구분자를 모두 제거한 형태 ("micro-service" → "microservice").
+
+    1글자 이름('줄', '암', '빛')은 tokens 가 버려 빈 문자열이 되면, 서로 다른 이름이 같은 키('')로
+    충돌한다 (예: class 규칙 '줄 → Person' 이 1글자 엔티티 전부에 적용). 토큰이 없으면 구분자만 지운 원문.
+    """
+    out = "".join(tokens(text))
+    if out:
+        return out
+    return re.sub(r"[\s_\-·.,/()\[\]]+", "", normalize_text(text))
 
 
 def is_sentence_like(label: str) -> bool:
@@ -105,12 +112,26 @@ def score_candidate(token: str, candidate: str) -> float:
     c_tokens: Set[str] = set(tokens(candidate))
     t_compact, c_compact = _compact(token), _compact(candidate)
 
+    t_list, c_list = tokens(token), tokens(candidate)
     if t == c or (t_compact and t_compact == c_compact):
         base = 100.0
-    elif c.startswith(t) or t.startswith(c) or (
-        t_compact and c_compact and (c_compact.startswith(t_compact) or t_compact.startswith(c_compact))
-    ):
+    elif t_list and len(c_list) > len(t_list) and c_list[-len(t_list):] == t_list:
+        # 핵어 일치: 질문어가 후보의 마지막 토큰(들)과 같다 — '보어' ↔ '닐스_보어',
+        # '아인슈타인' ↔ '알베르트_아인슈타인'. 한국어·영어 복합 명사는 핵어가 끝에 오므로
+        # 후보가 곧 질문어가 가리키는 대상이다.
+        base = 75.0
+    elif t.startswith(c):
+        # 질문어가 후보 + 조사 등 ('아인슈타인의' ↔ '아인슈타인')
         base = 60.0
+    elif c.startswith(t):
+        if t_list and c_list[:len(t_list)] == t_list:
+            # 수식어 일치: 질문어가 복합어의 앞 토큰 — '보어_원자_모형' 은 보어가 아니라 모형이다
+            base = 50.0
+        else:
+            # 질문어에 글자가 이어 붙음 (조사로 이어지는 문장 노드 '아인슈타인을_…', 다른 복합어)
+            base = 35.0
+    elif t_compact and c_compact and (c_compact.startswith(t_compact) or t_compact.startswith(c_compact)):
+        base = 40.0
     elif c_tokens and t_tokens and (c_tokens <= t_tokens or t_tokens <= c_tokens):
         # 토큰 단위 포함: "micro frontend architecture" ⊇ "micro frontend"
         base = 40.0
@@ -135,6 +156,18 @@ def score_candidate(token: str, candidate: str) -> float:
     return score
 
 
+def degree_bonus(deg: int) -> float:
+    """관계가 많이 달린 노드 선호 — 로그 스케일, 최대 18점.
+
+    선형 8점 상한일 때는 성(姓)만 쓴 질문('아인슈타인')이 관계 21개짜리 인물 노드 대신
+    관계 1~2개짜리 문장·복합어 노드에 연결됐다.
+    """
+    import math
+    if deg <= 0:
+        return 0.0
+    return min(18.0, 4.0 * math.log2(1 + deg))
+
+
 def rank_candidates(token: str, candidates: List[str]) -> List[Tuple[str, float]]:
     """후보들을 점수 내림차순으로 정렬해 (후보, 점수) 리스트 반환 (점수 0 제외)."""
     scored = [(c, score_candidate(token, c)) for c in candidates]
@@ -147,3 +180,74 @@ def best_candidate(token: str, candidates: List[str]) -> Optional[str]:
     """가장 점수가 높은 후보 문자열 반환. 매칭 후보가 없으면 None."""
     ranked = rank_candidates(token, candidates)
     return ranked[0][0] if ranked else None
+
+
+# ---------------------------------------------------------------------------
+# 동일 엔티티 묶음 (검색 시) — docs/design-graph-multihop-chain.md §7
+# ---------------------------------------------------------------------------
+# 텍스트 추출 그래프는 같은 대상을 여러 노드로 만든다: '볼츠만'(관계 17개) / '루트비히_볼츠만'(2개),
+# '양자_전기역학' / '양자전기역학'. 앵커를 하나로만 잡으면 다른 노드에 달린 사실을 놓친다.
+# 확실한 경우만 묶는다:
+#   1. 구분자 제거 후 같은 이름 ('양자_전기역학' ≡ '양자전기역학')
+#   2. 성(姓) ↔ 전체 이름: 한 토큰 이름이 2~3토큰 이름의 마지막 토큰과 같고, 둘 다 인물이 아닌
+#      다른 유형으로 지정돼 있지 않으며, 숫자가 없고, 그런 전체 이름이 하나뿐일 때 ('플랑크' 는 막스·에르빈 둘이라 안 묶음)
+
+PERSON_TYPE_HINTS = ("person", "인물", "사람", "scientist", "과학자")
+
+
+def _is_person_type(types) -> bool:
+    return any(any(h in str(t).lower() for h in PERSON_TYPE_HINTS) for t in types or ())
+
+
+def _has_non_person_type(types) -> bool:
+    return any(t and not any(h in str(t).lower() for h in PERSON_TYPE_HINTS) for t in types or ())
+
+
+def equivalent_names(anchor: str, anchor_types, candidates) -> List[str]:
+    """anchor 와 같은 대상으로 볼 수 있는 후보 이름들.
+
+    candidates: {이름: 유형 집합}. anchor 자신은 결과에 넣지 않는다.
+    """
+    a_compact = _compact(anchor)
+    a_toks = tokens(anchor)
+    if not a_compact:
+        return []
+    out: List[str] = []
+    surname_full: List[str] = []
+    surname_single: List[str] = []
+    for name, types in candidates.items():
+        if name == anchor:
+            continue
+        c_toks = tokens(name)
+        if _compact(name) == a_compact:
+            out.append(name)
+            continue
+        if _has_non_person_type(anchor_types) or _has_non_person_type(types):
+            continue
+        if any(ch.isdigit() for ch in anchor + name):
+            continue  # '1919년_일식' ↔ '일식' 은 성·이름 관계가 아니다
+        if len(a_toks) == 1 and 2 <= len(c_toks) <= 3 and c_toks[-1] == a_toks[0] and len(a_toks[0]) >= 2:
+            surname_full.append(name)
+        elif len(c_toks) == 1 and 2 <= len(a_toks) <= 3 and a_toks[-1] == c_toks[0] and len(c_toks[0]) >= 2:
+            surname_single.append(name)
+    if len(surname_full) == 1:
+        out.extend(surname_full)
+    if len(surname_single) == 1:
+        # 전체 이름 앵커 → 성 노드. 같은 성의 다른 전체 이름이 있으면 성 노드가 누구인지 모호하다.
+        others = [n for n, t in candidates.items()
+                  if n != anchor and 2 <= len(tokens(n)) <= 3 and tokens(n)[-1] == a_toks[-1]
+                  and not _has_non_person_type(t)]
+        if not others:
+            out.extend(surname_single)
+    return out
+
+
+# 다단계 판정 보조: 관계를 서술하는 관형절(용언 + 관형형 어미)이 둘 이상 이어지는 질문
+# "광전효과를 처음 발견한 사람의 박사 지도교수가 1847년에 제안한 법칙은?" → 발견한, 제안한
+_RELATIVE_CLAUSE_RE = re.compile(r"(?<![가-힣])([가-힣]{2,}(?:한|된|던|친|닌|끈|준|받은))(?=\s|\(|$)")
+_NOT_CLAUSE = {"같은", "다른", "모든", "어떤", "이러한", "그러한", "또한", "한", "단한"}
+
+
+def relative_clause_count(question: str) -> int:
+    """질문 안의 관계 서술 관형절 수 (대략). 2 이상이면 다단계 후보."""
+    return sum(1 for w in _RELATIVE_CLAUSE_RE.findall(question or "") if w not in _NOT_CLAUSE)
