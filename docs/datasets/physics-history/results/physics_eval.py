@@ -8,12 +8,13 @@
 사전지식 판별: answer_hit=True 인데 evidence_hit=False 면 '기억으로 맞힘' 의심.
 """
 import json
+import os
 import re
 import sys
 import time
 import urllib.request
 
-BASE = "http://192.168.219.114:44300/ragaas/api/v2/knowledge-bases/"
+BASE = os.getenv("RAGAAS_BASE", "http://localhost:44300/ragaas/api/v2/knowledge-bases/")
 D = "/private/tmp/claude-501/-Users-dukekimm-Works-RAGaaS/503152e9-a23b-429e-ac1f-71a13cb65ae9/scratchpad/physics/"
 NEG_PAT = re.compile(r"(없습니다|없다|포함되어 있지 않|찾을 수 없|언급되어 있지 않|알 수 없|정보가 없|couldn't find|not)", re.I)
 
