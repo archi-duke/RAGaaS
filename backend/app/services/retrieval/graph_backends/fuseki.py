@@ -898,12 +898,19 @@ class FusekiBackend(GraphBackend):
             sparql = rt.build_pair_query(anchor_sets[u1], anchor_sets[u2])
             triples = self._run_triple_query(kb_id, sparql, "")
             log_trace(f"[Fuseki] Pair query {n1} ↔ {n2}: {len(triples)} triples")
-            if triples:
+            # 목록 질문("…에 기반한 이론을 모두 나열")에서 두 엔티티 사이 관계는 수식어('플랑크가 제안한')일 뿐이다 →
+            # 직접 관계만으로 끝내지 않고 앵커별 조회(E)에 합친다 (Q32, 2026-11-17)
+            list_ask = bool(re.search(r"모두|나열|전부|몇 개|몇 명", query_text or ""))
+            if triples and not list_ask:
                 reasoning["targeting"] = {"mode": "pair", "matches": [], "selected_paths": [f"{n1} ↔ {n2}"]}
                 return self._targeted_result(sparql, triples, reasoning, trace_logs), []
             # 직접 관계가 없으면 앵커별로 관계를 조회해 합친다 (E) — "A와 B는 같은 해인가", "몇 년 걸렸나" 형.
             # 비교·계산은 근거 청크를 보고 답변 LLM 이 한다.
             merged, parts, sqls = [], [], []
+            if triples:
+                merged = [{**t, "hop": 0} for t in triples]
+                parts = [f"{n1} ↔ {n2}"]
+                sqls = [sparql]
             for idx, (n, u) in enumerate(resolved[:2], 1):
                 sub, _ = await self._relation_targeted_query(kb_id, query_text, [(n, u)], kwargs, log_trace)
                 st = ((sub or {}).get("reasoning") or {}).get("targeting") or {}
@@ -916,7 +923,8 @@ class FusekiBackend(GraphBackend):
                 from app.services.retrieval import chain_query as cq
                 log_trace(f"[Fuseki] Per-anchor query {n1} / {n2}: {len(merged)} triples")
                 reasoning["targeting"] = {"mode": "E", "matches": [], "selected_paths": parts,
-                                          "reason": f"{n1}와 {n2} 사이 직접 관계 없음 → 앵커별 조회"}
+                                          "reason": (f"목록 질문 — {n1}↔{n2} 직접 관계에 앵커별 조회를 더함" if list_ask and triples
+                                                     else f"{n1}와 {n2} 사이 직접 관계 없음 → 앵커별 조회")}
                 ranked = cq.order_chunks_by_hop(merged)
                 sparql = "\n# ---- next anchor ----\n".join(sqls)
                 reasoning.update({"sparql": sparql, "triples": merged, "chunks": ranked,
@@ -1115,6 +1123,7 @@ class FusekiBackend(GraphBackend):
         hops = [{**h, "no": i} for i, h in enumerate(plan["hops"], 1)]
         finals = [{**f, "no": len(hops) + 1} for f in plan["finals"]]
         repick_used = False
+        final_repick_used = False
 
         # 출발 후보: 첫 홉이 성립하는 첫 후보 (링킹 1순위가 문장·복합어 노드일 때 대비)
         start_uri, frontier, first = None, [], None
@@ -1161,6 +1170,13 @@ class FusekiBackend(GraphBackend):
                     res = await repick(base, h)
                     if res:
                         triples, qs, h, flipped = res
+                elif not triples and h.get("final") and not final_repick_used:
+                    # 추가 속성도 계획 관계가 0건이면 한 번 재선택 ('누가 제안했나' 에 '등장' 을 고른 경우 — Q36)
+                    final_repick_used = True
+                    res = await repick(base, h)
+                    if res:
+                        triples, qs, h, flipped = res
+                        h = {**h, "final": True}
             sparqls.extend(qs)
             if h.get("final"):
                 nxt: List[str] = []
@@ -1657,6 +1673,12 @@ class FusekiBackend(GraphBackend):
                         if relative_clause_count(query_text) >= 2:
                             is_multihop_pattern = True
                             log_trace("[Fuseki] Multi-hop by relative clauses (>=2).")
+                    # 찾은 대상을 이어서 묻는 질문 ('…은 무엇이며, 누가 몇 년에 …') — 앵커 관계 한 번으로는 멈춘다 (Q36)
+                    if not is_multihop_pattern and query_text:
+                        from app.services.retrieval.entity_linking import has_followup_ask
+                        if has_followup_ask(query_text):
+                            is_multihop_pattern = True
+                            log_trace("[Fuseki] Multi-hop by follow-up ask ('무엇이며, 누가/언제/몇 년').")
 
                 if entity_centric_enabled and query_text and is_multihop_pattern:
                     # 다단계: 홉별 결정적 체인 (H). 계획 불가·출발점 없음·첫 홉 0건이면 C 로.

@@ -256,3 +256,12 @@ def test_parse_evidence_collects_years():
                    **({"year": {"value": str(y)}} if y else {})}
     ts = cq.parse_evidence([b(1933), b(1922), b(None)], ["http://x/e"])
     assert len(ts) == 1 and ts[0]["years"] == [1922, 1933]
+
+
+def test_followup_ask_detection():
+    from app.services.retrieval.entity_linking import has_followup_ask
+    assert has_followup_ask("피르나우 저온 흑체 측정이 기반한 보정법은 무엇이며, 누가 몇 년에 제안했는가?")
+    assert has_followup_ask("그 실험은 무엇이고 언제 수행되었나?")
+    assert not has_followup_ask("특수상대성이론이 계승·발전시킨 두 선행 개념(원리·변환)은 무엇이며, "
+                                "특수상대성이론을 기하학적으로 계승·발전시킨 개념은 무엇인가?")
+    assert not has_followup_ask("뉴턴이 저술한 책은 무엇인가?")

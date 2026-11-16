@@ -99,6 +99,8 @@ def build_plan_messages(question: str, vocab: List[Dict[str, Any]]) -> List[Dict
    - expect: 이 홉에서 얻는 대상 설명 (예: "인물", "1847년에 제안된 법칙"). 연도·국적 같은 조건은 여기에만 적는다.
 3. 마지막 노드에 대해 여러 가지를 묻는다면(예: "어떤 원리를 제안했고 몇 년에 상을 받았나") 마지막 홉 다음에
    final_relations 로 그 노드에서 더 볼 관계들을 적는다 (방향 포함).
+   "…은 무엇이며, 누가 (몇 년에) 제안했는가" 처럼 마지막 노드를 만든 주체를 물으면, 마지막 노드가 목적어이므로
+   {{"relation": "제안함", "direction": "in"}} 처럼 direction=in. 연도는 관계(진술)에 붙어 있으니 따로 관계를 찾지 않는다.
 4. 체인으로 표현할 수 없는 질문(같은 해 비교, 기간 계산 등)이면 {{"chainable": false}}.
 JSON 만: {{"chainable": true, "start": "...", "hops": [{{"relations": [...], "direction": "out|in", "expect": "..."}}],
  "final_relations": [{{"relation": "...", "direction": "out|in"}}]}}"""
