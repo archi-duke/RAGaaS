@@ -25,7 +25,20 @@ from app.services.retrieval.relation_targeting import (
 )
 
 REL_NS = "http://rag.local/rel/"
-MAX_HOPS = 4
+MAX_HOPS = 6            # 기본 최대 홉 (그래프 스테이지 Max Hop 옵션이 없을 때)
+MAX_HOPS_CAP = 8        # 옵션으로도 넘을 수 없는 상한 (홉마다 후보가 불어나 지연·잡음)
+
+
+def resolve_max_hops(params: Dict[str, Any]) -> int:
+    """그래프 스테이지 옵션 → 최대 홉. max_hops 우선, 옛 설정(is_auto_hops=false 면 hops) 호환."""
+    v = params.get("max_hops")
+    if v is None and params.get("is_auto_hops") is False:
+        v = params.get("hops")
+    try:
+        v = int(v) if v is not None else MAX_HOPS
+    except (TypeError, ValueError):
+        v = MAX_HOPS
+    return max(1, min(v, MAX_HOPS_CAP))
 MAX_FRONTIER = 15
 MAX_HOP_TRIPLES = 120
 MAX_VOCAB = 80
@@ -76,7 +89,7 @@ def build_vocab(bindings: List[Dict[str, Any]], schema_props: Optional[List[Dict
 # 2. 체인 계획 (LLM 1회)
 # ---------------------------------------------------------------------------
 
-def build_plan_messages(question: str, vocab: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+def build_plan_messages(question: str, vocab: List[Dict[str, Any]], max_hops: int = MAX_HOPS) -> List[Dict[str, str]]:
     lines = []
     for v in vocab:
         dr = f" ({v['domain'] or '?'} → {v['range'] or '?'})" if (v["domain"] or v["range"]) else ""
@@ -91,12 +104,14 @@ def build_plan_messages(question: str, vocab: List[Dict[str, Any]]) -> List[Dict
 
 규칙:
 1. start: 체인의 출발 엔티티 — 질문에 이름이 직접 나온 고유명 하나 (예: '광전효과', '패러데이').
-2. hops: 출발점에서 답까지 따라갈 관계를 순서대로 (최대 {MAX_HOPS}개).
+2. hops: 출발점에서 답까지 따라갈 관계를 순서대로 (최대 {max_hops}개).
    - relations: 그 홉에서 쓸 관계 이름 1~3개 (같은 뜻 후보). 위 어휘에 있는 이름만.
    - direction: 현재 노드가 주어면 "out", 목적어면 "in".
      예) "X를 발견한 사람" = X 가 목적어 → {{"relations": ["발견함"], "direction": "in"}}
      예) "A의 지도교수" 에서 관계가 '스승 → 제자' 방향이면 A 는 목적어 → "in"
    - expect: 이 홉에서 얻는 대상 설명 (예: "인물", "1847년에 제안된 법칙"). 연도·국적 같은 조건은 여기에만 적는다.
+   - '출발한', '이어진', '바탕으로 한', '영향을 받은' 처럼 어느 관계인지 애매한 표현은 relations 에 그럴듯한 관계 2~3개를
+     함께 넣는다 (예: "~에서 출발한 방정식" → ["계승_발전", "기반함"]). 하나만 골라 엇나가지 않게.
 3. 마지막 노드에 대해 여러 가지를 묻는다면(예: "어떤 원리를 제안했고 몇 년에 상을 받았나") 마지막 홉 다음에
    final_relations 로 그 노드에서 더 볼 관계들을 적는다 (방향 포함).
    "…은 무엇이며, 누가 (몇 년에) 제안했는가" 처럼 마지막 노드를 만든 주체를 물으면, 마지막 노드가 목적어이므로
@@ -124,7 +139,8 @@ def is_lineage_relation(v: Optional[Dict[str, Any]]) -> bool:
     return bool(dom) and dom == rng and not _is_person_type([dom])
 
 
-def validate_plan(data: Optional[Dict[str, Any]], vocab: List[Dict[str, Any]]) -> Tuple[Optional[Dict[str, Any]], List[str]]:
+def validate_plan(data: Optional[Dict[str, Any]], vocab: List[Dict[str, Any]],
+                  max_hops: int = MAX_HOPS) -> Tuple[Optional[Dict[str, Any]], List[str]]:
     """어휘에 없는 관계는 버린다. 쓸 관계가 없는 홉이 있으면 계획 무효."""
     notes: List[str] = []
     if not data or data.get("chainable") is False:
@@ -135,7 +151,10 @@ def validate_plan(data: Optional[Dict[str, Any]], vocab: List[Dict[str, Any]]) -
     if not start:
         return None, ["출발 엔티티 없음"]
     hops = []
-    for i, h in enumerate((data.get("hops") or [])[:MAX_HOPS], 1):
+    raw_hops = data.get("hops") or [] if isinstance(data, dict) else []
+    if len(raw_hops) > max_hops:
+        notes.append(f"계획 {len(raw_hops)}홉 → 최대 홉 설정 {max_hops} 에서 자름 (답이 그 너머에 있으면 찾지 못함)")
+    for i, h in enumerate(raw_hops[:max_hops], 1):
         rels = []
         for r in h.get("relations") or []:
             n = names.get(_compact(r))
@@ -147,8 +166,15 @@ def validate_plan(data: Optional[Dict[str, Any]], vocab: List[Dict[str, Any]]) -
             return None, notes + [f"홉{i} 에 쓸 수 있는 관계 없음"]
         d = h.get("direction") if h.get("direction") in ("out", "in") else "out"
         rels = list(dict.fromkeys(rels))[:3]
+        # 방향 처리 (2026-11-17): 계획한 방향을 먼저 조회한다.
+        #  - lineage(같은 클래스 비인물 관계: 계승_발전 등): 0건이면 양방향으로 넓힌다 (추출 방향이 섞인 데이터 대비)
+        #  - same_class(같은 클래스 인물 관계: 지도교수_of·영향_줌): 반대 방향 재시도 안 함 — 방향이 곧 의미
+        #    ('러더퍼드의 스승' 0건 → 제자로 내려가던 문제)
+        #  - 그 밖(클래스가 다른 관계: 제안함 등): 0건이면 반대 방향 재시도 (뒤집어도 뜻이 섞이지 않음)
+        vs = [by_name.get(r) or {} for r in rels]
+        same_class = all((v.get("domain") or "").strip() and v.get("domain") == v.get("range") for v in vs)
         hops.append({"relations": rels, "direction": d, "expect": str(h.get("expect") or "")[:80],
-                     "both": all(is_lineage_relation(by_name.get(r)) for r in rels)})
+                     "lineage": all(is_lineage_relation(v) for v in vs), "same_class": same_class})
     if not hops:
         return None, notes + ["홉 없음"]
     finals = []
@@ -208,6 +234,34 @@ def next_frontier(triples: List[Dict[str, Any]], direction: str,
         if len(out) >= MAX_FRONTIER:
             break
     return out
+
+
+def prune_dead_branches(hop_runs: List[Tuple[List[str], List[Dict[str, Any]]]], expand) -> Tuple[List[List[Dict[str, Any]]], int]:
+    """막다른 갈래 가지치기: 마지막 홉까지 이어진 경로의 트리플만 남긴다.
+
+    hop_runs: 홉 순서대로 (그 홉의 출발 노드들, 트리플). expand(uri) → 동일 엔티티 묶음.
+    뒤에서부터: 다음 홉에 실제로 이어진(그 홉의 출발점이 된) 노드로 끝나는 트리플만 남긴다.
+    반환: (홉별 남은 트리플, 지운 트리플 수). 6홉 질문에서 볼츠만 갈래(엔트로피 …)가 근거를 묻던 문제 (2026-11-17).
+    """
+    kept: List[List[Dict[str, Any]]] = [list(t) for _, t in hop_runs]
+    removed = 0
+    for k in range(len(hop_runs) - 2, -1, -1):
+        base_k = set(hop_runs[k][0])
+        # 다음 홉에서 남은 트리플의 출발 쪽 끝 (동일 엔티티 포함)
+        nb = set(hop_runs[k + 1][0])
+        alive = set()
+        for t in kept[k + 1]:
+            for u in (t["s_uri"], t["o_uri"]):
+                if u in nb:
+                    alive.update(expand(u))
+        nxt = []
+        for t in kept[k]:
+            far = t["o_uri"] if t["s_uri"] in base_k else t["s_uri"]
+            if far in alive:
+                nxt.append(t)
+        removed += len(kept[k]) - len(nxt)
+        kept[k] = nxt
+    return kept, removed
 
 
 def parse_hop(bindings: List[Dict[str, Any]], hop_no: int) -> List[Dict[str, Any]]:

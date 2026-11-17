@@ -265,3 +265,85 @@ def test_followup_ask_detection():
     assert not has_followup_ask("특수상대성이론이 계승·발전시킨 두 선행 개념(원리·변환)은 무엇이며, "
                                 "특수상대성이론을 기하학적으로 계승·발전시킨 개념은 무엇인가?")
     assert not has_followup_ask("뉴턴이 저술한 책은 무엇인가?")
+
+
+def test_term_matched_paths_promotes_tail_paths():
+    vals = lambda *ls: [{"uri": f"http://x/{l}", "label": l, "members": 1} for l in ls]
+    cat = [{"key": f"p{i}", "uris": [f"http://r/p{i}"], "type": "text", "values": vals(f"값{i}"), "examples": [], "dv": 1} for i in range(200)]
+    cat.append({"key": "자문", "uris": ["http://r/a"], "type": "text", "values": vals("원자폭탄 개발"), "examples": [], "dv": 1})
+    cat.append({"key": "참여", "uris": ["http://r/b"], "type": "text", "values": vals("전시 원자폭탄 개발 계획"), "examples": [], "dv": 1})
+    kinds = [{"name": "Person", "members": ["http://x/p"], "examples": [], "class_uri": "http://c/P"}]
+    cats = {"Person": cat}
+    hits = cq.term_matched_paths(["원자 폭탄", "atomic bomb"], kinds, cats)
+    assert [k for k, _ in hits["Person"]] == ["자문", "참여"]
+    promoted = cq.promote_paths(cats, hits)
+    assert [p["key"] for p in promoted["Person"][:2]] == ["자문", "참여"] and len(promoted["Person"]) == len(cat)
+    msg = cq.build_plan_messages("원자 폭탄 개발에 기여한 사람은?", kinds, promoted, None, "", hits)[1]["content"]
+    assert "0. 자문 = '원자폭탄 개발'" in msg and "1. 참여 = '전시 원자폭탄 개발 계획'" in msg
+    assert cq.term_matched_paths(["a"], kinds, cats) == {}   # 1글자·영문만은 힌트 안 만듦
+
+
+def test_fuzzy_match_jamo_typos_and_auto_rule():
+    from app.services.agent_query import fuzzy_match as fm
+    labels = ["슈뢰딩거 방정식", "디랙 방정식", "하이젠베르크", "원자폭탄 개발", "불확정성 원리",
+              "확률 해석·불확정성 원리·상보성 원리를 거침", "광전 효과"]
+    top = lambda t: fm.fuzzy_candidates(t, labels)
+    assert top("슈레딩거 방정식")[0]["label"] == "슈뢰딩거 방정식" and top("슈레딩거 방정식")[0]["auto"]
+    assert top("하이젠베르그")[0]["label"] == "하이젠베르크"
+    assert top("광전효과")[0] == {"label": "광전 효과", "distance": 0.0, "via": "fuzzy", "auto": True}
+    # 긴 설명형 라벨은 부분 일치여도 자동 확정하지 않는다
+    long_ = [c for c in top("불확정성원리") if c["label"].startswith("확률")]
+    assert long_ and not long_[0]["auto"]
+    # 오타가 큰 말은 후보일 뿐 자동 확정 안 함
+    c = top("핵폭틴 개방")
+    assert c and c[0]["label"] == "원자폭탄 개발" and not c[0]["auto"]
+    assert fm.fuzzy_candidates("QED", labels) == []      # 한글 없는 말은 자모 대상 아님
+
+
+def test_contains_accepts_value_list_as_or():
+    kinds, cats = _catalog()
+    f = [{"path": "has_positive_effect_on", "op": "contains", "value": ["변경", "확장"]}]
+    r = cq.validate_plan({"kind": "Style", "filters": f}, kinds, cats, strict=True)
+    assert r["status"] == "ok" and r["plan"]["filters"][0]["texts"] == ["변경", "확장"]
+    sp = cq.compile_member_query(r["plan"])
+    assert 'CONTAINS(LCASE(STR(?tlf0)), LCASE("변경")) || CONTAINS(LCASE(STR(?tlf0)), LCASE("확장"))' in sp
+    assert "['" not in sp
+
+
+def test_resolve_max_hops_and_plan_truncation():
+    from app.services.retrieval import chain_query as chq
+    assert chq.resolve_max_hops({}) == 6                                   # 기본
+    assert chq.resolve_max_hops({"is_auto_hops": True, "hops": 2}) == 6   # 옛 Auto → 기본
+    assert chq.resolve_max_hops({"is_auto_hops": False, "hops": 3}) == 3  # 옛 고정 hops → 상한
+    assert chq.resolve_max_hops({"max_hops": 20}) == 8                    # 절대 상한
+    vocab = [{"name": "영향_줌", "domain": "", "range": "", "description": "", "count": 5}]
+    data = {"chainable": True, "start": "A", "hops": [{"relations": ["영향_줌"], "direction": "out", "expect": ""}] * 5}
+    plan, notes = chq.validate_plan(data, vocab, max_hops=3)
+    assert len(plan["hops"]) == 3 and any("최대 홉 설정 3" in n for n in notes)
+
+
+def test_prune_dead_branches_keeps_only_complete_paths():
+    from app.services.retrieval import chain_query as chq
+    T = lambda s, o: {"s_uri": f"u:{s}", "o_uri": f"u:{o}"}
+    hop_runs = [
+        (["u:맥스웰"], [T("맥스웰", "아인슈타인"), T("맥스웰", "볼츠만")]),
+        (["u:아인슈타인", "u:볼츠만"], [T("아인슈타인", "광양자"), T("볼츠만", "엔트로피공식")]),
+        (["u:광양자", "u:엔트로피공식"], [T("광양자", "물질파")]),          # 엔트로피공식 은 막다른 갈래
+    ]
+    kept, removed = chq.prune_dead_branches(hop_runs, lambda u: [u])
+    assert removed == 2
+    assert kept[0] == [T("맥스웰", "아인슈타인")] and kept[1] == [T("아인슈타인", "광양자")]
+
+
+def test_hop_direction_flags():
+    from app.services.retrieval import chain_query as chq
+    vocab = [{"name": "지도교수_of", "domain": "Person", "range": "Person", "description": "", "count": 9},
+             {"name": "계승_발전", "domain": "TheoryOrConcept", "range": "TheoryOrConcept", "description": "", "count": 20},
+             {"name": "제안함", "domain": "Person", "range": "TheoryOrConcept", "description": "", "count": 50}]
+    plan, _ = chq.validate_plan({"chainable": True, "start": "A", "hops": [
+        {"relations": ["지도교수_of"], "direction": "in"}, {"relations": ["계승_발전"], "direction": "out"},
+        {"relations": ["제안함"], "direction": "out"}]}, vocab)
+    h1, h2, h3 = plan["hops"]
+    assert h1["same_class"] and not h1["lineage"]          # 사제: 반대 방향 재시도 안 함
+    assert h2["lineage"] and not h2.get("both")             # 계보: 계획 방향 먼저 (0건이면 양방향)
+    assert not h3["same_class"] and not h3["lineage"]       # 제안함: 재시도 허용

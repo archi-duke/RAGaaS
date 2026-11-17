@@ -246,6 +246,11 @@ async def lookup_values(kb_id: str, terms: Sequence[str], kind: Optional[str] = 
     narrower: Dict[str, List[Dict[str, Any]]] = {}
     suggestions: Dict[str, List[Dict[str, Any]]] = {}
     await _prefetch_fallback(kb_id, idx, terms, terms_en)
+    # 오탈자·유사어 후보 (그래프의 현재 값 라벨 전체 — 사전에 없는 값도) — docs/design/agent/design-typo-synonym-matching.md
+    from app.services.agent_query import fuzzy_match as fm
+    weak = [t for t in terms if not any(m["score"] >= lx.SCORE_STRIPPED for m in lx.match_term(idx, t))
+            and not any(_score(t, lab) >= 100 for lab in where)]
+    fz = await fm.candidates(kb_id, weak, list(where.keys())) if weak else {}
     for term in terms:
         hits, rel = [], []
         # 용어 사전 (한영·음역·동의어) — docs/design/agent/design-kb-lexicon.md §5
@@ -289,6 +294,18 @@ async def lookup_values(kb_id: str, terms: Sequence[str], kind: Optional[str] = 
                     sug.append({**w, "similarity": c["similarity"], "via": c["via"]})
             if sug:
                 suggestions[term] = _dedupe(sug)[:limit]
+        # 자모 거리 0.2 이하(명백한 오타·띄어쓰기)는 일치로, 나머지는 후보로
+        if term in fz:
+            sug = list(suggestions.get(term) or [])
+            for c in fz[term]:
+                info = {k: c[k] for k in ("distance", "similarity") if k in c}
+                for w in where.get(c["label"], []):
+                    if c.get("auto") and not any(h["score"] >= lx.SCORE_STRIPPED for h in hits):
+                        hits.append({**w, "score": 88.0, "via": f"fuzzy:{c['label']}", **info})
+                    else:
+                        sug.append({**w, "via": c["via"], **info})
+            if sug:
+                suggestions[term] = _dedupe(sug)[:limit]
         hits.sort(key=lambda h: (-h["score"], -h["members"]))
         rel.sort(key=lambda h: -h["members"])
         matches[term] = _dedupe(hits)[:limit]
@@ -298,7 +315,9 @@ async def lookup_values(kb_id: str, terms: Sequence[str], kind: Optional[str] = 
             "lexicon_entries": idx["entries"],
             "note": "matches 가 비면 그래프에 그 값이 없다는 뜻. narrower 는 상위 개념을 하위 값으로 푼 후보 "
                     "(reviewed=false 는 사람 검토 전) — 푼 방식을 답변에 밝힐 것. via=translated:* 는 영어 표기 유사도로 찾은 것 "
-                    "(오탈자·처음 보는 표기). suggestions 는 확정 못 한 후보 — 질문 맥락으로 골라 쓸 것."}
+                    "(오탈자·처음 보는 표기). via=fuzzy:* 는 자모 편집거리로 확정한 오타·띄어쓰기 교정 (distance 0.2 이하). "
+                    "suggestions 는 확정 못 한 후보(via=fuzzy 자모 거리 / embedding 의미 근접 / translated) — 질문 맥락으로 골라 쓰고, "
+                    "골라 쓴 해석은 답변에 밝힐 것."}
 
 
 async def _prefetch_fallback(kb_id: str, idx: Dict[str, Any], terms: Sequence[str],

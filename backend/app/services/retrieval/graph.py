@@ -20,6 +20,10 @@ _CLASS_Q_RE = re.compile(
     r"|(모두|목록|전부|몇\s*개|몇\s*가지|어떤\s+\S+(들|것))")
 
 
+
+# 목록 질문(질의 계획 P) 결과 엔티티가 이 수보다 적으면 문서 검색으로 보강한다 (6.4)
+SUPPLEMENT_MIN_ENTITIES = 2
+
 def looks_class_query(query: str) -> bool:
     """유형 수준 질문(조건으로 대상을 고르는 질문)처럼 보이는가 — 질의 계획을 미리 시작할지 판단용 (틀려도 LLM 1회 낭비뿐)."""
     return bool(_CLASS_Q_RE.search((query or "").strip()))
@@ -127,6 +131,24 @@ class GraphRetrievalStrategy(RetrievalStrategy):
             except Exception as _e:
                 log(f"[Lexicon] 사용 안 함: {_e}")
         
+        # 오탈자·유사어 (docs/design/agent/design-typo-synonym-matching.md): 원래 말 + 교정한 말 + 동의어를
+        # 그래프의 현재 값 라벨에 맞춘다 (MCP lookup_values 와 같은 규칙). 자동 확정은 엔티티로, 후보는 질의 계획 힌트로.
+        doc_query = (query_analysis.get("corrected_query") if kwargs.get("resolve_terms", True) else None) or query
+        if graph_backend_type == "ontology" and kwargs.get("resolve_terms", True):
+            try:
+                interp = await self._resolve_terms(kb_id, query_analysis)
+                if interp["auto"]:
+                    all_entities = list(dict.fromkeys(all_entities + interp["auto"]))
+                if interp["hints"]:
+                    kwargs["term_hint_labels"] = interp["hints"]
+                if interp["log"]:
+                    kwargs["_interpretation"] = interp["log"]
+                    log(f"[해석] {'; '.join(interp['log'])}")
+            except Exception as _e:
+                log(f"[해석] 오탈자·유사어 단계 건너뜀: {_e}")
+        if doc_query != query:
+            log(f"[해석] 오탈자 교정 질문: '{doc_query}' (문서 검색에 사용)")
+
         graph_backend_for_check = kwargs.get("graph_backend", "ontology")
         if not all_entities and graph_backend_for_check != "ontology":
             log(f"No entities found in query: {query}")
@@ -140,7 +162,7 @@ class GraphRetrievalStrategy(RetrievalStrategy):
         # Detect multi-hop: LLM hop_count 우선, 문자열매칭은 폴백
         llm_hops = query_analysis.get("hop_count")
         if isinstance(llm_hops, int) and llm_hops >= 2:
-            graph_hops = max(graph_hops, llm_hops)
+            graph_hops = min(max(graph_hops, llm_hops), int(kwargs.get("max_hops") or llm_hops))
             log(f"DEBUG: 🔀 Multi-hop by LLM hop_count={llm_hops}, setting hops to {graph_hops}")
         elif any(keyword in query.lower() for keyword in ["의 스승의", "의 제자의", "master's master", "student's student"]):
             graph_hops = max(graph_hops, 2)
@@ -198,8 +220,15 @@ class GraphRetrievalStrategy(RetrievalStrategy):
         results = []
         ordered = graph_result.get("chunk_order") == "linkage"
         if chunk_ids:
+            # 깊은 체인은 홉마다 근거가 필요하다 — Top K 10 으로는 6홉에서 홉당 1~2개뿐 (2026-11-17)
+            tgh = ((graph_result.get("reasoning") or {}).get("targeting") or {})
+            k_eff = top_k
+            if tgh.get("mode") == "H" and int(tgh.get("hops_reached") or 0) > 2:
+                k_eff = min(max(top_k, top_k + 3 * (int(tgh["hops_reached"]) - 2)), 24)
+                if k_eff != top_k:
+                    log(f"DEBUG: 체인 {tgh['hops_reached']}홉 → 근거 청크 {top_k} → {k_eff}")
             results = await self._fetch_chunks(
-                kb_id, chunk_ids, query, top_k, emb_service=emb_service, ordered=ordered
+                kb_id, chunk_ids, query, k_eff, emb_service=emb_service, ordered=ordered
             )
         
         # 6. Graph-Guided Fallback: If SPARQL found entities but no chunks, or if no results at all
@@ -228,7 +257,7 @@ class GraphRetrievalStrategy(RetrievalStrategy):
             # 실패한 질의 계획의 "만족하는 엔티티 0개" 요약이 답변 컨텍스트에 들어가면
             # 답변 LLM 이 문서 근거가 있어도 "답할 수 없음" 으로 거절한다 → 제거
             graph_result.pop("result_summary", None)
-            results = await self._fallback_search(kb_id, query, entities, top_k, emb_service=emb_service)
+            results = await self._fallback_search(kb_id, doc_query, entities, top_k, emb_service=emb_service)
             ordered = False
             log(f"DEBUG: 📄 그래프로 답할 수 없음 → 문서 검색 {len(results)}건")
         elif not results or (len(results) == 1 and results[0].get("chunk_id") == "GRAPH_METADATA_ONLY"):
@@ -242,6 +271,35 @@ class GraphRetrievalStrategy(RetrievalStrategy):
              log(f"DEBUG: Strict Mode - Fallback search disabled. Returning empty/metadata-only results.")
 
         
+        if kwargs.get("_interpretation"):
+            tgi = graph_result.setdefault("reasoning", {}).setdefault("targeting", {})
+            tgi["interpretation"] = kwargs["_interpretation"]
+            if graph_result.get("result_summary"):
+                graph_result["result_summary"] = ("질문 표기 해석: " + "; ".join(kwargs["_interpretation"])
+                                                  + " — 이 해석으로 찾았음을 답변에 밝힐 것.\n" + graph_result["result_summary"])
+
+        # 6.4 목록 질문의 재현율 보강: 질의 계획(P) 결과 엔티티가 적으면 문서 검색 결과를 그래프 근거 뒤에 붙인다.
+        # 그래프의 스키마 밖 관계·표기 차이로 놓친 사실이 문서에는 있는 경우 ('원자 폭탄 개발에 기여한 사람' →
+        # 그래프 결과 아인슈타인 1명, 문서에는 파인만·보어도 있음 — 2026-11-17). 그래프 근거는 앞에 그대로 둔다.
+        tg0 = ((graph_result.get("reasoning") or {}).get("targeting") or {})
+        if kwargs.get("list_supplement", True) and (kwargs.get("graph_fallback") or "vector") == "vector" \
+                and tg0.get("mode") == "P" and results \
+                and results[0].get("chunk_id") != "GRAPH_METADATA_ONLY" \
+                and len(tg0.get("result_entities") or []) < SUPPLEMENT_MIN_ENTITIES:
+            extra = await self._fallback_search(kb_id, doc_query, entities, top_k, emb_service=emb_service)
+            have = {r.get("chunk_id") for r in results}
+            extra = [r for r in extra if r.get("chunk_id") not in have][:max(top_k // 2, 3)]
+            if extra:
+                results = list(results) + extra
+                n_ent = len(tg0.get("result_entities") or [])
+                tg0["supplement"] = f"그래프 결과 엔티티 {n_ent}개 → 문서 검색 {len(extra)}건 보강 (그래프 근거 뒤)"
+                tg0.setdefault("warnings", []).append(tg0["supplement"])
+                if graph_result.get("result_summary"):
+                    graph_result["result_summary"] += (
+                        f"\n주의: 그래프에서 찾은 것은 {n_ent}개뿐이다. 관계 이름·표기가 달라 그래프에서 놓친 사실이"
+                        " 문서 근거(뒤쪽 청크)에 있을 수 있으니 함께 보고 답할 것 — 그래프 결과만으로 '그 밖에는 없다' 고 단정하지 말 것.")
+                log(f"DEBUG: 📄 목록 질문 그래프 결과 {n_ent}개 → 문서 검색 {len(extra)}건 보강")
+
         # 6.5 추론 리포트 (Execution Log 맨 앞) — docs/design/graph/design-graph-relation-targeting.md
         reasoning = self._build_reasoning(graph_result, query_analysis, entities, results, ordered, llm_model_name)
         from app.services.retrieval.relation_targeting import render_reasoning_report
@@ -369,6 +427,41 @@ class GraphRetrievalStrategy(RetrievalStrategy):
                 clickable.append(e)
         return clickable
 
+    async def _resolve_terms(self, kb_id: str, qa: Dict[str, Any]) -> Dict[str, Any]:
+        """질문의 말 → 그래프 값 라벨 (자동 확정 / 후보). 원래 말 + 교정 질문의 말 + 질문 분석의 동의어."""
+        from app.services.agent_query import catalog as _cat
+        from app.services.retrieval.entity_linking import _compact
+        base = [e for e in (qa.get("primary_entities") or []) if e]
+        variants = qa.get("term_variants") or {}
+        terms = list(dict.fromkeys(base + [v for e in base for v in variants.get(e, [])]))[:12]
+        out = {"auto": [], "hints": [], "log": []}
+        if not terms:
+            return out
+        r = await _cat.lookup_values(kb_id, terms, limit=6)
+        # 원래 말이 그래프에 그대로 있으면 동의어 해석은 힌트로만 (답변에 '해석' 을 밝히지 않는다)
+        base_found = {e for e in base if any(_compact(m["value"]) == _compact(e) for m in (r["matches"].get(e) or []))}
+        for t in terms:
+            ms, sug = r["matches"].get(t) or [], r["suggestions"].get(t) or []
+            exact = any(_compact(m["value"]) == _compact(t) for m in ms)
+            auto = [m["value"] for m in ms if not exact]
+            cands = [s["value"] for s in sug][:2]
+            for v in auto:
+                if v not in out["auto"]:
+                    out["auto"].append(v)
+            for v in auto + cands + ([m["value"] for m in ms] if exact else []):
+                if v not in out["hints"]:
+                    out["hints"].append(v)
+            src = "" if t in base else " (동의어)"
+            owner = t if t in base else next((e for e in base if t in variants.get(e, [])), None)
+            if owner in base_found:
+                continue
+            if auto and not exact:
+                out["log"].append(f"'{t}'{src} → {', '.join(dict.fromkeys(auto[:3]))}")
+            elif cands and not ms:
+                out["log"].append(f"'{t}'{src} → 후보 {', '.join(dict.fromkeys(cands))}")
+        out["hints"] = out["hints"][:10]
+        return out
+
     async def _analyze_and_extract(self, kb_id: str, query: str, llm_cfg=None, llm_model: str = "gpt-4o-mini") -> Tuple[List[str], Dict[str, Any]]:
         """질의 분석 + 엔티티 추출을 단일 LLM 호출로 병합 (기존 2회 → 1회).
 
@@ -452,6 +545,16 @@ class GraphRetrievalStrategy(RetrievalStrategy):
                                 max/min — not an attribute of one named entity
                                 ("테스트 복잡도가 high인 스타일은?", "X와 잘 어울리는 스타일 모두",
                                  "pros가 가장 많은 스타일은?", "스타일은 몇 개야?")
+        10. corrected_query: if the query has obvious typos or misspellings, the query with ONLY those fixed
+            (same language, same meaning) — e.g. "핵폭틴 개방에 기여한 사람은?" -> "핵폭탄 개발에 기여한 사람은?",
+            "슈레딩거 방정식을 제안한 사람" -> "슈뢰딩거 방정식을 제안한 사람". null if there is no typo.
+            Never use it to reinterpret the question.
+        11. term_variants: for each entity, up to 4 other names that documents in the query's language may use
+            for the SAME thing — formal name, common synonym, spelled-out abbreviation, older/newer term
+            (e.g. "핵폭탄" -> ["원자폭탄", "원자 폭탄"]; "QED" -> ["양자 전기역학"]; "중력 법칙" -> ["만유인력의 법칙"]).
+            If the entity itself is misspelled, put the corrected spelling FIRST
+            (e.g. "핵폭틴 개방" -> ["핵폭탄 개발", "원자폭탄 개발"]).
+            Only true synonyms of the same thing — not related concepts. {{}} if none.
         9. target_class: for class_query, the kind of entity being asked for as written
            (e.g. "아키텍처 스타일", "스타일", "참가자"), else null. Values or names that appear as
            CONDITIONS (e.g. "high", "microservices" in "microservices와 잘 어울리는 스타일") stay in entities.
@@ -468,7 +571,9 @@ class GraphRetrievalStrategy(RetrievalStrategy):
           "alternatives": [],
           "relation_aliases": ["스승", "master", "teacher", "mentor"],
           "intent": "attribute",
-          "target_class": null
+          "target_class": null,
+          "corrected_query": null,
+          "term_variants": {{"홍길동": []}}
         }}
         """
         try:
@@ -532,6 +637,13 @@ class GraphRetrievalStrategy(RetrievalStrategy):
                 for e in data.get("entities", [])
                 if (e.get("name") if isinstance(e, dict) else e)
             ]
+            cq_txt = data.get("corrected_query")
+            if isinstance(cq_txt, str) and cq_txt.strip() and cq_txt.strip() != query.strip():
+                analysis["corrected_query"] = cq_txt.strip()
+            tv = data.get("term_variants")
+            if isinstance(tv, dict):
+                analysis["term_variants"] = {str(k): [str(x).strip() for x in (v or []) if str(x).strip()][:4]
+                                             for k, v in tv.items() if isinstance(v, list)}
             if not analysis["relation_aliases"] and data.get("relationship_type"):
                 analysis["relation_aliases"] = [str(data["relationship_type"])]
             # 관계어와 같은 엔티티는 엔티티에서 제거 ("pros" 가 앵커 후보가 되는 것 방지)

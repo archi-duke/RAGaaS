@@ -54,15 +54,13 @@ const DEFAULT_PARAMS: Record<StageType, Record<string, any>> = {
     bm25: { top_k: 50, use_multi_pos: true },
     brute_force: { top_k: 3, threshold: 1.5 },
     graph: {
-        hops: 2,
-        is_auto_hops: true,
+        max_hops: 6,     // 다단계 체인의 최대 홉 — 질문이 요구하는 홉 수로 가되 이 값을 넘지 않음
         top_k: 10,
-        use_relation_filter: true,
-        enable_inverse: true,
-        inverse_mode: 'always',
+        resolve_terms: true,      // 오탈자·유사어 해석 (질문 표기 → 그래프 값). 끄면 문항당 약 6초 빠름
+        list_supplement: true,    // 목록 질문의 그래프 결과가 적으면(2개 미만) 문서 검색으로 보강
+        graph_fallback: 'vector', // 그래프로 못 찾으면: vector(문서 검색) | none(빈 결과 — 그래프만의 성능 측정)
         use_schema_mode: false,
         use_dynamic_schema: true,  // 실제 술어 목록을 LLM 에 주어 지어낸 술어(prop:장점 등) 방지
-        enable_entity_expansion: false,
         merge_mode: 'union',
         custom_query_prompt: '',
         model_type: 'llm' as 'llm' | 'embedding',
@@ -174,8 +172,6 @@ export default function PipelineBuilder({
                             if (stage.type === 'graph') {
                                 // If not promoted (Schema None), ensure filters are enabled
                                 if (!isOntologyPromoted) {
-                                    params.use_relation_filter = true;
-                                    params.enable_inverse = true;
                                     params.use_schema_mode = false;
                                 } else {
                                     // If promoted, respect saved settings or default to schema mode on
@@ -430,32 +426,12 @@ export default function PipelineBuilder({
                                         const newStages = [...stages];
                                         const p = { ...newStages[index].params };
 
-                                        if (nextSchemaMode) {
-                                            // Backup
-                                            p._prev_use_relation_filter = p.use_relation_filter ?? true;
-                                            p._prev_enable_inverse = p.enable_inverse ?? false;
-                                            p._prev_inverse_mode = p.inverse_mode ?? 'always';
-                                            p._prev_enable_entity_expansion = p.enable_entity_expansion ?? false;
-
-                                            // Force
-                                            p.use_schema_mode = true;
-                                            p.use_relation_filter = true;
-                                            p.enable_inverse = true;
-                                            p.inverse_mode = 'always';
-                                            p.enable_entity_expansion = true;
-                                        } else {
-                                            // Restore
-                                            p.use_schema_mode = false;
-                                            if (p._prev_use_relation_filter !== undefined) p.use_relation_filter = p._prev_use_relation_filter;
-                                            if (p._prev_enable_inverse !== undefined) p.enable_inverse = p._prev_enable_inverse;
-                                            if (p._prev_inverse_mode !== undefined) p.inverse_mode = p._prev_inverse_mode;
-                                            if (p._prev_enable_entity_expansion !== undefined) p.enable_entity_expansion = p._prev_enable_entity_expansion;
-
-                                            delete p._prev_use_relation_filter;
-                                            delete p._prev_enable_inverse;
-                                            delete p._prev_inverse_mode;
-                                            delete p._prev_enable_entity_expansion;
-                                        }
+                                        p.use_schema_mode = nextSchemaMode;
+                                        // 옛 옵션(Rel Filter·Inverse·Entity Expand) 백업 값은 정리 — 2026-11-17 옵션 제거
+                                        delete p._prev_use_relation_filter;
+                                        delete p._prev_enable_inverse;
+                                        delete p._prev_inverse_mode;
+                                        delete p._prev_enable_entity_expansion;
 
                                         newStages[index] = { ...newStages[index], params: p };
                                         setStages(newStages);
@@ -680,8 +656,9 @@ export default function PipelineBuilder({
                 );
 
             case 'graph':
-                const isAutoHops = params.is_auto_hops ?? true;
-                const showLatencyWarning = !isAutoHops && params.hops >= 4;
+                // Max Hop: 옛 설정(is_auto_hops/hops) 호환 — 백엔드 resolve_max_hops 와 같은 규칙
+                const maxHops = params.max_hops ?? (params.is_auto_hops === false ? params.hops : 6) ?? 6;
+                const showLatencyWarning = maxHops >= 7;
                 return (
                     <>
                         <div style={{ display: 'flex', flexDirection: 'row', gap: '0.3rem', alignItems: 'flex-start' }}>
@@ -689,11 +666,10 @@ export default function PipelineBuilder({
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', flexShrink: 0 }}>
                                 <div style={{ display: 'flex', flexDirection: 'row', gap: '0.3rem' }}>
                                     <ParamSlider
-                                        label="Hops"
-                                        value={isAutoHops ? 2 : params.hops}
-                                        min={1} max={5}
-                                        onChange={(v) => handleParamChange(index, 'hops', v)}
-                                        disabled={isAutoHops}
+                                        label="Max Hop"
+                                        value={maxHops}
+                                        min={1} max={8}
+                                        onChange={(v) => handleParamChange(index, 'max_hops', v)}
                                     />
                                     <ParamSlider
                                         label="Top K"
@@ -720,61 +696,44 @@ export default function PipelineBuilder({
                             </div>
                             {/* 슬라이더 옆: 2x2 체크박스 → Inverse Search → QueryLLM */}
                             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '0.3rem', paddingBottom: 0, minWidth: 0 }}>
-                                {/* 1행: Auto Hops | Entity Expand */}
+                                {/* 오탈자·유사어 | 목록 보강 */}
                                 <div style={{ display: 'flex', flexDirection: 'row', gap: '0.3rem', alignItems: 'center' }}>
-                                    <ParamCheckbox label="Auto Hops" checked={isAutoHops} onChange={(v) => handleParamChange(index, 'is_auto_hops', v)} />
                                     <ParamCheckbox
-                                        label="Entity Expand"
-                                        checked={!!params.enable_entity_expansion}
-                                        onChange={(v) => handleParamChange(index, 'enable_entity_expansion', v)}
-                                        disabled={!!params.use_schema_mode}
+                                        label="Typo·Synonym"
+                                        checked={params.resolve_terms ?? true}
+                                        onChange={(v) => handleParamChange(index, 'resolve_terms', v)}
+                                    />
+                                    <ParamCheckbox
+                                        label="List Supplement"
+                                        checked={params.list_supplement ?? true}
+                                        onChange={(v) => handleParamChange(index, 'list_supplement', v)}
+                                        disabled={(params.graph_fallback ?? 'vector') === 'none'}
                                     />
                                 </div>
-                                {/* 2행: Rel Filter | Dynamic Schema */}
-                                <div style={{ display: 'flex', flexDirection: 'row', gap: '0.3rem', alignItems: 'center' }}>
-                                    <ParamCheckbox
-                                        label="Rel Filter"
-                                        checked={params.use_relation_filter}
-                                        onChange={(v) => handleParamChange(index, 'use_relation_filter', v)}
-                                        disabled={!!params.use_schema_mode}
+                                {/* 그래프로 못 찾으면 */}
+                                <div style={{ display: 'flex', alignItems: 'center' }}>
+                                    <ParamSelect
+                                        label="No Graph Result"
+                                        layout="inline"
+                                        minWidth="90px"
+                                        value={params.graph_fallback ?? 'vector'}
+                                        options={[
+                                            { value: 'vector', label: 'Doc Search' },
+                                            { value: 'none', label: 'Empty' }
+                                        ]}
+                                        onChange={(v) => handleParamChange(index, 'graph_fallback', v)}
                                     />
-                                    {!isOntologyPromoted ? (
+                                </div>
+                                {/* Dynamic Schema (승격 전 KB 만) */}
+                                {!isOntologyPromoted && (
+                                    <div style={{ display: 'flex', flexDirection: 'row', gap: '0.3rem', alignItems: 'center' }}>
                                         <ParamCheckbox
                                             label="Dynamic Schema"
                                             checked={params.use_dynamic_schema ?? true}
                                             onChange={(v) => handleParamChange(index, 'use_dynamic_schema', v)}
                                         />
-                                    ) : (
-                                        <div />
-                                    )}
-                                </div>
-                                {/* 3행: Inverse Search */}
-                                <div style={{ display: 'flex', alignItems: 'center' }}>
-                                    <ParamSelect
-                                        label="Inverse Search"
-                                        layout="inline"
-                                        minWidth="80px"
-                                        disabled={!!params.use_schema_mode}
-                                        value={!params.enable_inverse ? 'none' : (params.inverse_mode || 'always')}
-                                        options={[
-                                            { value: 'none', label: 'None' },
-                                            { value: 'auto', label: 'Auto' },
-                                            { value: 'always', label: 'Always' }
-                                        ]}
-                                        onChange={(v) => {
-                                            const newStages = [...stages];
-                                            newStages[index] = {
-                                                ...newStages[index],
-                                                params: {
-                                                    ...newStages[index].params,
-                                                    enable_inverse: v !== 'none',
-                                                    inverse_mode: v === 'none' ? (params.inverse_mode || 'always') : v
-                                                }
-                                            };
-                                            setStages(newStages);
-                                        }}
-                                    />
-                                </div>
+                                    </div>
+                                )}
                                 {/* 4행: Model (Graph는 기본 LLM) */}
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', flexWrap: 'wrap' }}>
                                     <span style={{ fontSize: '0.7rem', color: '#475569', flexShrink: 0 }}>Model</span>

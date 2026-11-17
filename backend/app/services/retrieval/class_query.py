@@ -368,12 +368,60 @@ def _path_line_base(i: int, p: Dict[str, Any], index: Optional[Dict[str, int]] =
     return f"{i}. {p['key']}{eq} [text, 값 {p['dv']}종, 예: {ex}]"
 
 
+TERM_HINT_MAX = 8   # 질문 말이 값에 들어 있는 경로 힌트 최대 수
+
+
+def term_matched_paths(terms: Sequence[str], kinds: List[Dict[str, Any]],
+                       catalogs: Dict[str, List[Dict[str, Any]]]) -> Dict[str, List[Tuple[str, str]]]:
+    """질문의 말(엔티티)이 값 라벨에 들어 있는 경로 → {kind: [(path key, 값 라벨), ...]}.
+
+    계획 LLM 에게는 멤버 많은 순으로 경로 일부(MAX_PATHS_FOR_LLM)만 보인다. 스키마 밖 관계(참여·자문 등)는
+    멤버가 1~2명이라 뒤로 밀려 잘린다 → '원자 폭탄 개발에 기여한 사람' 이 '자문 → 원자폭탄 개발' 을 못 봤다
+    (2026-11-17). 값이 맞는 경로는 순위와 무관하게 앞에 두고 힌트로 준다 — 강제 조건이 아니라 후보.
+    """
+    import re as _re
+    keys = []
+    for t in terms or []:
+        k = _re.sub(r"[\s_\-·]", "", str(t or "")).lower()
+        if len(k) >= 2 and _re.search(r"[가-힣]", k) and k not in keys:
+            keys.append(k)
+    out: Dict[str, List[Tuple[str, str]]] = {}
+    if not keys:
+        return out
+    for kd in kinds:
+        hits = []
+        for p in catalogs.get(kd["name"], []):
+            for v in p.get("values") or []:
+                lab = str(v.get("label") or "")
+                if any(k in _re.sub(r"[\s_\-·]", "", lab).lower() for k in keys):
+                    hits.append((p["key"], lab))
+                    break
+        if hits:
+            out[kd["name"]] = hits[:TERM_HINT_MAX]
+    return out
+
+
+def promote_paths(catalogs: Dict[str, List[Dict[str, Any]]],
+                  matched: Dict[str, List[Tuple[str, str]]]) -> Dict[str, List[Dict[str, Any]]]:
+    """값이 맞는 경로를 각 유형 카탈로그 맨 앞으로 (나머지 순서 유지). 계획·검증은 같은 순서를 써야 한다."""
+    out = {}
+    for kind, cat in catalogs.items():
+        want = [k for k, _ in matched.get(kind, [])]
+        if not want:
+            out[kind] = cat
+            continue
+        front = [p for k in want for p in cat if p["key"] == k]
+        out[kind] = front + [p for p in cat if p["key"] not in want]
+    return out
+
+
 def build_plan_messages(
     query_text: str,
     kinds: List[Dict[str, Any]],
     catalogs: Dict[str, List[Dict[str, Any]]],
     value_hints: Optional[Sequence[str]] = None,
     retry_note: str = "",
+    term_hints: Optional[Dict[str, List[Tuple[str, str]]]] = None,
 ) -> List[Dict[str, str]]:
     kind_lines = []
     for k in kinds:
@@ -389,6 +437,15 @@ def build_plan_messages(
     hints = ""
     if value_hints:
         hints = f"\n질문에 등장한 그래프 값 노드(조건 값일 가능성 높음): {', '.join(value_hints)}\n"
+    if term_hints:
+        lines = []
+        for kind, pairs in term_hints.items():
+            cat = catalogs.get(kind, [])
+            idx = {p["key"]: i for i, p in enumerate(cat[:MAX_PATHS_FOR_LLM])}
+            lines += [f"  [{kind}] {idx[k]}. {k} = '{v}'" for k, v in pairs if k in idx]
+        if lines:
+            hints += ("\n질문의 말이 값에 들어 있는 경로 (관계 이름이 달라도 같은 사실일 수 있다 — 질문에 맞으면 모두 쓰고,"
+                      " 여러 경로면 path 에 번호 배열 + op contains 로 묶어라):\n" + "\n".join(lines) + "\n")
     user = f"""질문: {query_text}
 {hints}
 유형(kind):
@@ -673,9 +730,15 @@ def validate_plan(
             except (TypeError, ValueError):
                 return {"status": "reject", "message": f"{p['key']} 에 숫자가 아닌 값 {f.get('value')}"}
         elif op == "contains":
-            nf["text"] = str(f.get("value") or "").strip()
-            if not nf["text"]:
+            # 값 목록이면 '이 중 하나라도 포함' (OR). 목록을 문자열로 바꿔 찾던 버그 —
+            # 계획 LLM 이 경로 힌트의 값 둘을 한 번에 넣어 0건이 됐다 (2026-11-17)
+            raw_v = f.get("value")
+            texts = [str(x).strip() for x in (raw_v if isinstance(raw_v, list) else [raw_v]) if str(x or "").strip()]
+            if not texts:
                 return {"status": "reject", "message": f"{p['key']} contains 값 없음"}
+            nf["text"] = texts[0]
+            if len(texts) > 1:
+                nf["texts"] = list(dict.fromkeys(texts))[:8]
         elif strict and op == "in" and isinstance(f.get("value"), list) and len(f["value"]) > 1:
             # 외부 계획의 in: 목록 밖 값은 빼고 나머지로 평가 (하나라도 맞으면). GoJIRA style-score 보고(2026-11-16):
             # ["small", "medium_or_lower"] 에서 목록 밖 값 하나 때문에 small 매칭까지 사라지던 문제
@@ -798,7 +861,7 @@ def plan_summary(plan: Dict[str, Any]) -> Dict[str, Any]:
             sym = _NUM_OPS.get(op, "=" if op == "eq" else op)
             return f"{k} {sym} {', '.join(f'{n:g}' for n in f['numbers'])}"
         if "text" in f:
-            return f"{k} contains '{f['text']}'"
+            return f"{k} contains " + " | ".join(f"'{t}'" for t in (f.get("texts") or [f["text"]]))
         return f"{k} {op}"
     agg = plan.get("aggregate")
     agg_txt = None
@@ -864,8 +927,9 @@ def _filter_condition(f: Dict[str, Any], v: str, tag: str) -> str:
         return f"OPTIONAL {{ {v} rdfs:label {lbl}_ }} BIND(COALESCE({lbl}_, STR({v})) AS {lbl}) FILTER({conds})"
     if "text" in f:
         lbl = f"?tl{tag}"
+        conds = " || ".join(f"CONTAINS(LCASE(STR({lbl})), LCASE({_sparql_str(t)}))" for t in (f.get("texts") or [f["text"]]))
         return (f"OPTIONAL {{ {v} rdfs:label {lbl}_ }} BIND(COALESCE({lbl}_, STR({v})) AS {lbl}) "
-                f"FILTER(CONTAINS(LCASE(STR({lbl})), LCASE({_sparql_str(f['text'])})))")
+                f"FILTER({conds})")
     return ""
 
 

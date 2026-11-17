@@ -336,17 +336,16 @@ class PipelineExecutor:
         """Execute graph search stage"""
         from app.services.retrieval import retrieval_factory
         
-        hops = params.get("hops", 2)
+        # Max Hop (2026-11-17): 다단계 체인이 따라갈 최대 홉. 질문이 요구하는 홉 수로 가되 이 값을 넘지 않는다.
+        # 옛 설정 호환: max_hops 가 없으면 is_auto_hops=false 일 때 hops 를, 아니면 기본값을 쓴다.
+        from app.services.retrieval.chain_query import resolve_max_hops
+        max_hops = resolve_max_hops(params)
+        hops = min(2, max_hops)      # 옛 그래프 확장 경로(LLM SPARQL·Neo4j)의 기본 깊이 — 질문 분석이 더 깊다고 보면 max_hops 까지
         top_k = params.get("top_k", 10)
-        use_relation_filter = params.get("use_relation_filter", True)
-        enable_inverse = params.get("enable_inverse", False)
-        
-        inverse_mode = params.get("inverse_mode", "auto")
         use_schema_mode = params.get("use_schema_mode", True)
         use_dynamic_schema = params.get("use_dynamic_schema", True)
         custom_query_prompt = params.get("custom_query_prompt", "")
         merge_mode = params.get("merge_mode", "union")
-        enable_entity_expansion = params.get("enable_entity_expansion", False)
         # [NEW] Extract Prompt from Pipeline Params ensures it acts like a parameter
         sparql_prompt_template = params.get("sparql_prompt_template", None)
 
@@ -364,14 +363,19 @@ class PipelineExecutor:
             metric_type=ctx.metric_type,
             enable_graph_search=True,
             graph_hops=hops,
+            max_hops=max_hops,
+            # 오늘 추가한 그래프 옵션 (2026-11-17)
+            resolve_terms=params.get("resolve_terms", True),          # 오탈자·유사어 해석
+            list_supplement=params.get("list_supplement", True),      # 목록 질문 결과가 적으면 문서 검색 보강
+            graph_fallback=params.get("graph_fallback", "vector"),    # 그래프로 못 찾으면: vector(문서 검색) | none(빈 결과)
             graph_backend=ctx.graph_backend,
-            use_relation_filter=use_relation_filter,
-            enable_inverse_search=enable_inverse,
-            inverse_extraction_mode=inverse_mode,
+            # 역방향 탐색은 옵션에서 뺐다 — 내부 기본값 (Neo4j·LLM SPARQL 경로만 사용, 2026-11-17)
+            enable_inverse_search=True,
+            inverse_extraction_mode="auto",
             use_schema_mode=use_schema_mode,
             use_dynamic_schema=use_dynamic_schema,
             custom_query_prompt=custom_query_prompt,
-            enable_entity_expansion=enable_entity_expansion,
+            enable_entity_expansion=False,   # 옵션 제거 (관계 타게팅·체인에서는 잡음만 늘림)
             llm_model_config=llm_model_config,
             # Pass the pipeline parameter prompt
             sparql_prompt_template=sparql_prompt_template,
