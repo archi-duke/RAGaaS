@@ -15,6 +15,17 @@ export interface PipelineStage {
 
 export interface PipelineConfig {
     stages: PipelineStage[];
+    // 운영/테스트 탭 (docs/design/agent/design-search-entry-and-pipeline-versions.md §6)
+    // live: 운영 구성으로 실행 (외부 에이전트가 받는 결과와 같음) / test: 편집 중인 테스트 구성으로 실행
+    mode?: 'live' | 'test';
+}
+
+interface PipelineVersion {
+    version: number;
+    ref: string;
+    created_at?: string;
+    note?: string;
+    live?: boolean;
 }
 
 interface PipelineBuilderProps {
@@ -121,6 +132,21 @@ export default function PipelineBuilder({
     const [showDropdown, setShowDropdown] = useState(false);
     const [isLoading, setIsLoading] = useState(true);
     const [copied, setCopied] = useState(false);
+    // 운영/테스트 탭 + 버전 이력
+    const [tab, setTab] = useState<'live' | 'test'>('test');
+    const [liveStages, setLiveStages] = useState<PipelineStage[]>([]);
+    const [liveRef, setLiveRef] = useState<string | null>(null);
+    const [liveVersion, setLiveVersion] = useState<number | null>(null);
+    const [changes, setChanges] = useState<string[]>([]);
+    const [showPublish, setShowPublish] = useState(false);
+    const [publishNote, setPublishNote] = useState('');
+    const [showHistory, setShowHistory] = useState(false);
+    const [versions, setVersions] = useState<PipelineVersion[]>([]);
+    const [viewVersion, setViewVersion] = useState<{ ref: string; json: string; changes: string[]; warnings: string[] } | null>(null);
+    const [confirmActivate, setConfirmActivate] = useState<string | null>(null);
+    const [pvBusy, setPvBusy] = useState(false);
+    const [pvError, setPvError] = useState('');
+    const importRef = React.useRef<HTMLInputElement>(null);
     const { settings } = useModelSettings();
 
     const handleCopyPipeline = () => {
@@ -158,40 +184,61 @@ export default function PipelineBuilder({
         ? availableStages
         : availableStages.filter(s => s.type !== 'graph');
 
-    // Load pipeline config from backend on mount
+    // 저장된 구성을 화면 상태로 (그래프·리랭크는 LLM 모델 유형 고정, 승격 전 KB 는 스키마 모드 끔)
+    const adjustStages = React.useCallback((raw: PipelineStage[]): PipelineStage[] => (raw || []).map((stage: PipelineStage) => {
+        const params = { ...(stage.params || {}) };
+        if (stage.type === 'graph') {
+            if (!isOntologyPromoted) {
+                params.use_schema_mode = false;
+            } else if (params.use_schema_mode === undefined) {
+                params.use_schema_mode = true;
+            }
+            params.model_type = 'llm';
+            return { ...stage, params };
+        }
+        if (stage.type === 'rerank') {
+            params.model_type = 'llm';
+            return { ...stage, params };
+        }
+        return { ...stage, params };
+    }), [isOntologyPromoted]);
+
+    const api = `${config.RAGAAS_API}knowledge-bases/${kbId}/pipeline`;
+
+    const pvFetch = async (path: string, init?: RequestInit) => {
+        const r = await fetch(`${api}${path}`, init);
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d.detail || `요청 실패 (${r.status})`);
+        return d;
+    };
+
+    const refreshVersions = async () => {
+        try {
+            const d = await pvFetch('/versions?limit=50');
+            setVersions(d.versions || []);
+            const live = (d.versions || []).find((v: PipelineVersion) => v.live);
+            setLiveVersion(live ? live.version : null);
+            setPvError('');
+        } catch (e: any) {
+            setVersions([]);
+            setLiveVersion(null);
+            setPvError(e.message);   // 이력 저장소(Gitea) 연결 안 됨 등 — 검색에는 영향 없음
+        }
+    };
+
+    // Load pipeline config (운영 + 테스트) from backend on mount
     useEffect(() => {
         const loadPipeline = async () => {
             try {
-                const response = await fetch(`${config.RAGAAS_API}knowledge-bases/${kbId}/pipeline`);
+                const response = await fetch(api);
                 if (response.ok) {
-                    const config = await response.json();
-                    if (config.stages && config.stages.length > 0) {
-                        // Adjust graph stage parameters based on promotion status
-                        const adjustedStages = config.stages.map((stage: PipelineStage) => {
-                            const params = { ...stage.params };
-                            if (stage.type === 'graph') {
-                                // If not promoted (Schema None), ensure filters are enabled
-                                if (!isOntologyPromoted) {
-                                    params.use_schema_mode = false;
-                                } else {
-                                    // If promoted, respect saved settings or default to schema mode on
-                                    if (params.use_schema_mode === undefined) {
-                                        params.use_schema_mode = true;
-                                    }
-                                }
-                                // Graph 필터는 기본 LLM
-                                params.model_type = 'llm';
-                                return { ...stage, params };
-                            }
-                            if (stage.type === 'rerank') {
-                                params.model_type = 'llm';
-                                return { ...stage, params };
-                            }
-                            return stage;
-                        });
-
-                        setStages(adjustedStages);
-                    }
+                    const d = await response.json();
+                    const live = d.live?.config?.stages ?? d.stages ?? [];
+                    const draft = d.draft?.stages ?? live;
+                    setLiveStages(adjustStages(live));
+                    setStages(adjustStages(draft));
+                    setLiveRef(d.live?.ref ?? null);
+                    setChanges(d.changes || []);
                 }
             } catch (error) {
                 console.error('Failed to load pipeline config:', error);
@@ -200,31 +247,127 @@ export default function PipelineBuilder({
             }
         };
         loadPipeline();
+        refreshVersions();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [kbId, isOntologyPromoted]);
 
-    // Save pipeline config to backend (debounced)
+    // 테스트 구성 자동 저장 (debounced) — 운영에는 영향 없음
     useEffect(() => {
         if (isLoading) return; // Don't save during initial load
 
         const saveTimeout = setTimeout(async () => {
             try {
-                await fetch(`${config.RAGAAS_API}knowledge-bases/${kbId}/pipeline`, {
+                const d = await pvFetch('/draft', {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ stages })
                 });
+                setChanges(d.changes || []);
             } catch (error) {
-                console.error('Failed to save pipeline config:', error);
+                console.error('Failed to save pipeline draft:', error);
             }
         }, 500); // Debounce 500ms
 
         return () => clearTimeout(saveTimeout);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [stages, kbId, isLoading]);
 
-    // Notify parent of changes
+    // Notify parent of changes — 운영 탭이면 운영 구성, 테스트 탭이면 편집 중인 구성으로 채팅한다
     useEffect(() => {
-        onPipelineChange({ stages });
-    }, [stages, onPipelineChange]);
+        onPipelineChange(tab === 'live' ? { stages: liveStages, mode: 'live' } : { stages, mode: 'test' });
+    }, [stages, liveStages, tab, onPipelineChange]);
+
+    const handlePublish = async () => {
+        setPvBusy(true);
+        setPvError('');
+        try {
+            const d = await pvFetch('/publish', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ note: publishNote })
+            });
+            setLiveStages(adjustStages(d.live?.config?.stages || []));
+            setLiveRef(d.live?.ref ?? null);
+            setChanges(d.changes && !d.unchanged ? [] : (d.changes || []));
+            setShowPublish(false);
+            setPublishNote('');
+            await refreshVersions();
+        } catch (e: any) {
+            setPvError(e.message);
+        } finally {
+            setPvBusy(false);
+        }
+    };
+
+    const handleRevertToLive = () => {
+        setStages(liveStages.map(s => ({ ...s, params: { ...s.params } })));
+        setTab('test');
+    };
+
+    const handleViewVersion = async (ref: string) => {
+        try {
+            const d = await pvFetch(`/versions/${ref}`);
+            setViewVersion({ ref, json: JSON.stringify(d.config, null, 2), changes: d.changes_from_live || [], warnings: d.warnings || [] });
+        } catch (e: any) {
+            setPvError(e.message);
+        }
+    };
+
+    const handleLoadVersion = async (ref: string) => {
+        setPvBusy(true);
+        try {
+            const d = await pvFetch(`/versions/${ref}/load`, { method: 'POST' });
+            setStages(adjustStages(d.draft?.stages || []));
+            setChanges(d.changes || []);
+            setTab('test');
+            setShowHistory(false);
+            if ((d.warnings || []).length) setPvError(d.warnings.join(' / '));
+        } catch (e: any) {
+            setPvError(e.message);
+        } finally {
+            setPvBusy(false);
+        }
+    };
+
+    const handleActivateVersion = async (v: PipelineVersion) => {
+        setPvBusy(true);
+        try {
+            const d = await pvFetch(`/versions/${v.ref}/activate`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ version: v.version })
+            });
+            setLiveStages(adjustStages(d.live?.config?.stages || []));
+            setLiveRef(d.live?.ref ?? null);
+            setChanges(d.changes || []);
+            setConfirmActivate(null);
+            await refreshVersions();
+        } catch (e: any) {
+            setPvError(e.message);
+        } finally {
+            setPvBusy(false);
+        }
+    };
+
+    const handleExport = () => {
+        const shown = tab === 'live' ? liveStages : stages;
+        const blob = new Blob([JSON.stringify({ schema: 'ragaas.pipeline/v1', stages: shown }, null, 2)], { type: 'application/json' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `pipeline-${kbId.slice(0, 8)}-${tab === 'live' ? `live-v${liveVersion ?? 0}` : 'test'}.json`;
+        a.click();
+        URL.revokeObjectURL(a.href);
+    };
+
+    const handleImport = async (file: File) => {
+        try {
+            const cfg = JSON.parse(await file.text());
+            if (!Array.isArray(cfg.stages)) throw new Error("'stages' 배열이 없는 JSON 입니다");
+            setStages(adjustStages(cfg.stages));   // 가져오기는 테스트 구성으로만
+            setTab('test');
+            setPvError('');
+        } catch (e: any) {
+            setPvError(`가져오기 실패: ${e.message}`);
+        }
+    };
 
     // --- Prompt Functions ---
     const loadGlobalRerankPrompt = async () => {
@@ -865,6 +1008,56 @@ export default function PipelineBuilder({
                 <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 600 }}>
                     Search Pipeline
                 </h3>
+                {/* 운영 / 테스트 탭 */}
+                <div style={{ display: 'flex', gap: '2px', background: '#f1f5f9', borderRadius: '6px', padding: '2px' }}>
+                    {(['live', 'test'] as const).map(t => (
+                        <button key={t} onClick={() => setTab(t)}
+                            title={t === 'live' ? '운영 구성 (읽기 전용) — 외부 에이전트·API 가 받는 결과와 같습니다' : '테스트 구성 — 편집하고 시험한 뒤 운영에 반영합니다'}
+                            style={{
+                                border: 'none', cursor: 'pointer', borderRadius: '4px', padding: '3px 10px', fontSize: '0.8rem',
+                                fontWeight: tab === t ? 600 : 400,
+                                background: tab === t ? 'white' : 'transparent',
+                                color: tab === t ? (t === 'live' ? '#047857' : '#1d4ed8') : '#64748b',
+                                boxShadow: tab === t ? '0 1px 2px rgba(0,0,0,0.08)' : 'none'
+                            }}>
+                            {t === 'live' ? `운영${liveVersion ? ` v${liveVersion}` : ''}` : '테스트'}
+                            {t === 'test' && changes.length > 0 && <span style={{ color: '#f59e0b', marginLeft: 4 }}>●</span>}
+                        </button>
+                    ))}
+                </div>
+                {tab === 'test' && changes.length > 0 && (
+                    <>
+                        <span style={{ fontSize: '0.75rem', color: '#b45309' }} title={changes.join('\n')}>운영과 다름 {changes.length}곳</span>
+                        <button className="btn" onClick={() => { setPvError(''); setShowPublish(true); }}
+                            style={{ fontSize: '0.75rem', padding: '3px 10px', background: '#1d4ed8', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
+                            운영에 반영…
+                        </button>
+                        <button onClick={handleRevertToLive}
+                            style={{ fontSize: '0.75rem', padding: '3px 8px', background: 'white', color: '#475569', border: '1px solid #cbd5e1', borderRadius: '4px', cursor: 'pointer' }}>
+                            운영 구성으로 되돌리기
+                        </button>
+                    </>
+                )}
+                {tab === 'live' && (
+                    <span style={{ fontSize: '0.75rem', color: '#64748b' }}>
+                        읽기 전용{liveRef ? ` · ${liveRef.slice(0, 8)}` : ' · 이력 없음'}
+                    </span>
+                )}
+                <div style={{ flex: 1 }} />
+                <button onClick={() => { setShowHistory(true); setViewVersion(null); refreshVersions(); }}
+                    style={{ fontSize: '0.75rem', padding: '3px 8px', background: 'white', color: '#475569', border: '1px solid #cbd5e1', borderRadius: '4px', cursor: 'pointer' }}>
+                    이력
+                </button>
+                <button onClick={handleExport} title="JSON 내보내기"
+                    style={{ fontSize: '0.75rem', padding: '3px 8px', background: 'white', color: '#475569', border: '1px solid #cbd5e1', borderRadius: '4px', cursor: 'pointer' }}>
+                    JSON ↓
+                </button>
+                <button onClick={() => importRef.current?.click()} title="JSON 가져오기 (테스트 구성으로)"
+                    style={{ fontSize: '0.75rem', padding: '3px 8px', background: 'white', color: '#475569', border: '1px solid #cbd5e1', borderRadius: '4px', cursor: 'pointer' }}>
+                    JSON ↑
+                </button>
+                <input ref={importRef} type="file" accept="application/json,.json" style={{ display: 'none' }}
+                    onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImport(f); e.target.value = ''; }} />
                 <button
                     onClick={handleCopyPipeline}
                     title="Copy Pipeline JSON"
@@ -889,8 +1082,16 @@ export default function PipelineBuilder({
                 </button>
             </div>
 
-            {/* Wrapper for stages and add button */}
-            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-start', overflow: 'visible' }}>
+            {pvError && (
+                <div style={{ fontSize: '0.75rem', color: '#b91c1c', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '4px', padding: '4px 8px', marginBottom: '0.5rem', display: 'flex', gap: 8 }}>
+                    <span style={{ flex: 1 }}>{pvError}</span>
+                    <span style={{ cursor: 'pointer' }} onClick={() => setPvError('')}>✕</span>
+                </div>
+            )}
+
+            {/* Wrapper for stages and add button — 운영 탭은 읽기 전용 */}
+            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-start', overflow: 'visible',
+                ...(tab === 'live' ? { pointerEvents: 'none' as const, opacity: 0.9 } : {}) }}>
                 {/* Scrollable stages container */}
                 <div style={{
                     display: 'flex',
@@ -900,10 +1101,10 @@ export default function PipelineBuilder({
                     paddingBottom: '2px'
                 }}>
                     {/* Render stages */}
-                    {stages.map((stage, index) => (
-                        <React.Fragment key={index}>
+                    {(tab === 'live' ? liveStages : stages).map((stage, index, shown) => (
+                        <React.Fragment key={`${tab}-${index}`}>
                             {renderStageCard(stage, index)}
-                            {index < stages.length - 1 && (
+                            {index < shown.length - 1 && (
                                 <div style={{ display: 'flex', alignItems: 'center', color: '#94a3b8', flexShrink: 0, height: '48px' }}>
                                     →
                                 </div>
@@ -913,14 +1114,14 @@ export default function PipelineBuilder({
                 </div>
 
                 {/* Arrow before Add button if stages exist */}
-                {stages.length > 0 && (
+                {tab === 'test' && stages.length > 0 && (
                     <div style={{ display: 'flex', alignItems: 'center', color: '#94a3b8', flexShrink: 0, height: '48px' }}>
                         →
                     </div>
                 )}
 
                 {/* Add button wrapper - OUTSIDE scroll container */}
-                <div style={{ position: 'relative', flexShrink: 0, zIndex: 1000 }}>
+                <div style={{ position: 'relative', flexShrink: 0, zIndex: 1000, display: tab === 'live' ? 'none' : 'block' }}>
                     <div
                         className="pipeline-add-button"
                         style={addButtonStyle}
@@ -1138,9 +1339,99 @@ export default function PipelineBuilder({
                 </div>,
                 document.body
             )}
+
+            {/* 운영에 반영 — 차이·메모 확인 후 Git 커밋 */}
+            {showPublish && createPortal(
+                <div style={overlayStyle} onClick={() => !pvBusy && setShowPublish(false)}>
+                    <div style={dialogStyle} onClick={(e) => e.stopPropagation()}>
+                        <h3 style={{ margin: '0 0 0.75rem', fontSize: '1rem' }}>운영에 반영</h3>
+                        <p style={{ margin: '0 0 0.5rem', fontSize: '0.85rem', color: '#475569' }}>
+                            테스트 구성을 운영에 반영합니다. 반영하면 채팅·API·MCP(외부 에이전트)가 이 구성으로 동작합니다.
+                            이력 저장소(Git)에 새 버전으로 남습니다.
+                        </p>
+                        <div style={{ fontSize: '0.8rem', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 6, padding: '0.5rem 0.75rem', maxHeight: 220, overflow: 'auto' }}>
+                            {changes.length ? changes.map((c, i) => <div key={i} style={{ fontFamily: 'monospace' }}>• {c}</div>)
+                                : <div style={{ color: '#64748b' }}>운영과 다른 곳이 없습니다{liveRef ? '' : ' (첫 버전으로 기록)'}</div>}
+                        </div>
+                        <label style={{ display: 'block', fontSize: '0.8rem', margin: '0.75rem 0 0.25rem', color: '#334155' }}>메모 (버전 설명)</label>
+                        <input value={publishNote} onChange={(e) => setPublishNote(e.target.value)} placeholder="예: Max Hop 8, Typo 끔"
+                            style={{ width: '100%', boxSizing: 'border-box', padding: '6px 8px', border: '1px solid #cbd5e1', borderRadius: 4, fontSize: '0.85rem' }} />
+                        {pvError && <div style={{ color: '#b91c1c', fontSize: '0.8rem', marginTop: 8 }}>{pvError} — 운영은 바뀌지 않았습니다.</div>}
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: '1rem' }}>
+                            <button onClick={() => setShowPublish(false)} disabled={pvBusy} style={secondaryBtn}>취소</button>
+                            <button onClick={handlePublish} disabled={pvBusy} style={primaryBtn}>{pvBusy ? '반영 중…' : '반영'}</button>
+                        </div>
+                    </div>
+                </div>,
+                document.body
+            )}
+
+            {/* 버전 이력 — 보기·비교 / 테스트로 불러오기 / 운영으로 되돌리기 */}
+            {showHistory && createPortal(
+                <div style={overlayStyle} onClick={() => !pvBusy && setShowHistory(false)}>
+                    <div style={{ ...dialogStyle, width: 'min(860px, calc(100vw - 32px))' }} onClick={(e) => e.stopPropagation()}>
+                        <div style={{ display: 'flex', alignItems: 'center', marginBottom: '0.75rem' }}>
+                            <h3 style={{ margin: 0, fontSize: '1rem', flex: 1 }}>파이프라인 이력</h3>
+                            <span style={{ cursor: 'pointer', color: '#64748b' }} onClick={() => setShowHistory(false)}>✕</span>
+                        </div>
+                        {pvError && <div style={{ color: '#b91c1c', fontSize: '0.8rem', marginBottom: 8 }}>{pvError}</div>}
+                        <div style={{ display: 'flex', gap: '0.75rem', minHeight: 260 }}>
+                            <div style={{ flex: '0 0 380px', maxHeight: 420, overflow: 'auto', border: '1px solid #e2e8f0', borderRadius: 6 }}>
+                                {versions.length === 0 && <div style={{ padding: '0.75rem', fontSize: '0.8rem', color: '#64748b' }}>이력이 없습니다.</div>}
+                                {versions.map(v => (
+                                    <div key={v.ref} style={{ padding: '0.5rem 0.75rem', borderBottom: '1px solid #f1f5f9', fontSize: '0.8rem',
+                                        background: viewVersion?.ref === v.ref ? '#eff6ff' : 'transparent' }}>
+                                        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                                            <b>v{v.version}</b>
+                                            {v.live && <span style={{ fontSize: '0.7rem', color: '#047857', border: '1px solid #6ee7b7', borderRadius: 3, padding: '0 4px' }}>운영</span>}
+                                            <span style={{ color: '#94a3b8', marginLeft: 'auto' }}>{v.created_at ? new Date(v.created_at).toLocaleString() : ''}</span>
+                                        </div>
+                                        <div style={{ color: '#334155', margin: '2px 0 4px' }}>{v.note}</div>
+                                        <div style={{ display: 'flex', gap: 6 }}>
+                                            <button style={linkBtn} onClick={() => handleViewVersion(v.ref)}>보기</button>
+                                            <button style={linkBtn} disabled={pvBusy} onClick={() => handleLoadVersion(v.ref)}>테스트로 불러오기</button>
+                                            {!v.live && (confirmActivate === v.ref
+                                                ? <>
+                                                    <button style={{ ...linkBtn, color: '#b91c1c' }} disabled={pvBusy} onClick={() => handleActivateVersion(v)}>정말 운영을 v{v.version} 으로?</button>
+                                                    <button style={linkBtn} onClick={() => setConfirmActivate(null)}>취소</button>
+                                                </>
+                                                : <button style={linkBtn} onClick={() => setConfirmActivate(v.ref)}>운영으로 되돌리기</button>)}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                            <div style={{ flex: 1, minWidth: 0, fontSize: '0.8rem' }}>
+                                {viewVersion ? (
+                                    <>
+                                        <div style={{ marginBottom: 6, color: '#334155' }}>
+                                            운영과 차이: {viewVersion.changes.length ? '' : '없음'}
+                                            {viewVersion.changes.map((c, i) => <div key={i} style={{ fontFamily: 'monospace' }}>• {c}</div>)}
+                                            {viewVersion.warnings.map((w, i) => <div key={i} style={{ color: '#b45309' }}>⚠ {w}</div>)}
+                                        </div>
+                                        <pre style={{ margin: 0, maxHeight: 340, overflow: 'auto', background: '#0f172a', color: '#e2e8f0', padding: '0.5rem', borderRadius: 6, fontSize: '0.75rem' }}>{viewVersion.json}</pre>
+                                    </>
+                                ) : <div style={{ color: '#94a3b8' }}>버전을 고르면 구성(JSON)과 운영과의 차이를 보여 줍니다.</div>}
+                            </div>
+                        </div>
+                    </div>
+                </div>,
+                document.body
+            )}
         </div>
     );
 }
+
+const overlayStyle: React.CSSProperties = {
+    position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.4)', zIndex: 20000,
+    display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16
+};
+const dialogStyle: React.CSSProperties = {
+    background: 'white', borderRadius: 8, padding: '1rem 1.25rem', width: 'min(520px, calc(100vw - 32px))',
+    boxShadow: '0 20px 25px -5px rgba(0,0,0,0.15)'
+};
+const primaryBtn: React.CSSProperties = { padding: '6px 14px', background: '#1d4ed8', color: 'white', border: 'none', borderRadius: 4, cursor: 'pointer', fontSize: '0.85rem' };
+const secondaryBtn: React.CSSProperties = { padding: '6px 14px', background: 'white', color: '#475569', border: '1px solid #cbd5e1', borderRadius: 4, cursor: 'pointer', fontSize: '0.85rem' };
+const linkBtn: React.CSSProperties = { background: 'none', border: 'none', padding: 0, color: '#1d4ed8', cursor: 'pointer', fontSize: '0.75rem' };
 
 // Helper Components
 function ParamSlider({

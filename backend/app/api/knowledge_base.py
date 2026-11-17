@@ -114,28 +114,110 @@ async def get_knowledge_base(kb_id: str):
         raise HTTPException(status_code=404, detail="Knowledge Base not found")
     return kb
 
+# ---------------------------------------------------------------------------
+# 파이프라인 운영/테스트 + 버전 이력 (docs/design/agent/design-search-entry-and-pipeline-versions.md §5.4)
+# 운영 변경은 publish·activate 로만 — PUT /pipeline 은 테스트 구성 저장이다 (옛 화면이 운영을 덮어쓰지 않게).
+# ---------------------------------------------------------------------------
+
+def _pv_error(e: Exception):
+    from app.services import pipeline_versions as pv
+    if isinstance(e, pv.GitUnavailable):
+        raise HTTPException(status_code=503, detail=str(e))
+    if isinstance(e, LookupError):
+        raise HTTPException(status_code=404, detail=str(e))
+    if isinstance(e, ValueError):
+        raise HTTPException(status_code=400, detail=str(e))
+    raise e
+
+
 @router.get("/{kb_id}/pipeline")
 async def get_pipeline_config(kb_id: str):
-    """Get pipeline configuration for a knowledge base"""
+    """운영(live)·테스트(draft) 구성과 차이. `stages` 는 운영 구성 (하위 호환)."""
+    from app.services import pipeline_versions as pv
     kb = await KBModel.get(kb_id)
     if kb is None:
         raise HTTPException(status_code=404, detail="Knowledge Base not found")
-    return kb.pipeline_config or {"stages": []}
+    return pv.state(kb)
+
 
 @router.put("/{kb_id}/pipeline")
-async def save_pipeline_config(kb_id: str, config: dict = Body(...)):
-    """Save pipeline configuration for a knowledge base"""
+@router.put("/{kb_id}/pipeline/draft")
+async def save_pipeline_draft(kb_id: str, config: dict = Body(...)):
+    """테스트 구성 저장 (자동 저장). 운영에는 영향 없음."""
+    from app.services import pipeline_versions as pv
+    try:
+        return await pv.save_draft(kb_id, config)
+    except Exception as e:
+        _pv_error(e)
+
+
+@router.post("/{kb_id}/pipeline/publish")
+async def publish_pipeline(kb_id: str, body: dict = Body(default={})):
+    """테스트 구성을 운영에 반영 — 공용 Gitea 에 커밋한 뒤 운영 지정. Gitea 가 안 되면 503, 운영은 그대로."""
+    from app.services import pipeline_versions as pv
+    try:
+        return await pv.publish(kb_id, str((body or {}).get("note") or ""))
+    except Exception as e:
+        _pv_error(e)
+
+
+@router.get("/{kb_id}/pipeline/versions")
+async def list_pipeline_versions(kb_id: str, limit: int = 50):
+    from app.services import pipeline_versions as pv
     kb = await KBModel.get(kb_id)
     if kb is None:
         raise HTTPException(status_code=404, detail="Knowledge Base not found")
-    
-    # Validate config structure
-    if "stages" not in config:
-        raise HTTPException(status_code=400, detail="Invalid config: missing 'stages' array")
-    
-    kb.pipeline_config = config
-    await kb.save()
-    return {"ok": True, "pipeline_config": kb.pipeline_config}
+    try:
+        rows = await pv.list_commits(kb_id, limit)
+    except Exception as e:
+        _pv_error(e)
+    for r in rows:
+        r["live"] = r["ref"] == kb.pipeline_live_ref
+    return {"versions": rows, "live_ref": kb.pipeline_live_ref}
+
+
+@router.get("/{kb_id}/pipeline/versions/{ref}")
+async def get_pipeline_version(kb_id: str, ref: str):
+    from app.services import pipeline_versions as pv
+    try:
+        cfg, _ = await pv.read_file(kb_id, ref)
+    except Exception as e:
+        _pv_error(e)
+    if cfg is None:
+        raise HTTPException(status_code=404, detail="그 버전에 이 KB 의 구성이 없습니다")
+    kb = await KBModel.get(kb_id)
+    return {"ref": ref, "config": cfg, "warnings": pv.warnings_of(cfg),
+            "changes_from_live": pv.diff(pv.live_of(kb), cfg) if kb else []}
+
+
+@router.post("/{kb_id}/pipeline/versions/{ref}/load")
+async def load_pipeline_version(kb_id: str, ref: str):
+    """그 버전을 테스트 구성으로 불러온다 (운영은 그대로)."""
+    from app.services import pipeline_versions as pv
+    try:
+        return await pv.load_version(kb_id, ref)
+    except Exception as e:
+        _pv_error(e)
+
+
+@router.post("/{kb_id}/pipeline/versions/{ref}/activate")
+async def activate_pipeline_version(kb_id: str, ref: str, body: dict = Body(default={})):
+    """그 버전으로 운영을 되돌린다 — 내용을 새 커밋으로 올리고 운영 지정."""
+    from app.services import pipeline_versions as pv
+    try:
+        return await pv.activate_version(kb_id, ref, (body or {}).get("version"))
+    except Exception as e:
+        _pv_error(e)
+
+
+@router.post("/{kb_id}/pipeline/bootstrap")
+async def bootstrap_pipeline_history(kb_id: str):
+    """이관: 지금 운영 구성을 이력의 첫 커밋으로 올린다 (이미 있으면 그대로)."""
+    from app.services import pipeline_versions as pv
+    try:
+        return await pv.bootstrap(kb_id)
+    except Exception as e:
+        _pv_error(e)
 
 @router.post("/{kb_id}/register-schema")
 async def register_schema(kb_id: str, payload: dict = Body(...)):

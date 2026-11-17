@@ -246,7 +246,9 @@ Claude(Opus 5.5)가 호출하는 에이전트 역할을 맡았다. Fuseki 를 �
 - 지금 `/chat` 검색이다. 자연어를 넣으면 근거가 나오고, 원하면 답변도 준다.
 - 질의 작성이 어렵거나 문서형 질문(정의, 설명)일 때 쓴다.
 - 기본값은 `answer: false` (근거만)다. 이때 답변 LLM 을 생략해 6~8초를 아낀다.
-- 에이전틱 필터는 기본 끈다. 호출하는 쪽이 이미 에이전트라 루프가 이중이 된다.
+- 에이전틱 필터는 기본 끈다 (`agentic: "skip"`, `"pipeline"` 이면 구성대로). 호출하는 쪽이 이미 에이전트라 루프가 이중이 된다.
+- **2026-11-17 구현 갱신**: `search` 는 단일 검색 진입점(`/chat`)을 `config=live, caller=mcp` 로 부른다. 이전에는 `answer=false` 여도 답변을 만들고 버렸다 — 이제 생성하지 않는다. 응답에 `applied_policy`.
+- **KB 검색 정책**: 모든 도구가 KB 운영 파이프라인을 따른다 — Graph 필터가 없으면 그래프 조회 도구가 `disabled`, Typo·Synonym 이 꺼져 있으면 `lookup_values` 의 후보 단계 생략, `describe_kb` 에 `policy`. 상세: `design-search-entry-and-pipeline-versions.md` §4.
 
 ---
 

@@ -146,6 +146,11 @@ class ChatRequest(BaseModel):
     
     # Pipeline configuration (optional - if provided, uses pipeline executor)
     pipeline: Optional[dict] = None
+    # 단일 검색 진입점 파라미터 (docs/design/agent/design-search-entry-and-pipeline-versions.md §3)
+    config: Optional[str] = None     # live(운영, 기본) | draft(테스트). pipeline 이 있으면 그것이 우선 (편집 중인 구성)
+    agentic: str = "pipeline"        # pipeline(구성대로) | skip(에이전틱 스테이지 건너뜀 — MCP 기본)
+    answer: bool = True              # False 면 답변 생성 없이 근거만
+    caller: str = "api"              # ui | api | mcp — 기록용 (동작을 바꾸지 않는다)
     
     # Model configurations for dynamic model selection
     pipeline_model_config: Optional[dict] = None         # Default chat LLM (backend 필드명)
@@ -165,6 +170,8 @@ class ChatResponse(BaseModel):
     pipeline_config: Optional[Dict] = None
     has_error: bool = False  # Query generation or execution error occurred
     used_fallback: bool = False  # Fallback search was triggered due to error/no results
+    status: str = "ok"           # ok | disabled (검색 필터 없음)
+    applied_policy: Optional[Dict] = None   # 실행한 구성·검색 필터·건너뛴 단계·Graph 옵션
 
 
 from pathlib import Path
@@ -378,20 +385,36 @@ async def chat_with_kb(
     metric_type = kb.metric_type or "COSINE"
     kb_emb_service = await get_embedding_service(kb)
 
-    # 파이프라인(= 필터 체인) 결정 — 요청 우선, 없으면 KB 저장본.
-    pipeline_config = None
-    if request.pipeline:
-        pipeline_config = request.pipeline
-        print(f"[Pipeline] Using request-provided pipeline with {len(pipeline_config.get('stages', []))} stages")
-    elif kb.pipeline_config and kb.pipeline_config.get("stages"):
-        pipeline_config = kb.pipeline_config
-        print(f"[Pipeline] Using KB saved pipeline with {len(pipeline_config.get('stages', []))} stages")
+    # 파이프라인(= KB 검색 정책) 결정 — 편집 중인 구성(request.pipeline) > 테스트(draft) > 운영(live)
+    from app.services.retrieval import search_policy as sp
+    pipeline_config, _cfg_meta = await sp.resolve_pipeline(kb, request.config or "live", request.pipeline)
+    _skipped: List[str] = []
+    if request.agentic == "skip" and any(s.get("type") == sp.AGENTIC_STAGE for s in sp.stages_of(pipeline_config)):
+        pipeline_config = sp.without_agentic(pipeline_config)
+        _skipped.append(f"agentic ({request.caller})")
+    applied_policy = {"config": _cfg_meta, "caller": request.caller, "answer": request.answer,
+                      **sp.summarize(pipeline_config), "skipped": _skipped}
+    if applied_policy["graph"] and not applied_policy["graph"]["typo_synonym"]:
+        _skipped.append("typo_synonym (꺼짐)")
+    print(f"[Pipeline] {_cfg_meta.get('kind')} 구성 {len(sp.stages_of(pipeline_config))} 스테이지 (caller={request.caller})")
+
+    # 검색 필터가 없으면 검색하지 않는다 — 옛 '레거시 전략' 경로는 쓰지 않는다
+    if not applied_policy["search_filters"]:
+        return ChatResponse(
+            answer="", chunks=[], execution_time=time.time() - start_time, strategy="없음",
+            execution_log=["[Policy] 파이프라인에 검색 필터가 없어 검색하지 않음 — 검색 결과 없음"],
+            pipeline_config=pipeline_config, status="disabled", applied_policy=applied_policy,
+        )
 
     # 'smalltalk' 필터 스테이지가 파이프라인에 있을 때만 스몰톡 게이트가 동작한다.
     # (파이프라인 빌더에서 이 스테이지를 삭제하면 스몰톡 처리도 비활성 → 그냥 검색.)
     _has_smalltalk_stage = bool(pipeline_config) and any(
         s.get("type") == "smalltalk" for s in (pipeline_config.get("stages") or [])
     )
+    if _has_smalltalk_stage and not request.answer:
+        # 근거만 달라는 호출(MCP 등)에는 잡담 판정이 의미 없다 — 게이트를 건너뛴다
+        _has_smalltalk_stage = False
+        _skipped.append("gate (근거만 요청)")
 
     # --- Gate: 지정된 LLM 이 '검색 필요 여부'를 판별. 검색이 불필요하면(인사·잡담·자기소개 등)
     #     바로 응답하고 파이프라인을 중단한다. 검색이 필요하면 아래 검색 흐름으로 통과시킨다. ---
@@ -458,7 +481,7 @@ async def chat_with_kb(
                         execution_time=time.time() - start_time,
                         strategy="Gate (검색 생략)",
                         execution_log=["[Gate] LLM 판별: 검색 불필요 — 직접 응답"],
-                        pipeline_config=None,
+                        pipeline_config=None, applied_policy=applied_policy,
                     )
                 print("[Gate] LLM 판별: 검색 필요 — 파이프라인 진행")
             except Exception as e:
@@ -500,115 +523,6 @@ async def chat_with_kb(
         # Attach graph metadata to first result if present
         if graph_metadata and results:
             results[0]["graph_metadata"] = graph_metadata
-    else:
-        # Legacy mode (backward compatibility)
-        # Auto-enable graph search if KB has Graph RAG enabled
-        use_graph_search = request.enable_graph_search
-        target_strategy = request.strategy
-        
-        execution_logs.append("[Legacy] No pipeline config. Using legacy strategy execution.")
-        execution_logs.append(f"[Legacy] Strategy: {target_strategy}")
-        
-        if kb.enable_graph_rag and kb.graph_backend:
-            use_graph_search = True
-            if target_strategy == 'ann' or target_strategy == 'vector':
-                target_strategy = 'hybrid'
-            print(f"[DEBUG] Auto-enabled graph search for KB with graph_backend={kb.graph_backend}. Strategy switched to '{target_strategy}'")
-            execution_logs.append(f"[Legacy] Auto-enabled graph search (Backend: {kb.graph_backend}). Strategy switched to '{target_strategy}'")
-
-        # 1. Retrieve chunks
-        llm_config = llm_default_config
-        strategy = retrieval_factory.get_strategy(target_strategy)
-        try:
-            results = await strategy.search(
-                kb_id, 
-                request.query, 
-                request.top_k, 
-                metric_type=metric_type, 
-                score_threshold=request.score_threshold,
-                enable_graph_search=use_graph_search,
-                graph_hops=request.graph_hops,
-                graph_backend=kb.graph_backend or "ontology",
-                use_llm_keyword_extraction=request.use_llm_keyword_extraction,
-                use_multi_pos=request.use_multi_pos,
-                bm25_top_k=request.bm25_top_k,
-                use_parallel_search=request.use_parallel_search,
-                use_relation_filter=request.use_relation_filter,
-                enable_inverse_search=request.enable_inverse_search,
-                inverse_extraction_mode=request.inverse_extraction_mode,
-                use_schema_mode=request.use_schema_mode,
-                use_raw_log=request.use_raw_log,
-                execution_logs=execution_logs,
-                embedding_service=kb_emb_service,
-                llm_model_config=llm_config or {},
-                keyword_llm_model_config=llm_keyword_config,
-            )
-        except ValueError as e:
-            raise HTTPException(status_code=500, detail=f"모델 지정이 안되었습니다: {str(e)}")
-        execution_logs.append(f"[Legacy] Search complete. Found {len(results)} chunks.")
-        
-        # [Trace Log Integration] Merge graph trace_logs into execution_logs
-        if results:
-            for res in results:
-                if res.get("graph_metadata") and res["graph_metadata"].get("trace_logs"):
-                    execution_logs.extend(res["graph_metadata"]["trace_logs"])
-                    break  # Only need to get trace_logs once (it's the same for all)
-        
-        # 2. Reranking (legacy)
-        if request.use_reranker and request.strategy != "2-stage" and results:
-            execution_logs.append(f"[Legacy] Applying Reranker (Top K: {request.reranker_top_k})")
-            if request.use_llm_reranker:
-                try:
-                    results = await reranking_service.llm_rerank_results(
-                        query=request.query,
-                        results=results,
-                        top_k=request.reranker_top_k,
-                        threshold=request.reranker_threshold,
-                        strategy=request.llm_chunk_strategy,
-                        llm_model_config=llm_config or {},
-                    )
-                except ValueError as e:
-                    raise HTTPException(status_code=500, detail=f"모델 지정이 안되었습니다: {str(e)}")
-            else:
-                results = await reranking_service.rerank_results(
-                    query=request.query,
-                    results=results,
-                    top_k=request.reranker_top_k,
-                    threshold=request.reranker_threshold
-                )
-
-        # 3. NER Filter (legacy)
-        if request.use_ner and results:
-            from app.services.ner import ner_service
-            execution_logs.append("[Legacy] Applying NER Filter")
-            results = ner_service.filter_by_entities(request.query, results, penalty=0.3)
-            
-        # 3.5. Brute Force (legacy)
-        if request.use_brute_force and results:
-            from app.services.embedding import embedding_service
-            import numpy as np
-            
-            execution_logs.append(f"[Legacy] Applying Brute Force L2 (Top K: {request.brute_force_top_k})")
-            
-            query_embedding = (await embedding_service.get_embeddings([request.query]))[0]
-            candidate_contents = [r['content'] for r in results]
-            candidate_embeddings = await embedding_service.get_embeddings(candidate_contents)
-            
-            reranked = []
-            for i, doc_embedding in enumerate(candidate_embeddings):
-                vec1 = np.array(query_embedding)
-                vec2 = np.array(doc_embedding)
-                dist = float(np.linalg.norm(vec1 - vec2))
-                
-                if dist <= request.brute_force_threshold:
-                    chunk = results[i].copy()
-                    chunk['score'] = 1.0 / (1.0 + dist)
-                    chunk['l2_score'] = dist
-                    reranked.append(chunk)
-            
-            reranked.sort(key=lambda x: x['score'], reverse=True)
-            results = reranked[:request.brute_force_top_k]
-    
     with open("backend_debug.log", "a") as f:
         f.write(f"Strategy: {request.strategy}, Final Results: {len(results) if results else 0}\\n")
     
@@ -631,13 +545,22 @@ async def chat_with_kb(
     from app.services.retrieval.parent_child import expand_to_parents
     results = await expand_to_parents(kb_id, results, logs=execution_logs)
 
+    # 근거만 요청 (MCP 등) — 답변 생성을 하지 않는다 (호출당 LLM 1회·4~8초 절약)
+    if not request.answer:
+        elapsed = time.time() - start_time
+        asyncio.create_task(_save_chat_trace(kb_id, request.query, "", "근거만", elapsed, False, False,
+                                             execution_logs, results, {**pipeline_config, "_applied": applied_policy}))
+        return ChatResponse(answer="", chunks=results or [], execution_time=elapsed, strategy="근거만",
+                            execution_log=execution_logs, pipeline_config=pipeline_config,
+                            applied_policy=applied_policy)
+
     # 4. Generate LLM response based on retrieved chunks
     if not results:
         return ChatResponse(
             answer="I couldn't find any relevant information to answer your question.",
             chunks=[],
             execution_log=execution_logs,
-            pipeline_config=pipeline_config
+            pipeline_config=pipeline_config, applied_policy=applied_policy,
         )
     
     # Build context from top chunks
@@ -781,7 +704,8 @@ async def chat_with_kb(
     elapsed = time.time() - start_time
     # 검색 기록 저장 (사후 검토용) — 응답을 늦추지 않도록 백그라운드로
     asyncio.create_task(_save_chat_trace(kb_id, request.query, answer, display_strategy, elapsed, has_error,
-                                         used_fallback, execution_logs, results, pipeline_config))
+                                         used_fallback, execution_logs, results,
+                                         {**(pipeline_config or {}), "_applied": applied_policy}))
     return ChatResponse(
         answer=answer,
         chunks=results,
@@ -790,7 +714,8 @@ async def chat_with_kb(
         execution_log=execution_logs,
         pipeline_config=pipeline_config,
         has_error=has_error,
-        used_fallback=used_fallback
+        used_fallback=used_fallback,
+        applied_policy=applied_policy,
     )
 
 

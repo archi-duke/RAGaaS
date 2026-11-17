@@ -19,9 +19,27 @@ RAGaaS 쪽에는 LLM 이 없어 빠르다 (도구 호출당 0.1~0.3초). 대신 
 | `describe_entity` | `POST {base}/agent/entity` `{"name", "name_en"}` | 엔티티 하나의 관계 전부 (out / in) + chunk_ids |
 | `query_plan` | `POST {base}/agent/plan` `{"kind", "where", "return", "aggregate", ...}` | 조회 실행 |
 | `get_chunks` | `POST {base}/agent/chunks` `{"chunk_ids": [...], "expand_doc": false}` | 근거 원문 + 문서명. `expand_doc=true` 면 같은 문서의 다른 청크도 |
-| `search` | `POST {base}/chat` `{"query"}` | 자연어 검색 (느림, 수십 초). 마지막 수단 |
+| `search` | `POST {base}/chat` `{"query", "answer": false, "agentic": "skip", "caller": "api"}` | 자연어 검색 (수 초~수십 초). 마지막 수단 |
 
 MCP 의 `query_plan` 은 반환 경로를 `return_paths` 로, REST 는 `return` 으로 받는다.
+
+### KB 검색 정책 (`describe_kb` 의 `policy`)
+
+KB 의 운영 파이프라인 설정이 도구 동작을 정한다. 처음 `describe_kb` 에서 `policy` 를 읽고 따른다.
+
+- `status: "disabled"` 응답은 **"결과 0건"이 아니라 "그 검색을 하지 않는 KB"** 다. 다른 도구로 우회해 찾지 말고, 그 KB 로는 답할 수 없다고 밝힌다.
+  - 그래프 조회 도구(`describe_kb`·`lookup_values`·`resolve_entities`·`describe_entity`·`query_plan`)는 Graph 필터가 없는 KB 에서 disabled.
+  - `get_chunks`·`search` 는 검색 필터가 하나도 없는 KB 에서 disabled.
+- `max_hops`: 관계를 따라가는 연쇄 조회는 이 깊이까지만.
+- `typo_synonym: false` 면 `lookup_values` 가 오탈자·유사어 후보(`suggestions`)를 주지 않는다 (`skipped` 에 표시). 표기를 직접 맞춘다.
+- `graph_fallback: "none"` 이면 그래프로 못 찾은 것을 `search` 로 메우지 않는다 — "그래프에 없음" 으로 답한다.
+
+### `search` 를 쓸 때
+
+- **쓴다**: 질의 계획으로 표현할 수 없는 설명·정의·비교형 질문("~란", "~와 ~의 차이"), 또는 아래 5단계 ①② 로도 근거가 없을 때.
+- **쓰지 않는다**: 조건으로 표현되는 질문(→ `query_plan`), 특정 엔티티 질문(→ `describe_entity`), `graph_fallback: "none"` KB 에서 문서 근거를 찾으려 할 때.
+- 근거만 받는다 (`answer=false`, 기본). 답은 직접 쓴다. KB 의 에이전틱 단계는 기본으로 건너뛴다 (`agentic=skip`).
+- 응답의 `applied_policy` 에 실행한 구성(운영 버전)·건너뛴 단계가 있다.
 예시 5개(조건 하나, 복합, YAML 같은 항목, 집계, 관계 따라가기)는 `examples.md` 에 있다 — 질의가 처음이면 읽는다.
 
 ## 순서

@@ -49,6 +49,7 @@
 | `design/agent/design-kb-lexicon.md` | ✅ | KB 용어 사전 (11/16) |
 | `design/agent/design-mcp-agent-query.md` | ✅ | 외부 에이전트 MCP·query_plan (11/16, ADR-004) |
 | `design/agent/design-typo-synonym-matching.md` | ✅ | 오탈자·유사어 — 자모 편집거리·라벨 임베딩 후보 + 질문 분석 교정 (11/17) |
+| `design/agent/design-search-entry-and-pipeline-versions.md` | ✅ | 단일 검색 진입점·KB 검색 정책 + 파이프라인 운영/테스트 탭·Git 버전 이력 (11/17) |
 
 ## 가이드 (`guides/`)
 

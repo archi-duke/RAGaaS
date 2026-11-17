@@ -14,6 +14,8 @@ from pydantic import BaseModel, Field
 
 from app.services.agent_query import catalog
 
+from app.services.retrieval import search_policy as sp
+
 router = APIRouter()
 
 
@@ -49,7 +51,11 @@ async def agent_describe(kb_id: str, kinds: Optional[str] = None, max_values: in
                          format: str = "json", min_members: int = 2):
     """① 스키마: 유형, 경로(정의·계열·값 어휘), 스키마 버전. format=compact 면 경로를 한 줄 문자열로."""
     t = time.time()
+    pol, off = await sp.guard(kb_id, "graph")
+    if off:
+        return off
     out = await catalog.describe_kb(kb_id, [k for k in (kinds or "").split(",") if k], max_values, format, min_members)
+    out["policy"] = sp.policy_view(pol)
     out["elapsed_ms"] = int((time.time() - t) * 1000)
     return out
 
@@ -58,7 +64,13 @@ async def agent_describe(kb_id: str, kinds: Optional[str] = None, max_values: in
 async def agent_values(kb_id: str, req: ValuesRequest):
     """② 말 → 경로별 값 후보."""
     t = time.time()
-    out = await catalog.lookup_values(kb_id, req.terms, req.kind, max(1, min(req.limit, 30)), req.terms_en)
+    pol, off = await sp.guard(kb_id, "graph")
+    if off:
+        return off
+    typo = bool((pol.get("graph") or {}).get("typo_synonym", True))
+    out = await catalog.lookup_values(kb_id, req.terms, req.kind, max(1, min(req.limit, 30)), req.terms_en, use_fuzzy=typo)
+    if not typo:
+        out["skipped"] = ["typo_synonym (KB 정책에서 꺼짐 — 사전으로만 찾음)"]
     out["elapsed_ms"] = int((time.time() - t) * 1000)
     return out
 
@@ -67,6 +79,9 @@ async def agent_values(kb_id: str, req: ValuesRequest):
 async def agent_entities(kb_id: str, req: EntitiesRequest):
     """② 이름 → 유형 멤버 엔티티."""
     t = time.time()
+    _, off = await sp.guard(kb_id, "graph")
+    if off:
+        return off
     out = await catalog.resolve_entities(kb_id, req.names, req.kind, max(1, min(req.limit, 20)), req.names_en)
     out["elapsed_ms"] = int((time.time() - t) * 1000)
     return out
@@ -82,6 +97,9 @@ class EntityRequest(BaseModel):
 async def agent_entity(kb_id: str, req: EntityRequest):
     """엔티티 하나의 모든 관계 (나가는·들어오는, 구조 노드 한 단계) + 근거 청크 ID."""
     t = time.time()
+    _, off = await sp.guard(kb_id, "graph")
+    if off:
+        return off
     out = await catalog.describe_entity(kb_id, req.name, req.name_en, req.kind)
     out["elapsed_ms"] = int((time.time() - t) * 1000)
     return out
@@ -91,6 +109,9 @@ async def agent_entity(kb_id: str, req: EntityRequest):
 async def agent_chunks(kb_id: str, req: ChunksRequest):
     """⑤ 근거 청크 원문."""
     t = time.time()
+    _, off = await sp.guard(kb_id, "search")
+    if off:
+        return off
     out = await catalog.get_chunks(kb_id, req.chunk_ids, req.max_chars, req.expand_doc)
     out["elapsed_ms"] = int((time.time() - t) * 1000)
     return out
@@ -115,6 +136,9 @@ class PlanRequest(BaseModel):
 async def agent_plan(kb_id: str, req: PlanRequest):
     """④ 질의 계획 실행 — 검증 → 컴파일 → 실행 → 엔티티·근거 트리플·청크 ID (LLM 없음, §4.4)."""
     from app.services.agent_query.plan import run_plan
+    _, off = await sp.guard(kb_id, "graph")
+    if off:
+        return off
     body = req.model_dump(by_alias=True)
     return await run_plan(kb_id, body)
 

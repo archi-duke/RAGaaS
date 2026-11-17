@@ -12,6 +12,8 @@ import os
 from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
+
+from app.services.retrieval import search_policy as sp
 from mcp.server.mcpserver import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 
@@ -60,7 +62,12 @@ async def describe_kb(kb_id: str, kinds: Optional[List[str]] = None, max_values:
                       format: str = "compact", min_members: int = 2) -> Dict[str, Any]:
     from app.services.agent_query import catalog
     try:
-        return await catalog.describe_kb(kb_id, kinds, max_values, format, min_members)
+        pol, off = await sp.guard(kb_id, "graph")
+        if off:
+            return off
+        out = await catalog.describe_kb(kb_id, kinds, max_values, format, min_members)
+        out["policy"] = sp.policy_view(pol)
+        return out
     except Exception as e:
         return _err(e)
 
@@ -72,7 +79,14 @@ async def lookup_values(kb_id: str, terms: List[str], terms_en: Optional[Dict[st
                         kind: Optional[str] = None, limit: int = 8) -> Dict[str, Any]:
     from app.services.agent_query import catalog
     try:
-        return await catalog.lookup_values(kb_id, terms, kind, max(1, min(limit, 30)), terms_en or {})
+        pol, off = await sp.guard(kb_id, "graph")
+        if off:
+            return off
+        typo = bool((pol.get("graph") or {}).get("typo_synonym", True))
+        out = await catalog.lookup_values(kb_id, terms, kind, max(1, min(limit, 30)), terms_en or {}, use_fuzzy=typo)
+        if not typo:
+            out["skipped"] = ["typo_synonym (KB 정책에서 꺼짐 — 사전으로만 찾음)"]
+        return out
     except Exception as e:
         return _err(e)
 
@@ -83,6 +97,9 @@ async def resolve_entities(kb_id: str, names: List[str], names_en: Optional[Dict
                            kind: Optional[str] = None, limit: int = 5) -> Dict[str, Any]:
     from app.services.agent_query import catalog
     try:
+        _, off = await sp.guard(kb_id, "graph")
+        if off:
+            return off
         return await catalog.resolve_entities(kb_id, names, kind, max(1, min(limit, 20)), names_en or {})
     except Exception as e:
         return _err(e)
@@ -102,6 +119,9 @@ async def query_plan(kb_id: str, kind: str, where: Optional[Any] = None, return_
                      schema_version: Optional[str] = None) -> Dict[str, Any]:
     from app.services.agent_query.plan import run_plan
     try:
+        _, off = await sp.guard(kb_id, "graph")
+        if off:
+            return off
         return await run_plan(kb_id, {"kind": kind, "where": where, "return": return_paths or [],
                                       "aggregate": aggregate, "rank_by": rank_by, "limit": limit,
                                       "include_evidence": evidence != "none", "evidence": evidence,
@@ -115,6 +135,9 @@ async def query_plan(kb_id: str, kind: str, where: Optional[Any] = None, return_
 async def describe_entity(kb_id: str, name: str, name_en: Optional[str] = None, kind: Optional[str] = None) -> Dict[str, Any]:
     from app.services.agent_query import catalog
     try:
+        _, off = await sp.guard(kb_id, "graph")
+        if off:
+            return off
         return await catalog.describe_entity(kb_id, name, name_en, kind)
     except Exception as e:
         return _err(e)
@@ -126,18 +149,27 @@ async def get_chunks(kb_id: str, chunk_ids: List[str], max_chars: int = 1500,
                      expand_doc: bool = False) -> Dict[str, Any]:
     from app.services.agent_query import catalog
     try:
+        _, off = await sp.guard(kb_id, "search")
+        if off:
+            return off
         return await catalog.get_chunks(kb_id, chunk_ids, max_chars, expand_doc)
     except Exception as e:
         return _err(e)
 
 
-@mcp.tool(description="자연어 검색 (RAGaaS 검색 파이프라인, 수 초~수십 초, LLM 사용). 질의 계획으로 표현하기 어려운 "
-                      "설명·정의형 질문에만. answer=false(기본)면 근거만 준다.")
-async def search(kb_id: str, query: str, answer: bool = False, top_k: int = 8) -> Dict[str, Any]:
+@mcp.tool(description="자연어 검색 (KB 운영 파이프라인, 수 초~수십 초, LLM 사용). 질의 계획으로 표현하기 어려운 "
+                      "설명·정의형 질문에만. answer=false(기본)면 답변 생성 없이 근거만 준다. "
+                      "agentic=skip(기본)이면 KB 파이프라인의 에이전틱 스테이지를 건너뛴다 (pipeline 이면 구성대로). "
+                      "status=disabled 면 KB 에 검색 필터가 없어 검색하지 않은 것 (결과 0건과 다름).")
+async def search(kb_id: str, query: str, answer: bool = False, top_k: int = 8, agentic: str = "skip") -> Dict[str, Any]:
     from app.api.retrieval import ChatRequest, chat_with_kb
     try:
-        resp = await chat_with_kb(kb_id, ChatRequest(query=query))
+        resp = await chat_with_kb(kb_id, ChatRequest(query=query, config="live", caller="mcp", answer=answer,
+                                                     agentic="pipeline" if agentic == "pipeline" else "skip"))
         d = resp.model_dump() if hasattr(resp, "model_dump") else dict(resp)
+        if d.get("status") == "disabled":
+            return {"status": "disabled", "reason": "이 KB 의 운영 파이프라인에 검색 필터가 없습니다 — 검색 결과 없음.",
+                    "applied_policy": d.get("applied_policy")}
         chunks = []
         for c in (d.get("chunks") or [])[: max(1, min(top_k, 20))]:
             if c.get("chunk_id") == "GRAPH_METADATA_ONLY":
@@ -146,7 +178,7 @@ async def search(kb_id: str, query: str, answer: bool = False, top_k: int = 8) -
                            "text": (c.get("content") or "")[:800]})
         g = next((c.get("graph_metadata") for c in d.get("chunks") or [] if c.get("graph_metadata")), None) or {}
         out = {"result_summary": g.get("result_summary"), "triples": (g.get("triples") or [])[:40], "chunks": chunks,
-               "execution_time": d.get("execution_time")}
+               "execution_time": d.get("execution_time"), "applied_policy": d.get("applied_policy")}
         if answer:
             out["answer"] = d.get("answer")
         return out
