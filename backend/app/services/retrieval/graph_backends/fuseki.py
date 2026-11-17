@@ -911,8 +911,12 @@ class FusekiBackend(GraphBackend):
                 merged = [{**t, "hop": 0} for t in triples]
                 parts = [f"{n1} ↔ {n2}"]
                 sqls = [sparql]
+            # 앵커별 선택에서는 두 앵커를 잇는 관계(이미 쌍 조회로 찾음)를 후보에서 뺀다 — '플랑크가 제안한 에너지 양자에
+            # 기반한 이론' 에서 에너지 양자 쪽이 '← 제안함_외' 를 다시 고르고 '← 기반함' 을 놓치던 문제 (Q32, 2026-11-17)
+            pair_preds = {str(t.get("predicate") or "") for t in triples or []}
             for idx, (n, u) in enumerate(resolved[:2], 1):
-                sub, _ = await self._relation_targeted_query(kb_id, query_text, [(n, u)], kwargs, log_trace)
+                sub, _ = await self._relation_targeted_query(kb_id, query_text, [(n, u)],
+                                                             {**kwargs, "_exclude_preds": pair_preds}, log_trace)
                 st = ((sub or {}).get("reasoning") or {}).get("targeting") or {}
                 if sub and st.get("mode") in ("A", "B") and sub["reasoning"].get("triples"):
                     for t in sub["reasoning"]["triples"]:
@@ -947,6 +951,13 @@ class FusekiBackend(GraphBackend):
         anchor_set = anchor_sets.get(anchor_uri) or [anchor_uri]
         cat_res = fuseki_client.query_sparql(kb_id, rt.build_catalog_query(anchor_set))
         catalog = rt.parse_catalog(cat_res.get("results", {}).get("bindings", []))
+        excl = kwargs.get("_exclude_preds") or set()
+        if excl:
+            kept = [p for p in catalog if not all(rt.local_name(u).replace("_", " ") in excl
+                                                  or rt.local_name(u) in excl for u in p["uris"])]
+            if kept:
+                log_trace(f"[Fuseki] 앵커 관계 후보에서 두 앵커 사이 관계 제외: {len(catalog) - len(kept)}개")
+                catalog = kept
         catalog_preds = list(dict.fromkeys(u for p in catalog for u in p["uris"]))
         log_trace(f"[Fuseki] Relation catalog for {anchor_label}: {len(catalog)} paths (role={role})")
         targeting: Dict[str, Any] = {"catalog_size": len(catalog), "matches": [], "role": role}
@@ -1190,18 +1201,24 @@ class FusekiBackend(GraphBackend):
                         triples, qs, h, flipped = res
                         h = {**h, "final": True}
             sparqls.extend(qs)
+            filter_note = ""
             if h.get("final"):
                 nxt: List[str] = []
+            elif h.get("filter"):
+                # 조건 홉: 노드를 옮기지 않고 조건을 만족한 노드만 남긴다
+                triples, nxt, by_value = cq.apply_filter_hop(triples, base, h.get("value"))
+                if h.get("value") and not by_value and triples:
+                    filter_note = f" (값 '{h['value']}' 로 맞는 것이 없어 관계만으로 거름)"
             else:
                 nxt = expand(cq.next_frontier(triples, h["direction"], frontier=base, visited=visited))
-            label = cq.hop_label(h, len(base), len(triples), len(nxt), flipped)
+            label = cq.hop_label(h, len(base), len(triples), len(nxt), flipped) + filter_note
             if h.get("repicked"):
                 label += " (계획 관계가 0건이라 노드의 실제 관계 중 재선택)"
             steps.append(label + (f" | 다음: {cq.frontier_names(nxt)}" if nxt else ""))
             log_trace(f"[Fuseki] Chain {steps[-1]}")
             all_triples.extend(triples)
-            if h.get("final"):
-                final_triples.extend(triples)
+            if h.get("final") or h.get("filter"):
+                final_triples.extend(triples)      # 조건 근거는 가지치기 대상이 아님 (노드를 옮기지 않으므로)
             elif triples:
                 hop_runs.append((list(base), triples))
             if not h.get("final"):
@@ -1244,7 +1261,9 @@ class FusekiBackend(GraphBackend):
     # ------------------------------------------------------------------
 
     _CLASS_CATALOG_CACHE: Dict[str, Tuple[str, float, List[Dict[str, Any]], Dict[str, List[Dict[str, Any]]]]] = {}
-    _CLASS_CATALOG_TTL = 300.0
+    # 변경 감지는 그래프 지문(트리플·술어 수) + 무효화 호출(적재·재추출·스키마 편집 등 14곳)로 한다.
+    # 시간 만료는 안전망만 — 5분 만료가 4초짜리 재구축을 계속 일으켰다 (2026-11-17)
+    _CLASS_CATALOG_TTL = 6 * 3600.0
     _MAX_KINDS = 6
 
     def _bindings(self, kb_id: str, sparql: str) -> List[Dict[str, Any]]:
@@ -1296,8 +1315,23 @@ class FusekiBackend(GraphBackend):
 
     @classmethod
     def invalidate_class_catalog(cls, kb_id: str) -> None:
-        """인제스트 완료·규칙 변경 시 호출 — 유형 카탈로그 캐시 무효화."""
+        """인제스트 완료·규칙 변경 시 호출 — 유형 카탈로그 캐시 무효화 + 백그라운드로 미리 다시 만들기."""
         cls._CLASS_CATALOG_CACHE.pop(kb_id, None)
+        try:
+            import asyncio
+            from app.services.agent_query import catalog as _cat
+            loop = asyncio.get_running_loop()
+            old = cls._WARM_TASKS.get(kb_id)
+            if old and not old.done():
+                old.cancel()       # 연달아 바뀌면 마지막 것만
+            async def _later():
+                await asyncio.sleep(2.0)   # 같은 작업 안의 연속 변경을 한 번으로
+                await _cat.warm(kb_id)
+            cls._WARM_TASKS[kb_id] = loop.create_task(_later())
+        except RuntimeError:
+            pass                   # 이벤트 루프 밖(스크립트 등) — 다음 요청이 만든다
+
+    _WARM_TASKS: Dict[str, Any] = {}
 
     async def _equivalence_llm_pass(self, kb_id, kind_name, paths, total_members, kwargs, log_trace):
         """LLM 동치 패스 — 스키마 시그니처당 1회 (캐시). 실패 시 빈 결과."""

@@ -18,7 +18,7 @@ AUTO_JAMO = 0.20        # 이하면 자동 확정 (명백한 오타·띄어쓰�
 CAND_JAMO = 0.45        # 이하면 후보
 CAND_EMBED = 0.40       # 이상이면 후보 (임베딩)
 TOP_EACH = 3            # 방식별 후보 수
-_VEC_TTL = 1800.0
+_VEC_TTL = 24 * 3600.0   # 라벨 집합이 바뀌면 키(지문)가 바뀌므로 시간 만료는 안전망만 (30분 → 24시간, 2026-11-17)
 _VEC: Dict[Tuple[str, str], Tuple[float, List[str], Any]] = {}   # (kb, 라벨 지문) → (시각, 라벨, 정규화 행렬)
 _LOCK = asyncio.Lock()
 
@@ -67,6 +67,10 @@ def jamo_distance(term: str, label: str) -> float:
 def fuzzy_candidates(term: str, labels: Sequence[str], top: int = TOP_EACH) -> List[Dict[str, Any]]:
     """자모 거리 후보 [{label, distance, via, auto}] — 2글자 미만·한글 없는 말은 건너뜀 (영어는 사전·임베딩 몫)."""
     if len(_norm(term)) < 2 or not re.search(r"[가-힣]", term or ""):
+        return []
+    if re.search(r"\d", term or ""):
+        # 숫자가 든 말(연도·시기·수치)은 오타로 보지 않는다 — '1930년대' 가 '1950년대' 로 자동 확정돼
+        # 질의 계획이 연도 조건 대신 값 경로를 찾다 포기했다 (Q31, 2026-11-17)
         return []
     # 빠른 걸러내기: 말의 자모 절반 이상이 라벨에 없으면 거리 계산을 하지 않는다 (라벨 수천 개에서도 수십 ms)
     tj = jamo(term)
@@ -145,7 +149,8 @@ async def embed_candidates(kb_id: str, terms: Sequence[str], labels: Sequence[st
 async def candidates(kb_id: str, terms: Sequence[str], labels: Sequence[str],
                      use_embedding: bool = True) -> Dict[str, List[Dict[str, Any]]]:
     """말별 후보 (자모 + 임베딩, 라벨 기준 중복 제거). 자동 확정(auto=True)은 자모 거리 0.2 이하뿐."""
-    terms = [t for t in dict.fromkeys(terms or []) if t and t.strip()]
+    # 숫자가 든 말(연도·시기·수치)은 오타·유사어 대상이 아니다 (자모·임베딩 모두) — Q31 '1930년대'
+    terms = [t for t in dict.fromkeys(terms or []) if t and t.strip() and not re.search(r"\d", t)]
     labels = [l for l in dict.fromkeys(labels or []) if l]
     emb = await embed_candidates(kb_id, terms, labels) if use_embedding else {}
     out: Dict[str, List[Dict[str, Any]]] = {}

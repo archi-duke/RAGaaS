@@ -104,3 +104,25 @@ def test_repick_options_and_validation():
     assert cq.validate_repick({"picks": [1, "2", 9, 1]}, opts) == opts
     assert cq.validate_repick({"picks": []}, opts) == []
     assert cq.validate_repick(None, opts) == []
+
+
+def test_filter_hop_keeps_node_and_filters_by_value():
+    plan, _ = cq.validate_plan({"start": "제임스 줄", "hops": [
+        {"relations": ["지도교수_of"], "direction": "out"},
+        {"relations": ["계승_발전"], "direction": "out", "filter": True, "value": "할스테트"},
+        {"relations": ["지도교수_of"], "direction": "out"}]}, LINEAGE_VOCAB)
+    assert plan["hops"][1]["filter"] and plan["hops"][1]["value"] == "할스테트"
+    a, b = INST + "크뢰벨", INST + "다른사람"
+    trip = [{"s_uri": a, "o_uri": INST + "할스테트_연구소", "subject": "크뢰벨", "object": "할스테트 연구소"},
+            {"s_uri": b, "o_uri": INST + "베를린_대학", "subject": "다른사람", "object": "베를린 대학"}]
+    keep, nodes, by_value = cq.apply_filter_hop(trip, [a, b], "할스테트")
+    assert nodes == [a] and by_value and len(keep) == 1
+    keep, nodes, by_value = cq.apply_filter_hop(trip, [a, b], "없는값")
+    assert nodes == [a, b] and not by_value          # 값이 안 맞으면 관계만으로
+
+
+def test_filter_hop_value_tolerates_typo():
+    a = INST + "크뢰벨"
+    trip = [{"s_uri": a, "o_uri": INST + "할스테트_정밀물리연구소", "subject": "크뢰벨", "object": "할스테트 정밀물리연구소"}]
+    _, nodes, by_value = cq.apply_filter_hop(trip, [a], "할스테드")
+    assert nodes == [a] and by_value

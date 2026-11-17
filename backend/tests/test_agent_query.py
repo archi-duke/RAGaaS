@@ -347,3 +347,12 @@ def test_hop_direction_flags():
     assert h1["same_class"] and not h1["lineage"]          # 사제: 반대 방향 재시도 안 함
     assert h2["lineage"] and not h2.get("both")             # 계보: 계획 방향 먼저 (0건이면 양방향)
     assert not h3["same_class"] and not h3["lineage"]       # 제안함: 재시도 허용
+
+
+def test_numeric_terms_are_not_typo_candidates():
+    from app.services.agent_query import fuzzy_match as fm
+    from app.services.retrieval import class_query as cq
+    assert fm.fuzzy_candidates("1930년대", ["1950년대", "1920년대"]) == []
+    kinds = [{"name": "Person"}]
+    cats = {"Person": [{"key": "명명_시기", "values": [{"label": "1930년대 이론"}]}]}
+    assert cq.term_matched_paths(["1930년대"], kinds, cats) == {}
