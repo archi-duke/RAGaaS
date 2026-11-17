@@ -248,6 +248,16 @@ _RELATIVE_CLAUSE_RE = re.compile(r"(?<![가-힣])([가-힣]{2,}(?:한|된|던|�
 _NOT_CLAUSE = {"같은", "다른", "모든", "어떤", "이러한", "그러한", "또한", "한", "단한"}
 
 
+# 찾은 대상에 대해 이어서 묻는 질문: "…보정법은 무엇이며, 누가 몇 년에 제안했는가?" — 답(보정법)에서 한 홉 더 가야 한다.
+# 뒤 질문이 '무엇' 이면 별개 질문일 수 있어 제외 (Q22 '…은 무엇이며, …개념은 무엇인가').
+_FOLLOWUP_ASK_RE = re.compile(r"(무엇|누구|어디|어느\s*[가-힣]+|어떤\s*[가-힣]+)(이며|이고)\s*,?\s*(누가|언제|몇\s*년|어디서)")
+
+
+def has_followup_ask(question: str) -> bool:
+    """답으로 찾은 대상의 주체·시기·장소를 이어서 묻는가 (다단계 후보)."""
+    return bool(_FOLLOWUP_ASK_RE.search(question or ""))
+
+
 def relative_clause_count(question: str) -> int:
     """질문 안의 관계 서술 관형절 수 (대략). 2 이상이면 다단계 후보."""
     return sum(1 for w in _RELATIVE_CLAUSE_RE.findall(question or "") if w not in _NOT_CLAUSE)

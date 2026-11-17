@@ -229,3 +229,39 @@ def test_run_plan_reports_query_failure(monkeypatch):
     monkeypatch.setattr(F.fuseki_client, "query_sparql_strict", boom)
     r = asyncio.run(pl.run_plan("kb", {"kind": "Style", "where": {"path": "consistency_model", "op": "eq", "value": "strong"}}))
     assert r["status"] == "error" and "조회 실패" in r["message"]
+
+
+def test_year_condition_parse_and_compile():
+    assert cq.parse_year_cond(1933) == ({"gte": 1933, "lte": 1933}, None)
+    assert cq.parse_year_cond({"gte": 1930, "lte": 1939}) == ({"gte": 1930, "lte": 1939}, None)
+    assert cq.parse_year_cond({"gt": 1929, "lt": 1940}) == ({"gte": 1930, "lte": 1939}, None)
+    assert cq.parse_year_cond({"gte": 1940, "lte": 1930})[1]
+    assert cq.parse_year_cond({"from": 1930})[1]
+    assert cq.parse_year_cond(99)[1]
+    kinds, cats = _catalog()
+    f = [{"path": "has_positive_effect_on", "op": "exists", "year": {"gte": 1930, "lte": 1939}}]
+    r = cq.validate_plan({"kind": "Style", "filters": f}, kinds, cats, strict=True)
+    assert r["status"] == "ok" and r["plan"]["filters"][0]["year"] == {"gte": 1930, "lte": 1939}
+    sp = cq.compile_member_query(r["plan"])
+    assert "meta:year ?yrf0" in sp and "?yrf0 >= 1930 && ?yrf0 <= 1939" in sp
+    assert "meta:year" in cq.compile_evidence_query(["http://x/s1"], r["plan"])
+    # ne 와 함께는 반려
+    f = [{"path": "consistency_model", "op": "ne", "value": "strong", "year": 1933}]
+    assert cq.validate_plan({"kind": "Style", "filters": f}, kinds, cats, strict=True)["status"] == "reject"
+
+
+def test_parse_evidence_collects_years():
+    b = lambda y: {"e": {"value": "http://x/e"}, "s": {"value": "http://x/e"}, "p": {"value": "http://r/p"},
+                   "o": {"value": "http://x/o"}, "oLabel": {"value": "노벨 물리학상"}, "role": {"value": "filter"},
+                   **({"year": {"value": str(y)}} if y else {})}
+    ts = cq.parse_evidence([b(1933), b(1922), b(None)], ["http://x/e"])
+    assert len(ts) == 1 and ts[0]["years"] == [1922, 1933]
+
+
+def test_followup_ask_detection():
+    from app.services.retrieval.entity_linking import has_followup_ask
+    assert has_followup_ask("피르나우 저온 흑체 측정이 기반한 보정법은 무엇이며, 누가 몇 년에 제안했는가?")
+    assert has_followup_ask("그 실험은 무엇이고 언제 수행되었나?")
+    assert not has_followup_ask("특수상대성이론이 계승·발전시킨 두 선행 개념(원리·변환)은 무엇이며, "
+                                "특수상대성이론을 기하학적으로 계승·발전시킨 개념은 무엇인가?")
+    assert not has_followup_ask("뉴턴이 저술한 책은 무엇인가?")

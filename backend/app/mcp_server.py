@@ -90,7 +90,9 @@ async def resolve_entities(kb_id: str, names: List[str], names_en: Optional[Dict
 
 @mcp.tool(description="질의 계획 실행 (LLM 없음). where 는 조건 트리: {\"all\": [...]} = AND, {\"any\": [...]} = OR, "
                       "조건 = {\"path\": key | [key, ...], \"op\": eq|ne|in|contains|gt|gte|lt|lte|exists|not_exists, \"value\": ...}. "
-                      "path 배열은 그 경로들 중 하나(OR). return 은 결과마다 보여 줄 경로 key 목록. "
+                      "path 배열은 그 경로들 중 하나(OR). 조건에 \"year\": 1933 | {\"gte\": 1930, \"lte\": 1939} 를 붙이면 "
+                      "그 연도의 진술만 (관계 경로만, 연도 없는 진술은 제외되고 adjustments 에 수 보고). "
+                      "return 은 결과마다 보여 줄 경로 key 목록 (값 뒤 괄호는 진술 연도). "
                       "aggregate = {\"fn\": count|max|min|count_members, \"path\", \"value\", \"order\", \"limit\", \"having\"}. "
                       "evidence: compact(기본, p·o·chunk_ids) | full | none. "
                       "결과: entities(라벨·충족 조건 수 matched·matched_conditions=conditions 번호·evidence). zero 면 message 확인.")

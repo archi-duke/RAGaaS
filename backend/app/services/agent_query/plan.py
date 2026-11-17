@@ -78,8 +78,10 @@ def to_dnf(node: Any) -> List[List[Dict[str, Any]]]:
 
 def _leaf_key(leaf: Dict[str, Any]) -> str:
     import json
-    return json.dumps({"path": leaf.get("path"), "op": str(leaf.get("op", "")).lower(), "value": leaf.get("value")},
-                      ensure_ascii=False, sort_keys=True)
+    k = {"path": leaf.get("path"), "op": str(leaf.get("op", "")).lower(), "value": leaf.get("value")}
+    if leaf.get("year") not in (None, "", {}):
+        k["year"] = leaf.get("year")      # 연도만 다른 조건은 다른 조건 (D4)
+    return json.dumps(k, ensure_ascii=False, sort_keys=True)
 
 
 # ---------------------------------------------------------------------------
@@ -229,6 +231,23 @@ async def _run_plan(kb_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
         for e in entities:
             matched[e].append(lk)
 
+    # 3b) 연도 조건: 조건은 맞지만 진술에 연도가 없어 빠진 엔티티 수를 알린다 (조용히 줄지 않게 — D4 §3.3)
+    year_notes: List[str] = []
+    for lk, leaf in leaves.items():
+        if leaf.get("year") in (None, "", {}):
+            continue
+        base = {k: v for k, v in leaf.items() if k != "year"}
+        chk = validate([base], with_extras=False)
+        if not chk or chk["status"] != "ok":
+            continue
+        all_hit = {cq._val(b, "e") for b in await q(cq.compile_member_query(chk["plan"]))}
+        f0 = dict(chk["plan"]["filters"][0], year={})
+        dated = {cq._val(b, "e") for b in await q(cq.compile_member_query({**chk["plan"], "filters": [f0]}))}
+        missing = len(all_hit - dated)
+        if missing:
+            year_notes.append(f"{base.get('path')} {base.get('op')} {base.get('value')}: 조건은 맞지만 연도 정보가 없는 "
+                              f"엔티티 {missing}개는 연도 조건 때문에 제외됨 (get_chunks 로 원문 확인 가능)")
+
     # 4) 집계 (첫 유효 묶음의 검증된 집계 사용)
     agg_values: Optional[Dict[str, float]] = None
     vplan = next((p for _c, p in conj_plans if p is not None), None)
@@ -308,6 +327,8 @@ async def _run_plan(kb_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
         grouped: Dict[Tuple[str, str], Dict[str, Any]] = {}
         for t in ts:
             o = str(t["object"])
+            if t.get("years"):
+                o = f"{o} ({', '.join(str(y) for y in t['years'])})"   # 진술 연도 (D4)
             values.setdefault(t["predicate"], [])
             if o not in values[t["predicate"]]:
                 values[t["predicate"]].append(o)
@@ -324,6 +345,7 @@ async def _run_plan(kb_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
         if mode == "full":
             item["values"] = values
             item["evidence"] = [{"s": name(e), "p": t["predicate"], "o": str(t["object"]), "role": t["role"],
+                                 **({"years": t["years"]} if t.get("years") else {}),
                                  "chunk_ids": t["chunk_ids"] + [c for c in t.get("edge_chunk_ids", []) if c not in t["chunk_ids"]]}
                                 for t in ts]
         elif mode != "none":
@@ -345,7 +367,7 @@ async def _run_plan(kb_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
         "entities": out_entities,
         "conditions": leaf_status or [{"condition": leaves[k], "status": "ok"} for k in leaf_keys],
         "zero_conditions": zero_notes,
-        "adjustments": adjustments + ([f"결과 {total}개 중 {limit}개만 반환"] if total > limit else []),
+        "adjustments": adjustments + year_notes + ([f"결과 {total}개 중 {limit}개만 반환"] if total > limit else []),
         "message": None if out_entities else (
             "조건을 만족하는 엔티티 없음" + (f" — 값 확인 필요: {'; '.join(zero_notes)} (lookup_values 로 표기 확인)"
                                      if zero_notes else " — AND 를 any 로 풀거나 조건을 줄여 보세요 (자동 완화하지 않음)")),

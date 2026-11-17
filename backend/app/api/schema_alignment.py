@@ -355,7 +355,7 @@ async def schema_property_triples(kb_id: str, property: str, limit: int = 200):
 
 
 class TripleEditBody(BaseModel):
-    action: str                       # move | delete
+    action: str                       # move | delete | flip | add (add 는 triples 에 source·doc_id 필수, year 선택)
     triples: List[dict]               # [{subject, predicate, object}]
     target_property: Optional[str] = None
     new_property: Optional[dict] = None   # {name, domain, range, description} — 새 관계를 만들어 이동
