@@ -247,8 +247,12 @@ export default function ChatInterface({
                 // Model configurations
                 model_config: settings.chat_llm,
                 model_config_keyword: settings.keyword_llm,
-                // Pipeline Configuration (if set, backend will use pipeline executor)
-                pipeline: pipeline && pipeline.stages.length > 0 ? pipeline : undefined
+                // 운영 탭: 운영 구성(config=live)으로 — 외부 에이전트와 같은 결과.
+                // 테스트 탭: 편집 중인 구성을 실어 보낸다 (config=draft, 저장 전 변경도 바로 시험).
+                config: (pipeline as any)?.mode === 'live' ? 'live' : 'draft',
+                caller: 'ui',
+                pipeline: (pipeline as any)?.mode === 'live' ? undefined
+                    : (pipeline && pipeline.stages.length > 0 ? pipeline : undefined)
             };
 
             // 스트리밍 우선: 검색 결과를 먼저 보여 주고 답변은 생성되는 대로 표시. 실패하면(시작 전) 일반 요청으로.
