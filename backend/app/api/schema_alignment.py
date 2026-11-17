@@ -1,4 +1,4 @@
-"""KB 스키마 매핑 제안·규칙 API (docs/design-schema-mismatch.md §5)."""
+"""KB 스키마 매핑 제안·규칙 API (docs/design/schema/design-schema-mismatch.md §5)."""
 import os
 from typing import List, Optional
 
@@ -211,7 +211,7 @@ async def reingest(kb_id: str, doc_id: str, file: UploadFile = File(...)):
 
 
 # ---------------------------------------------------------------------------
-# 스키마 편집기 (사람 검수 1단계, docs/design-schema-editor.md)
+# 스키마 편집기 (사람 검수 1단계, docs/design/schema/design-schema-editor.md)
 # ---------------------------------------------------------------------------
 
 class SchemaSpecBody(BaseModel):
@@ -444,7 +444,7 @@ async def schema_reextract_preview(kb_id: str, body: ReextractPreviewBody):
 
 
 # ---------------------------------------------------------------------------
-# AI 추천 (docs/design-schema-editor.md §14) — 추천 → 체크 → 효과 미리보기 → 승인 반영
+# AI 추천 (docs/design/schema/design-schema-editor.md §14) — 추천 → 체크 → 효과 미리보기 → 승인 반영
 # ---------------------------------------------------------------------------
 
 class RecommendBody(BaseModel):

@@ -1,4 +1,4 @@
-"""KB 용어 사전 — 적재 후 LLM 으로 별칭을 한 번 만들고, 검색할 때는 사전만 찾는다 (docs/design-kb-lexicon.md).
+"""KB 용어 사전 — 적재 후 LLM 으로 별칭을 한 번 만들고, 검색할 때는 사전만 찾는다 (docs/design/agent/design-kb-lexicon.md).
 
 - build_lexicon: 사전에 없는 라벨만 40개씩 LLM 에 보내 ko/en/syn/broader 를 만든다 (상위 개념도 항목으로).
 - get_index: 정규화 표기 → 라벨 (via, 점수) 색인. 메모리 캐시, 빌드·편집 시 무효화.
@@ -360,7 +360,7 @@ async def duplicates(kb_id: str) -> List[Dict[str, Any]]:
 
 # ---------------------------------------------------------------------------
 # 번역 대체 단계 — 사전에 없을 때, 클라이언트가 보낸 영어 표기(term_en)를 영어 표기 임베딩과 비교
-# docs/design-kb-lexicon.md §5.1
+# docs/design/agent/design-kb-lexicon.md §5.1
 # ---------------------------------------------------------------------------
 
 EN_SIM_THRESHOLD = 0.80     # 이 이상이면 후보 (홀드아웃·negative 로 정함)

@@ -53,7 +53,7 @@ def _is_model_configured(config: Optional[Dict[str, Any]]) -> bool:
 def _is_structured_file(file_path: str) -> bool:
     """True for .json/.yaml/.yml files -> routes to the deterministic
     StructuredExtractor path instead of the text pipeline (see
-    docs/design-structured-json-yaml-ontology.md, Phase 1)."""
+    docs/design/schema/design-structured-json-yaml-ontology.md, Phase 1)."""
     if not file_path:
         return False
     lower = file_path.lower()
@@ -134,7 +134,7 @@ class IngestRequest(BaseModel):
     subject_restoration_llm: Optional[Dict[str, Any]] = None
     noun_extraction_llm: Optional[Dict[str, Any]] = None
     embedding_model: Optional[Dict[str, Any]] = None
-    # KB 스키마 매핑 (docs/design-schema-mismatch.md §5) — backend 가 규칙·어휘를 실어 보낸다
+    # KB 스키마 매핑 (docs/design/schema/design-schema-mismatch.md §5) — backend 가 규칙·어휘를 실어 보낸다
     schema_rules: Optional[List[Dict[str, Any]]] = None
     schema_vocab: Optional[Dict[str, Any]] = None
     replace_existing: bool = False  # 재정규화: 추출 성공 후 같은 doc_id 의 기존 데이터를 지우고 삽입
@@ -207,7 +207,7 @@ async def process_ingest_job(job_id: str, request: IngestRequest):
         
         if _is_structured_file(request.file_path):
             # ---- Structured path (Phase 1 MVP): deterministic field->triple mapping ----
-            # See docs/design-structured-json-yaml-ontology.md SS3/4/5/8/11/12.
+            # See docs/design/schema/design-structured-json-yaml-ontology.md SS3/4/5/8/11/12.
             # Skips read_text_file/restore_subjects/ingest_pipeline.process entirely.
             # StructuredExtractor.extract() returns the SAME result shape
             # ({nodes, embeddings, triples, node_count, triple_count, stats}) so the
@@ -528,7 +528,7 @@ async def create_ingest_job(
 class ReplayRequest(BaseModel):
     """트리플 리플레이: 저장된 추출 트리플(raw 사본)에 KB 규칙을 적용해 문서 그래프만 교체.
     LLM 재호출·재청킹·재임베딩 없음 → 청크 근거(source_node_id) 유지, 멱등.
-    (docs/design-graph-promotion.md §3(c) L1)"""
+    (docs/design/schema/design-graph-promotion.md §3(c) L1)"""
     kb_id: str
     doc_id: str
     graph_store: str = "fuseki"

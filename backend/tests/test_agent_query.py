@@ -1,4 +1,4 @@
-"""외부 에이전트용 조회 P1 단위 테스트 (docs/design-mcp-agent-query.md)."""
+"""외부 에이전트용 조회 P1 단위 테스트 (docs/design/agent/design-mcp-agent-query.md)."""
 import pytest
 from fastapi import HTTPException
 
@@ -66,7 +66,7 @@ def test_readonly_rejects(q):
         check_readonly(q)
 
 
-# --- 용어 사전 (docs/design-kb-lexicon.md) ---------------------------------------------------------
+# --- 용어 사전 (docs/design/agent/design-kb-lexicon.md) ---------------------------------------------------------
 from types import SimpleNamespace
 
 from app.services.agent_query import lexicon as lx

@@ -16,26 +16,26 @@
   - 카탈로그 → A 결정적 매칭 → B 닫힌 집합 LLM 경로 선택 → 타게팅 SPARQL → 연결 순 청크.
   - Execution Log 에 추론 과정(링킹 → SPARQL → 트리플 → 청크)을 리포트한다.
 - **폐기**: Fast Path 이웃 전체 수집.
-- **설계서**: `design-graph-relation-targeting.md` · PR #49
+- **설계서**: `design/graph/design-graph-relation-targeting.md` · PR #49
 
 ## D3. 유형 수준 질문 = LLM 질의 계획(JSON) → 검증 → 결정적 SPARQL
 
 - **결정**: "유지보수성이 좋은 스타일은?" 같은 유형 질문은 LLM 이 SPARQL 을 직접 쓰지 않고, 닫힌 경로 목록에서 질의 계획 JSON 을 고르게 한 뒤 검증·컴파일한다.
   - 라우팅: 레코드 앵커 = 관계 타게팅, 값 노드·앵커 없음 = 유형 경로, 표현 불가만 C(LLM SPARQL).
 - **이유**: LLM SPARQL 은 문법·경로 오류가 잦고 검증이 어렵다.
-- **설계서**: `design-graph-class-query.md` · PR #51 (#50 은 잘못된 브랜치로 머지돼 재상신)
+- **설계서**: `design/graph/design-graph-class-query.md` · PR #51 (#50 은 잘못된 브랜치로 머지돼 재상신)
 
 ## D4. 스키마 불일치 문서 = 검색 시 동치 확장 + KB 매핑 규칙 정규화
 
 - **결정**: 같은 필드의 다른 표기(advantages / pros)는 검색 때 동치로 묶어 UNION 하고, KB 매핑 규칙으로 인제스트 시 정규화한다.
-- **설계서**: `design-schema-mismatch.md` · PR #52
+- **설계서**: `design/schema/design-schema-mismatch.md` · PR #52
 
 ## D5. 그래프 → 온톨로지 승격 재설계 (텍스트 경로)
 
 - **결정**: 텍스트 문서는 그래프로 먼저 적재하고, 승격 = 스키마 유도 → 사람 검토 → 리플레이(→ 선택: 스키마 기준 재추출).
   - 원본 추출 트리플은 `_triples.raw.json` 불변 사본으로 두고 규칙을 항상 다시 적용한다 (멱등).
 - **검증 스토리**: 스타일 YAML 10개를 자연어로 바꾼 test-ontology2 가 YAML 경로(test-ontology) 수준에 도달하는지.
-- **설계서**: `design-graph-promotion.md` · PR #53
+- **설계서**: `design/schema/design-graph-promotion.md` · PR #53
 
 ## D6. 운영 조치
 

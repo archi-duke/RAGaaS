@@ -1,4 +1,4 @@
-"""KB 스키마 매핑 규칙 적용(schema_normalizer) 단위 테스트 (docs/design-schema-mismatch.md §5)."""
+"""KB 스키마 매핑 규칙 적용(schema_normalizer) 단위 테스트 (docs/design/schema/design-schema-mismatch.md §5)."""
 import copy
 
 from app.core.schema_normalizer import apply_to_triples, compact, normalize_record, validate_rule

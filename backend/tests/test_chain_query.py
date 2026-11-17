@@ -1,4 +1,4 @@
-"""다단계 체인 검색(chain_query) 단위 테스트 — docs/design-graph-multihop-chain.md"""
+"""다단계 체인 검색(chain_query) 단위 테스트 — docs/design/graph/design-graph-multihop-chain.md"""
 from app.services.retrieval import chain_query as cq
 
 INST = "http://rag.local/inst/"

@@ -1,6 +1,6 @@
 """스키마 동치 감지기 — 검색 시 OR 확장(Part 1)과 인제스트 매핑 제안(Part 2) 공용.
 
-설계: docs/design-schema-mismatch.md §3
+설계: docs/design/schema/design-schema-mismatch.md §3
 
 같은 의미의 필드를 다른 이름·표기·중첩으로 적은 경로를 묶는다.
   근거: normalized(표기·어간) / nesting(리프 일치, 접두 다름) / lexicon(내장 동의어표) / llm / rule

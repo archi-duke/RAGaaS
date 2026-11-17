@@ -1,6 +1,6 @@
 """AttemptLogger — Level 1 observability for the query generation Inner Loop.
 
-See docs/design-query-generation-loop.md §4.4 (schema), §5 (failure isolation),
+See docs/design/graph/design-query-generation-loop.md §4.4 (schema), §5 (failure isolation),
 §9 (motor-direct decision).
 
 This is an insert-only logger; it deliberately bypasses Beanie (no Document

@@ -22,7 +22,7 @@
   - GoJIRA 는 이 방식으로 전환. Neo4j 는 최종 지원 대상 (우선 Fuseki).
 - **폐기한 대안**: 클라이언트가 SPARQL 을 직접 생성 — 저장소 종속(Neo4j 불가), 쓰기·과부하 위험, 검증 불가.
 - **ADR**: ADR-004 (11/17 기록)
-- **설계서**: `design-mcp-agent-query.md` · PR #61 (P1 REST, P2 query_plan, P3 MCP `/api/mcp`, P4 스킬 `skills/ragaas-query`)
+- **설계서**: `design/agent/design-mcp-agent-query.md` · PR #61 (P1 REST, P2 query_plan, P3 MCP `/api/mcp`, P4 스킬 `skills/ragaas-query`)
 
 ## D3. query_plan 은 자동 완화하지 않는다
 
@@ -37,7 +37,7 @@
   - 사전에 없으면 **클라이언트가 보낸 영어 표기(term_en)** 로 영어 임베딩 비교 (번역 대체 단계).
   - 원문 라벨은 그대로 두고 사전이 다국어 축을 맡는다.
 - **폐기한 대안**: 엔티티·관계를 영어로 저장하고 답만 질의 언어로 — 원문 표기 손실. 실시간 한↔영 임베딩 유사도 — 짧은 단어는 신뢰 불가 (장점~pros 0.20).
-- **설계서**: `design-kb-lexicon.md` · PR #61, #62 (L3 편집 탭, L4 자동 갱신·내부 검색 연결)
+- **설계서**: `design/agent/design-kb-lexicon.md` · PR #61, #62 (L3 편집 탭, L4 자동 갱신·내부 검색 연결)
 
 ## D5. GoJIRA 변경은 GoJIRA 담당 세션에 맡긴다
 

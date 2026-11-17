@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { schemaApi } from '../services/api';
 
-// 스키마 데이터 검증 (docs/design-schema-editor.md §10)
+// 스키마 데이터 검증 (docs/design/schema/design-schema-editor.md §10)
 // - 멤버 누락: range 클래스로 이어지는데 클래스가 없는 목적어 → 체크해서 멤버로 지정 (class 규칙 + 리플레이)
 // - range 위반: 목적어가 다른 클래스 멤버 (방향·분류 확인용, 표시만)
 // - 표기 중복: 한 클래스 범위에서 같은 개념 다른 표기 후보(LLM 제안) → 체크해서 병합 (entity 규칙 + 리플레이)

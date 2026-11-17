@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import ForceGraph2D from 'react-force-graph-2d';
 
-// 스키마 편집기의 그래프 보기 — 지금 편집 중인 스키마(저장 전 포함)를 그래프로 (docs/design-schema-editor.md §8)
+// 스키마 편집기의 그래프 보기 — 지금 편집 중인 스키마(저장 전 포함)를 그래프로 (docs/design/schema/design-schema-editor.md §8)
 // - 텍스트 KB: 클래스 = 노드, range 가 클래스인 속성 = 링크, 나머지 속성 = domain 클래스의 값 속성
 // - 구조화 KB: 유형 → 중첩 필드(경로 세그먼트) 트리, 마지막 세그먼트 = 값 속성
 

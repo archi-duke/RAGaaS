@@ -1,6 +1,6 @@
 """다단계 질문 — 홉별 결정적 체인 검색 (mode H)
 
-설계: docs/design-graph-multihop-chain.md
+설계: docs/design/graph/design-graph-multihop-chain.md
 
 "광전효과를 처음 발견한 사람의 박사 지도교수가 1847년에 제안한 법칙은?" 같은 질문을
 LLM 이 SPARQL 을 통째로 짓는 대신(C, 실패가 잦고 느림),

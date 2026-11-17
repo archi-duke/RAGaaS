@@ -115,7 +115,7 @@ class GraphRetrievalStrategy(RetrievalStrategy):
         
         all_entities = list(set(entities + expanded_entities))
 
-        # KB 용어 사전 (docs/design-kb-lexicon.md L4): 한영·음역·동의어·오탈자를 그래프 표기로.
+        # KB 용어 사전 (docs/design/agent/design-kb-lexicon.md L4): 한영·음역·동의어·오탈자를 그래프 표기로.
         # 질문 분석의 영어 번역(translated_entities)을 사전 대체 단계에 쓴다 — 추가 LLM 호출 없음.
         if graph_backend_type == "ontology":
             try:
@@ -132,7 +132,7 @@ class GraphRetrievalStrategy(RetrievalStrategy):
             log(f"No entities found in query: {query}")
             return []
         # ontology 백엔드는 엔티티가 없어도 유형 수준 질문(질의 계획)으로 진행한다
-        # ("스타일은 모두 몇 개야?" — docs/design-graph-class-query.md)
+        # ("스타일은 모두 몇 개야?" — docs/design/graph/design-graph-class-query.md)
 
         # 4. SPARQL Search with semantic relationship understanding
         graph_hops = kwargs.get("graph_hops", 1)
@@ -242,7 +242,7 @@ class GraphRetrievalStrategy(RetrievalStrategy):
              log(f"DEBUG: Strict Mode - Fallback search disabled. Returning empty/metadata-only results.")
 
         
-        # 6.5 추론 리포트 (Execution Log 맨 앞) — docs/design-graph-relation-targeting.md
+        # 6.5 추론 리포트 (Execution Log 맨 앞) — docs/design/graph/design-graph-relation-targeting.md
         reasoning = self._build_reasoning(graph_result, query_analysis, entities, results, ordered, llm_model_name)
         from app.services.retrieval.relation_targeting import render_reasoning_report
         trace_logs[:0] = render_reasoning_report(reasoning)
@@ -372,7 +372,7 @@ class GraphRetrievalStrategy(RetrievalStrategy):
     async def _analyze_and_extract(self, kb_id: str, query: str, llm_cfg=None, llm_model: str = "gpt-4o-mini") -> Tuple[List[str], Dict[str, Any]]:
         """질의 분석 + 엔티티 추출을 단일 LLM 호출로 병합 (기존 2회 → 1회).
 
-        See docs/design-query-analysis-merge.md.
+        See docs/design/graph/design-query-analysis-merge.md.
 
         기존 _analyze_query + _extract_entities 두 LLM 호출을 하나로 합치고,
         엔티티별 문법 역할(subject/object/ambiguous)을 추가로 뽑는다. spaCy

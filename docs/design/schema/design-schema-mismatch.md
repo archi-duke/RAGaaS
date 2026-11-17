@@ -1,7 +1,10 @@
 # 스키마 불일치 문서 처리 — 검색 시 동치 확장 + 인제스트 시 매핑 규칙
 
+> **문서 상태 (2026-11-17)**: ✅ 현행 (2026-11-14 구현) · 지도: [`docs/README.md`](../../README.md)
+
+
 - 작성일: 2026-11-14
-- 선행: `docs/design-graph-relation-targeting.md`, `docs/design-graph-class-query.md`, `docs/design-structured-json-yaml-ontology.md` §6
+- 선행: `docs/design/graph/design-graph-relation-targeting.md`, `docs/design/graph/design-graph-class-query.md`, `docs/design/schema/design-structured-json-yaml-ontology.md` §6
 
 ## 1. 문제
 일반 업로드는 스키마를 검증하거나 정렬하지 않는다. 키는 그대로 predicate가 된다. 그래서 다음 불일치가 생기면 결과가 **조용히 누락**된다.

@@ -1,4 +1,4 @@
-"""AI 추천 처리안 검증 (docs/design-schema-editor.md §14)."""
+"""AI 추천 처리안 검증 (docs/design/schema/design-schema-editor.md §14)."""
 from app.services.schema_alignment import recommend as rc
 
 CTX = {"spec": {"classes": [{"name": "ArchitectureStyle"}, {"name": "QualityAttribute"}, {"name": "Requirement"}],

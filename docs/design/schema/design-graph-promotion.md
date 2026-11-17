@@ -1,7 +1,10 @@
 # 그래프 → 온톨로지 승격 재설계 (텍스트 경로)
 
+> **문서 상태 (2026-11-17)**: ✅ 현행 (2026-11-14~15 구현) · 지도: [`docs/README.md`](../../README.md)
+
+
 - 작성일: 2026-11-15
-- 관련: `docs/design-ontology-schema-extraction-v2.md`, `docs/design-schema-mismatch.md`, `docs/design-graph-class-query.md`, `docs/design-graph-relation-targeting.md`
+- 관련: `docs/design/schema/design-ontology-schema-extraction-v2.md`, `docs/design/schema/design-schema-mismatch.md`, `docs/design/graph/design-graph-class-query.md`, `docs/design/graph/design-graph-relation-targeting.md`
 
 ## 1. 의도한 흐름 (소유자)
 구조화 문서(YAML/JSON)는 처음부터 스키마가 있다. 일반 텍스트는 스키마가 없으므로 다음 순서를 따른다.

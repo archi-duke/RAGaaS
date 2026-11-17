@@ -1,4 +1,4 @@
-"""RAGaaS MCP 서버 (docs/design-mcp-agent-query.md §5) — Streamable HTTP, /api/mcp 에 마운트.
+"""RAGaaS MCP 서버 (docs/design/agent/design-mcp-agent-query.md §5) — Streamable HTTP, /api/mcp 에 마운트.
 
 게이트웨이 경로: /ragaas/api/mcp (기존 /ragaas/api/ 규칙이 /api/ 로 넘김 — 게이트웨이 변경 불필요).
 인증은 앱 전역 platform_auth 미들웨어가 처리한다 (계약 05).

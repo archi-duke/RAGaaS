@@ -1,4 +1,4 @@
-"""스키마 동치 감지기 단위 테스트 (docs/design-schema-mismatch.md §3)."""
+"""스키마 동치 감지기 단위 테스트 (docs/design/schema/design-schema-mismatch.md §3)."""
 from app.services.schema_alignment.equivalence import (
     catalog_signature,
     detect_path_groups,

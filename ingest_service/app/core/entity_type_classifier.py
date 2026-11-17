@@ -9,7 +9,7 @@ Location/... 또는 도메인 특화 클래스)을 배정한다.
 opt-in 플래그(enable_entity_typing)가 True일 때만 파이프라인에서 호출된다.
 비활성 시에는 이 모듈이 아예 임포트/실행되지 않으므로 기존 동작에 영향 없음.
 
-design: docs/design-ingest-entity-typing-b.md §3.2
+design: docs/design/schema/design-ingest-entity-typing-b.md §3.2
 """
 import json
 import logging

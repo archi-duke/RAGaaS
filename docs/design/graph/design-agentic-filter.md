@@ -1,5 +1,8 @@
 # 설계: 에이전틱(Agentic) 파이프라인 필터
 
+> **문서 상태 (2026-11-17)**: ✅ 현행 (2026-11-16 구현) · 지도: [`docs/README.md`](../../README.md)
+
+
 작성일: 2026-11-16 · 상태: 1차 구현 완료 (§8)
 관련: `design-graph-multihop-chain.md` §7, `design-graph-class-query.md`, `graph-search-intended-design`(관계 SPARQL → 트리플 → 연결 청크)
 

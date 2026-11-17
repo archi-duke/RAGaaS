@@ -478,7 +478,7 @@ export default function SearchResults({ chunks, kbId, graphBackend, logs, pipeli
 }
 
 // 그래프 추론 과정 카드: 질문 분석 → 엔티티 링킹 → 관계 타게팅 → 선택 트리플 → 근거 청크
-// (docs/design-graph-relation-targeting.md)
+// (docs/design/graph/design-graph-relation-targeting.md)
 const MODE_LABELS: Record<string, string> = {
     A: 'A · 결정적 매칭',
     B: 'B · LLM 경로 선택',

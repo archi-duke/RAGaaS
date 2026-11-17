@@ -2,7 +2,7 @@
 Structured JSON/YAML -> Ontology Extractor (Phase 1 MVP)
 
 Deterministic field -> triple mapping for JSON/YAML documents, per
-docs/design-structured-json-yaml-ontology.md SS3 (mapping rules), SS4 (identity),
+docs/design/schema/design-structured-json-yaml-ontology.md SS3 (mapping rules), SS4 (identity),
 SS5 (typing) and SS8 (search verbalization).
 
 Phase 1 scope ONLY:
@@ -123,7 +123,7 @@ class StructuredExtractor:
     ) -> Dict[str, Any]:
         """Parse a JSON/YAML file and produce the pipeline-compatible result dict.
 
-        schema_rules / schema_vocab: KB 매핑 규칙·어휘 (docs/design-schema-mismatch.md §5).
+        schema_rules / schema_vocab: KB 매핑 규칙·어휘 (docs/design/schema/design-schema-mismatch.md §5).
         파싱 직후 레코드 트리에 적용해 identity·구조 노드·청크·트리플이 표준 키·값으로 나온다.
         """
         start = time.time()

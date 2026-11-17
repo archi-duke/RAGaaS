@@ -1,7 +1,10 @@
 # 그래프 검색: 유형 수준(class-level) 질문 — 질의 계획 기반 SPARQL
 
+> **문서 상태 (2026-11-17)**: ✅ 현행 (2026-11-14 구현) · 지도: [`docs/README.md`](../../README.md)
+
+
 - 작성일: 2026-11-14
-- 선행: `docs/design-graph-relation-targeting.md` (엔티티 앵커 질문의 관계 타게팅)
+- 선행: `docs/design/graph/design-graph-relation-targeting.md` (엔티티 앵커 질문의 관계 타게팅)
 - 대상: `relation_targeting.py`, `class_query.py`(신규), `graph_backends/fuseki.py`, `graph.py`, `api/retrieval.py`, `SearchResults.tsx`
 
 ## 1. 문제

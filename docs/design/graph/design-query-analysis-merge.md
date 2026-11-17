@@ -1,7 +1,10 @@
 # 그래프 질의 분석 병합 설계: 2 LLM 호출 → 1 + 엔티티 역할 판별
 
+> **문서 상태 (2026-11-17)**: ✅ 현행 (2026-07-17 구현) — 11/16 질의 계획 선행 실행과 역할 겹침 점검 필요 · 지도: [`docs/README.md`](../../README.md)
+
+
 > 상태: 구현 예정 (Design)
-> 관련: docs/design-query-generation-loop.md (Phase 1/2), entity_linking.py (Phase 2)
+> 관련: docs/design/graph/design-query-generation-loop.md (Phase 1/2), entity_linking.py (Phase 2)
 
 ## 1. 배경 및 동기
 

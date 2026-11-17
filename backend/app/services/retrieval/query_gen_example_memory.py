@@ -1,6 +1,6 @@
 """ExampleMemory — Level 2 "success example" memory for the query generation Outer Loop.
 
-See docs/design-query-generation-loop.md §4.5 (design) and §9 (implementation
+See docs/design/graph/design-query-generation-loop.md §4.5 (design) and §9 (implementation
 decisions, revised).
 
 Storage: MongoDB collection `query_gen_examples` is the single store —

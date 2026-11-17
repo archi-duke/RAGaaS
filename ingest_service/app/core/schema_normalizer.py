@@ -1,6 +1,6 @@
 """KB 스키마 매핑 규칙 적용 — 구조화 문서 트리 정규화 (순수 함수).
 
-설계: docs/design-schema-mismatch.md §5
+설계: docs/design/schema/design-schema-mismatch.md §5
 
 규칙은 backend(Mongo)가 소유하고 인제스트 요청에 실어 보낸다. 여기서는 파싱된 트리의
 레코드 루트마다 다음 순서로 적용한다 (트리에 적용해야 identity·구조 노드·청크 텍스트·
@@ -315,7 +315,7 @@ def apply_to_triples(triples: List[Dict[str, Any]], rules: Optional[List[Dict[st
 
 
 # ---------------------------------------------------------------------------
-# 연도 분리 (데이터 품질 D4 Y1 — docs/design-year-attributes.md §3.2)
+# 연도 분리 (데이터 품질 D4 Y1 — docs/design/schema/design-year-attributes.md §3.2)
 # ---------------------------------------------------------------------------
 
 _YEAR_MIN, _YEAR_MAX = 1000, 2100
@@ -369,7 +369,7 @@ def apply_year_split(t: Dict[str, Any]) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# 트리플 리플레이 (텍스트/LLM 추출 그래프의 ABox 재구성 — docs/design-graph-promotion.md §3(c))
+# 트리플 리플레이 (텍스트/LLM 추출 그래프의 ABox 재구성 — docs/design/schema/design-graph-promotion.md §3(c))
 # ---------------------------------------------------------------------------
 
 def _added_triples(rules: List[Dict[str, Any]], triples: List[Dict[str, Any]],

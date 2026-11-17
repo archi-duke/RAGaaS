@@ -1,7 +1,7 @@
 # ADR-004: 외부 에이전트 계약 = query_plan 하나 (클라이언트 SPARQL 직접 생성 기각)
 
 - **상태**: Accepted (2026-11-16)
-- **관련**: `docs/design-mcp-agent-query.md`, `docs/decisions/2026-11-16-decisions.md` D2·D3, PR #61
+- **관련**: `docs/design/agent/design-mcp-agent-query.md`, `docs/decisions/2026-11-16-decisions.md` D2·D3, PR #61
 
 ## 맥락
 

@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Check, X, Plus, RefreshCw, GitMerge, Trash2, Search } from 'lucide-react';
 import { lexiconApi, schemaApi } from '../services/api';
 
-// 용어 사전 탭 (docs/design-kb-lexicon.md L3)
+// 용어 사전 탭 (docs/design/agent/design-kb-lexicon.md L3)
 // - 항목: 라벨별 한국어·영어·동의어 별칭. 사람이 고친 항목(source=user)은 재생성 때 보존된다.
 // - 상위 개념 검토: LLM 이 제안한 상위 개념(유지보수성 ← 변경 용이성 …)을 묶음 단위로 승인·거절.
 //   승인 전에는 검색 결과에 '검토 전' 으로 표시된다.

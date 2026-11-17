@@ -1,8 +1,11 @@
 # 그래프 검색: 관계 타게팅 SPARQL 전환 설계
 
+> **문서 상태 (2026-11-17)**: ✅ 현행 (2026-11-14 구현) · 지도: [`docs/README.md`](../../README.md)
+
+
 - 작성일: 2026-11-14
 - 대상: `backend/app/services/retrieval/graph.py`, `graph_backends/fuseki.py`, `relation_targeting.py`(신규), `api/retrieval.py`, `frontend/src/components/SearchResults.tsx`
-- 관련: `docs/design-query-analysis-merge.md`, `docs/design-query-generation-loop.md`, `docs/design-structured-json-yaml-ontology.md`
+- 관련: `docs/design/graph/design-query-analysis-merge.md`, `docs/design/graph/design-query-generation-loop.md`, `docs/design/schema/design-structured-json-yaml-ontology.md`
 
 ## 1. 배경 — 무엇이 의도와 달랐나
 

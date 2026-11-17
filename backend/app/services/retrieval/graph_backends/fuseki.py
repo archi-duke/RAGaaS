@@ -717,7 +717,7 @@ class FusekiBackend(GraphBackend):
         return loop_result
 
     # ------------------------------------------------------------------
-    # 관계 타게팅 (docs/design-graph-relation-targeting.md)
+    # 관계 타게팅 (docs/design/graph/design-graph-relation-targeting.md)
     # ------------------------------------------------------------------
 
     _JOSAS = ["에게", "으로", "에서", "하고", "이나", "이다", "까지", "부터",
@@ -1023,7 +1023,7 @@ class FusekiBackend(GraphBackend):
         return self._targeted_result("", [], reasoning, trace_logs), []
 
     # ------------------------------------------------------------------
-    # 다단계 질문 — 홉별 결정적 체인 (docs/design-graph-multihop-chain.md)
+    # 다단계 질문 — 홉별 결정적 체인 (docs/design/graph/design-graph-multihop-chain.md)
     # ------------------------------------------------------------------
 
     async def _chain_query(self, kb_id: str, query_text: str, kwargs: Dict[str, Any], log_trace
@@ -1216,7 +1216,7 @@ class FusekiBackend(GraphBackend):
                 "used_fallback": False, "reasoning": reasoning, "trace_logs": trace_logs}
 
     # ------------------------------------------------------------------
-    # 유형 수준 질문 — 질의 계획 (docs/design-graph-class-query.md)
+    # 유형 수준 질문 — 질의 계획 (docs/design/graph/design-graph-class-query.md)
     # ------------------------------------------------------------------
 
     _CLASS_CATALOG_CACHE: Dict[str, Tuple[str, float, List[Dict[str, Any]], Dict[str, List[Dict[str, Any]]]]] = {}
@@ -1325,7 +1325,7 @@ class FusekiBackend(GraphBackend):
         overlay = await self._load_schema_overlay(kb_id)
         use_llm = os.getenv("SCHEMA_EQUIV_LLM_AUTO_USE", "true").lower() != "false"
         kinds = cq.infer_kinds(self._bindings(kb_id, cq.build_member_query()))[: self._MAX_KINDS]
-        # 사람이 고친 유형 이름·설명 (스키마 편집기, 구조화 KB) — docs/design-schema-editor.md §7
+        # 사람이 고친 유형 이름·설명 (스키마 편집기, 구조화 KB) — docs/design/schema/design-schema-editor.md §7
         cq.apply_kind_overlay(kinds, overlay)
         catalogs = {}
         for k in kinds:
@@ -1651,7 +1651,7 @@ class FusekiBackend(GraphBackend):
                 resolved_uris = []  # Entity-Centric 블록을 건너뛰어도 이후 참조가 안전하도록 기본값 보장
                 entity_centric_enabled = kwargs.get("enable_entity_centric_schema", True)  # 기본 활성화
                 
-                # 라우팅 (docs/design-graph-relation-targeting.md, docs/design-graph-class-query.md)
+                # 라우팅 (docs/design/graph/design-graph-relation-targeting.md, docs/design/graph/design-graph-class-query.md)
                 intent = (kwargs.get("intent") or "").lower()
                 is_class_query = intent == "class_query"
                 is_multihop_pattern = False
@@ -1753,7 +1753,7 @@ class FusekiBackend(GraphBackend):
                 emb_service = kwargs.get("embedding_service", default_embedding_service)
                 # 결정적 경로(A/B/P/H/E)가 모두 근거를 못 찾았다. 기본 정책은 LLM SPARQL 생성(C) 대신
                 # 문서 검색(V)으로 넘기는 것 — C 는 문항당 40초 이상 걸리고 정답률이 낮았다
-                # (docs/design-graph-multihop-chain.md §7.9). graph_fallback="llm_sparql" 이면 기존 C.
+                # (docs/design/graph/design-graph-multihop-chain.md §7.9). graph_fallback="llm_sparql" 이면 기존 C.
                 if not skip_llm_generation and (kwargs.get("graph_fallback") or "vector") == "vector":
                     rs = kwargs.setdefault("_reasoning", {})
                     prev = (rs.get("targeting") or {}).get("reason") or chain_reason
@@ -1932,7 +1932,7 @@ class FusekiBackend(GraphBackend):
                             
                                 log_trace(f"[Fuseki] Secondary lookup retrieved {len(real_triples)} real triples.")
 
-                            # 근거 청크 조인 (docs/design-graph-class-query.md §6)
+                            # 근거 청크 조인 (docs/design/graph/design-graph-class-query.md §6)
                             # 1) 바인딩에 s/p/o 가 있으면 그 트리플과 정확히 일치하는 statement 로 조인
                             # 2) 없으면 노드 기반 — outgoing 이 있는 노드(레코드·구조 노드)만.
                             #    공유 값 노드(high, small …)가 문서 전체 청크를 끌어오던 문제 방지.

@@ -1,4 +1,4 @@
-"""스키마 기준 재추출 (승격 L2) — docs/design-graph-promotion.md §3(c) L2
+"""스키마 기준 재추출 (승격 L2) — docs/design/schema/design-graph-promotion.md §3(c) L2
 
 확정된 스키마(클래스·속성·값 어휘·대표 엔티티 이름)를 프롬프트에 넣어 **저장된 청크**에서
 트리플을 다시 추출한다. 재청킹·재임베딩이 없으므로 source_node_id(근거 청크)가 그대로다.

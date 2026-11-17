@@ -22,7 +22,7 @@ _STRUCTURED_EXTENSIONS = (".json", ".yaml", ".yml")
 
 
 async def _schema_payload_for(kb, filename: str) -> Dict[str, Any]:
-    """인제스트 요청에 실을 KB 스키마 매핑 규칙·어휘 (docs/design-schema-mismatch.md §5)."""
+    """인제스트 요청에 실을 KB 스키마 매핑 규칙·어휘 (docs/design/schema/design-schema-mismatch.md §5)."""
     if kb.graph_backend != "ontology":
         return {}
     from app.services.schema_alignment.service import ingest_schema_payload, rules_for_ingest
@@ -764,7 +764,7 @@ async def upload_document(
 
             # 구조화 문서(.json/.yaml/.yml) + 온톨로지 승격 KB → preview/confirm 정렬 검토 흐름 (C안 §6/§10/§11)
             # 선언(JSON Schema)·레거시 승격 KB 만 preview/HOLD 정렬 흐름. 구조화 문서로 전환된 KB(structured)와
-            # 유도 승격 KB(induced)는 스키마 정렬(제안·규칙) 흐름을 쓴다 (docs/design-schema-mismatch.md).
+            # 유도 승격 KB(induced)는 스키마 정렬(제안·규칙) 흐름을 쓴다 (docs/design/schema/design-schema-mismatch.md).
             if (_is_structured_filename(doc.filename) and kb.is_promoted and kb.graph_backend == "ontology"
                     and getattr(kb, "schema_source", "none") not in ("structured", "induced")):
                 preview = await ingest_client.create_preview(

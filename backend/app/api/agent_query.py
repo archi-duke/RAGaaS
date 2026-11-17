@@ -1,4 +1,4 @@
-"""외부 에이전트용 조회 API (docs/design-mcp-agent-query.md §4, §5).
+"""외부 에이전트용 조회 API (docs/design/agent/design-mcp-agent-query.md §4, §5).
 
 /api/v2/knowledge-bases/{kb_id}/agent/...  — MCP 도구(P3)도 같은 서비스 함수를 부른다.
 모든 엔드포인트는 읽기 전용이며 LLM 을 호출하지 않는다.
@@ -120,7 +120,7 @@ async def agent_plan(kb_id: str, req: PlanRequest):
 
 
 # ---------------------------------------------------------------------------
-# 용어 사전 (docs/design-kb-lexicon.md)
+# 용어 사전 (docs/design/agent/design-kb-lexicon.md)
 # ---------------------------------------------------------------------------
 
 @router.post("/{kb_id}/lexicon/build")

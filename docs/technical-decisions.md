@@ -65,7 +65,7 @@
 **선택**: 질문의 관계를 겨냥한 SPARQL 로 그 트리플만 찾고, 트리플에 연결된 청크로 답한다. A 결정적 매칭 → B 닫힌 집합 LLM 경로 선택. 추론 과정은 Execution Log 에 리포트.
 **폐기한 것**: 앵커 주변 트리플 전체(79개)를 가져와 임베딩 점수로 청크를 고르는 Fast Path.
 **왜 바꿨나**: 답은 맞아도 근거 경로가 설계 의도(관계 → 트리플 → 청크)와 달랐다. 링킹 수정(#47)이 Fast Path 를 항상 성공하게 만들어 드러남.
-**참조**: `decisions/2026-11-14` D2 · `design-graph-relation-targeting.md` · PR #49
+**참조**: `decisions/2026-11-14` D2 · `design/graph/design-graph-relation-targeting.md` · PR #49
 
 ### 유형 질문 = LLM 질의 계획(JSON) → 검증 → 결정적 SPARQL
 
@@ -74,7 +74,7 @@
 **선택**: LLM 은 닫힌 경로 목록에서 질의 계획만 고르고, 검증·컴파일은 결정적으로. 표현 불가 질문만 C(LLM SPARQL).
 **이유**: LLM 이 쓴 SPARQL 은 경로·문법 오류가 잦고 검증이 어렵다.
 **주의**: 내부 경로는 AND 0건이면 조건별 OR 로 완화한다 (2026-11-15) — 외부 query_plan 은 완화하지 않는다 (2장).
-**참조**: `decisions/2026-11-14` D3 · `2026-11-15` D9 · `design-graph-class-query.md` · PR #51
+**참조**: `decisions/2026-11-14` D3 · `2026-11-15` D9 · `design/graph/design-graph-class-query.md` · PR #51
 
 ### 다단계 질문 = 홉별 결정적 체인(H)
 
@@ -84,7 +84,7 @@
 **폐기한 것**: 다단계를 C(LLM SPARQL 생성)로 보내던 방식 — 다단계 0/10.
 **11/17 보정**: '…은 무엇이며, 누가/언제/몇 년에' 도 다단계로 (Q36), 추가 속성 0건이면 재선택, '모두/나열' 질문은 두 엔티티 직접 관계로 끝내지 않음 (Q32).
 **주의**: 체인 계획이 조건('할스테트 연구소의')을 홉으로 잡는 흔들림이 남아 있다 (Q35).
-**참조**: `decisions/2026-11-15` D4·D5 · `2026-11-17` D8 · `design-graph-multihop-chain.md` · PR #55 · cb8b03c
+**참조**: `decisions/2026-11-15` D4·D5 · `2026-11-17` D8 · `design/graph/design-graph-multihop-chain.md` · PR #55 · cb8b03c
 
 ### 질문 분석 병합 (LLM 2회 → 1회) + 엔티티 역할·링킹 랭킹
 
@@ -93,7 +93,7 @@
 **선택**: 엔티티 추출과 질문 분석을 한 호출로, 엔티티에 subject/object 역할, 멀티홉은 LLM `hop_count` 우선. 링킹은 완전일치 > 접두 > 부분포함.
 **폐기한 것**: 조사 휴리스틱을 1차 신호로 쓰던 방식 (폴백으로 강등).
 **주의**: 11/16 질의 계획 선행 실행·MCP 클라이언트 계획과 역할이 겹치는지 점검 필요.
-**참조**: `decisions/2026-07-17` D2·D3 · `design-query-analysis-merge.md` · PR #37
+**참조**: `decisions/2026-07-17` D2·D3 · `design/graph/design-query-analysis-merge.md` · PR #37
 
 ### 쿼리 생성 Inner/Outer Loop (LLM SPARQL 폴백 경로)
 
@@ -102,7 +102,7 @@
 **선택**: LLM 생성 쿼리는 실패·0건이면 오류를 되먹여 최대 3회 재시도, 성공 쿼리는 동적 few-shot. 예시 저장은 Mongo + 인메모리 코사인.
 **폐기한 것**: 예시를 Milvus 에 두는 하이브리드 안 (구현 중 번복 — 신규 컬렉션 load 가 이벤트 루프 동결).
 **이후**: 11/14~15 관계 타게팅·유형 질의 계획·체인이 상위 경로가 되어, 이 루프는 C 경로에만 해당.
-**참조**: `decisions/2026-07-17` D1 · `design-query-generation-loop.md`
+**참조**: `decisions/2026-07-17` D1 · `design/graph/design-query-generation-loop.md`
 
 ### 응답 속도 = 스트리밍 + 질의 계획 선행 실행
 
@@ -124,7 +124,7 @@
 **이유**: 저장소(Fuseki → Neo4j)가 바뀌어도 클라이언트 무변경, 검증 가능, 안전.
 **폐기한 것**: 클라이언트가 SPARQL 을 직접 생성 (사용자 제안을 검토 후 대체).
 **왜 바꿨나**: 저장소 종속, 쓰기·과부하 위험, 검증 불가.
-**참조**: **ADR-004** · `decisions/2026-11-16` D2 · `design-mcp-agent-query.md` · PR #61
+**참조**: **ADR-004** · `decisions/2026-11-16` D2 · `design/agent/design-mcp-agent-query.md` · PR #61
 
 ### query_plan 은 자동 완화하지 않고, 실패는 status: error
 
@@ -152,7 +152,7 @@
 **선택**: 라벨마다 한/영/음역/동의어/상위 개념을 적재 후 한 번 만든다. 검색은 사전 조회만. 사전에 없으면 클라이언트가 보낸 `term_en` 으로 영어 임베딩 비교 (번역 대체). 원문 라벨은 그대로.
 **폐기한 것**: 엔티티를 영어로 저장하고 답만 질의 언어로 / 실시간 한↔영 임베딩 유사도.
 **왜 바꿨나**: 원문 표기 손실. 짧은 한↔영 단어 임베딩은 신뢰 불가 (장점~pros 0.20).
-**참조**: `decisions/2026-11-16` D4 · `design-kb-lexicon.md` · PR #61·#62
+**참조**: `decisions/2026-11-16` D4 · `design/agent/design-kb-lexicon.md` · PR #61·#62
 
 ---
 
@@ -174,14 +174,14 @@
 **선택**: LLM 없이 구조 그대로 클래스·속성·참조로 매핑, 레코드는 문장 청크. 승격 KB 는 기존 TBox 와 정렬하고 불일치만 사람 검토.
 **번복**: Phase 2 의 "매핑 규칙 저장 안 함" → 11/14 KB 매핑 규칙 저장으로.
 **주의**: Phase 3 (JSON Schema → TBox)·문서 간 엔티티 동일성은 **main 에 없다** (브랜치에만).
-**참조**: `decisions/2026-07-19` D3·D4 · `design-structured-json-yaml-ontology.md` · PR #39
+**참조**: `decisions/2026-07-19` D3·D4 · `design/schema/design-structured-json-yaml-ontology.md` · PR #39
 
 ### 텍스트 문서 승격 = 그래프 먼저 → 스키마 유도·검토 → 리플레이(→ 재추출)
 
 **결정일**: 2026-11-14
 
 **선택**: 원본 추출 트리플은 불변 사본, 규칙(엔티티·키·값·클래스·트리플)을 항상 다시 적용 (멱등). 스키마 기준 재추출은 선택.
-**참조**: `decisions/2026-11-14` D5 · `design-graph-promotion.md` · PR #53
+**참조**: `decisions/2026-11-14` D5 · `design/schema/design-graph-promotion.md` · PR #53
 
 ### 다양한 문서는 시드 스키마 승격 (자동 유도 단독 폐기)
 
@@ -252,7 +252,7 @@
 **선택**: `meta:year`/`yearText` 진술 연도. 결정적 분리(Y1) + 추출 프롬프트(Y2, 원문 한 문장 검사) + query_plan 조건(Y3).
 **폐기한 것**: 엔티티 연도 속성(짝이 끊김), 사건 노드(복잡).
 **대가**: 별도 연도 트리플이 진술 연도로 흡수돼 관계 트리플 수가 줄어든다 (1,437 → 1,247).
-**참조**: `decisions/2026-11-17` D2 · `design-year-attributes.md`
+**참조**: `decisions/2026-11-17` D2 · `design/schema/design-year-attributes.md`
 
 ---
 
@@ -290,7 +290,7 @@
 
 **선택**: backend → 적재 서비스 HTTP + 완료 콜백, 잡 상태는 메모리.
 **대가**: 잡 내구성·백프레셔·재시도·DLQ 없음. 7/17 Redis 자체 큐(async 워커, RQ·Celery 기각) 설계는 미구현 — ADR-002 가 현행. 관측성은 Phase A(채널 키 통일·실패 콜백·진행률·stuck 판정)만 구현.
-**참조**: ADR-002 · `decisions/2026-07-17` D4·D5 · `design-ingest-queue-and-observability.md`
+**참조**: ADR-002 · `decisions/2026-07-17` D4·D5 · `design/ingest/design-ingest-queue-and-observability.md`
 
 ### 블로킹 외부 I/O 는 시간까지 격리
 

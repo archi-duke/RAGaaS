@@ -1,4 +1,4 @@
-"""스키마 유도(승격 S2) 단위 테스트 (docs/design-graph-promotion.md §3(a))."""
+"""스키마 유도(승격 S2) 단위 테스트 (docs/design/schema/design-graph-promotion.md §3(a))."""
 from collections import Counter, defaultdict
 
 from app.services.schema_alignment.induction import build_tbox_turtle, validate_induction

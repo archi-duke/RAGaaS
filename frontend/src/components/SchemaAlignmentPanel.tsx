@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { X as XIcon, RefreshCw, Check, ArrowLeftRight, Ban, Trash2 } from 'lucide-react';
 import { kbApi, schemaApi } from '../services/api';
 
-// KB 스키마 매핑 제안 검토 / 규칙 관리 (docs/design-schema-mismatch.md §5)
+// KB 스키마 매핑 제안 검토 / 규칙 관리 (docs/design/schema/design-schema-mismatch.md §5)
 interface Proposal {
     id: string;
     kind: 'key' | 'value' | 'class' | 'entity';

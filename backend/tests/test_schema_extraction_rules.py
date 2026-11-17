@@ -1,4 +1,4 @@
-"""스키마 추출 개선 (docs/design-schema-editor.md §10) — 1글자 키, 계열 키, 유도 range·정의 채택."""
+"""스키마 추출 개선 (docs/design/schema/design-schema-editor.md §10) — 1글자 키, 계열 키, 유도 range·정의 채택."""
 from collections import Counter
 
 from app.services.retrieval.entity_linking import _compact

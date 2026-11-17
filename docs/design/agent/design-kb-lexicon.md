@@ -1,8 +1,11 @@
 # 설계: KB 용어 사전 (한영·음역·동의어·상위 개념)
 
+> **문서 상태 (2026-11-17)**: ✅ 현행 (2026-11-16 구현) · 지도: [`docs/README.md`](../../README.md)
+
+
 작성일: 2026-11-16
 상태: L1~L4 구현 완료 (2026-11-16), L5 예정
-관련: `docs/design-mcp-agent-query.md` §7.1 (드러난 한계), `docs/design-schema-editor.md`
+관련: `docs/design/agent/design-mcp-agent-query.md` §7.1 (드러난 한계), `docs/design/schema/design-schema-editor.md`
 
 ---
 

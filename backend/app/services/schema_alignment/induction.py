@@ -1,4 +1,4 @@
-"""그래프 → 스키마 유도 (승격 S2) — docs/design-graph-promotion.md §3(a)
+"""그래프 → 스키마 유도 (승격 S2) — docs/design/schema/design-graph-promotion.md §3(a)
 
 텍스트(LLM 추출) 그래프에서 스키마를 유도해 **스키마 정렬 제안**으로 만든다.
 새 메커니즘을 만들지 않고 제안 → 수락(규칙) → 리플레이(ABox 재구성)를 재사용한다.

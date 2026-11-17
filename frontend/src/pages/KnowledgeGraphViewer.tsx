@@ -552,7 +552,7 @@ const GraphViewer: React.FC = () => {
                 ref={fgRef}
                 graphData={visibleGraphData}
                 nodeLabel={(node: any) => {
-                    // 스키마 모드: 클래스 설명 + 값 속성(attributes) 목록을 툴팁으로 (docs/design-schema-editor.md §8)
+                    // 스키마 모드: 클래스 설명 + 값 속성(attributes) 목록을 툴팁으로 (docs/design/schema/design-schema-editor.md §8)
                     const esc = (x: any) => String(x ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string));
                     const pr = node.properties || {};
                     if (!isSchemaMode || !(pr.description || (pr.attributes || []).length)) return esc(node.label);

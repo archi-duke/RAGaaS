@@ -1,5 +1,8 @@
 # 그래프 검색 쿼리 생성 개선 설계: Inner/Outer Loop 도입
 
+> **문서 상태 (2026-11-17)**: 📖 참고 (2026-07-16 구현) — 지금은 C(LLM SPARQL) 폴백 경로에만 해당. 상위 경로는 관계 타게팅·질의 계획·체인 · 지도: [`docs/README.md`](../../README.md)
+
+
 > 상태: 구현·테스트 완료 (Implemented & Tested, 2026-07-16) — 구현 결정 사항 및 구현 중 개정 내역은 §9 참조
 > 관련 문서: `docs/_archive/README.md` (가이드 요약) (Cypher Vibe Coding 프롬프트 가이드)
 
