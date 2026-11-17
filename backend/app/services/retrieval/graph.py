@@ -162,7 +162,7 @@ class GraphRetrievalStrategy(RetrievalStrategy):
         # Detect multi-hop: LLM hop_count 우선, 문자열매칭은 폴백
         llm_hops = query_analysis.get("hop_count")
         if isinstance(llm_hops, int) and llm_hops >= 2:
-            graph_hops = max(graph_hops, llm_hops)
+            graph_hops = min(max(graph_hops, llm_hops), int(kwargs.get("max_hops") or llm_hops))
             log(f"DEBUG: 🔀 Multi-hop by LLM hop_count={llm_hops}, setting hops to {graph_hops}")
         elif any(keyword in query.lower() for keyword in ["의 스승의", "의 제자의", "master's master", "student's student"]):
             graph_hops = max(graph_hops, 2)

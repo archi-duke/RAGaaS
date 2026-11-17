@@ -25,7 +25,20 @@ from app.services.retrieval.relation_targeting import (
 )
 
 REL_NS = "http://rag.local/rel/"
-MAX_HOPS = 4
+MAX_HOPS = 6            # 기본 최대 홉 (그래프 스테이지 Max Hop 옵션이 없을 때)
+MAX_HOPS_CAP = 8        # 옵션으로도 넘을 수 없는 상한 (홉마다 후보가 불어나 지연·잡음)
+
+
+def resolve_max_hops(params: Dict[str, Any]) -> int:
+    """그래프 스테이지 옵션 → 최대 홉. max_hops 우선, 옛 설정(is_auto_hops=false 면 hops) 호환."""
+    v = params.get("max_hops")
+    if v is None and params.get("is_auto_hops") is False:
+        v = params.get("hops")
+    try:
+        v = int(v) if v is not None else MAX_HOPS
+    except (TypeError, ValueError):
+        v = MAX_HOPS
+    return max(1, min(v, MAX_HOPS_CAP))
 MAX_FRONTIER = 15
 MAX_HOP_TRIPLES = 120
 MAX_VOCAB = 80
@@ -76,7 +89,7 @@ def build_vocab(bindings: List[Dict[str, Any]], schema_props: Optional[List[Dict
 # 2. 체인 계획 (LLM 1회)
 # ---------------------------------------------------------------------------
 
-def build_plan_messages(question: str, vocab: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+def build_plan_messages(question: str, vocab: List[Dict[str, Any]], max_hops: int = MAX_HOPS) -> List[Dict[str, str]]:
     lines = []
     for v in vocab:
         dr = f" ({v['domain'] or '?'} → {v['range'] or '?'})" if (v["domain"] or v["range"]) else ""
@@ -91,7 +104,7 @@ def build_plan_messages(question: str, vocab: List[Dict[str, Any]]) -> List[Dict
 
 규칙:
 1. start: 체인의 출발 엔티티 — 질문에 이름이 직접 나온 고유명 하나 (예: '광전효과', '패러데이').
-2. hops: 출발점에서 답까지 따라갈 관계를 순서대로 (최대 {MAX_HOPS}개).
+2. hops: 출발점에서 답까지 따라갈 관계를 순서대로 (최대 {max_hops}개).
    - relations: 그 홉에서 쓸 관계 이름 1~3개 (같은 뜻 후보). 위 어휘에 있는 이름만.
    - direction: 현재 노드가 주어면 "out", 목적어면 "in".
      예) "X를 발견한 사람" = X 가 목적어 → {{"relations": ["발견함"], "direction": "in"}}
@@ -124,7 +137,8 @@ def is_lineage_relation(v: Optional[Dict[str, Any]]) -> bool:
     return bool(dom) and dom == rng and not _is_person_type([dom])
 
 
-def validate_plan(data: Optional[Dict[str, Any]], vocab: List[Dict[str, Any]]) -> Tuple[Optional[Dict[str, Any]], List[str]]:
+def validate_plan(data: Optional[Dict[str, Any]], vocab: List[Dict[str, Any]],
+                  max_hops: int = MAX_HOPS) -> Tuple[Optional[Dict[str, Any]], List[str]]:
     """어휘에 없는 관계는 버린다. 쓸 관계가 없는 홉이 있으면 계획 무효."""
     notes: List[str] = []
     if not data or data.get("chainable") is False:
@@ -135,7 +149,10 @@ def validate_plan(data: Optional[Dict[str, Any]], vocab: List[Dict[str, Any]]) -
     if not start:
         return None, ["출발 엔티티 없음"]
     hops = []
-    for i, h in enumerate((data.get("hops") or [])[:MAX_HOPS], 1):
+    raw_hops = data.get("hops") or [] if isinstance(data, dict) else []
+    if len(raw_hops) > max_hops:
+        notes.append(f"계획 {len(raw_hops)}홉 → 최대 홉 설정 {max_hops} 에서 자름 (답이 그 너머에 있으면 찾지 못함)")
+    for i, h in enumerate(raw_hops[:max_hops], 1):
         rels = []
         for r in h.get("relations") or []:
             n = names.get(_compact(r))

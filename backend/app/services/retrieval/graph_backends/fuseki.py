@@ -1048,13 +1048,14 @@ class FusekiBackend(GraphBackend):
             return None
         try:
             cfg = await resolve_model_config(kwargs.get("llm_model_config") or {})
-            content = await achat(cfg, cq.build_plan_messages(query_text, vocab), model=cfg.get("model"),
+            max_hops = cq.resolve_max_hops({"max_hops": kwargs.get("max_hops")})
+            content = await achat(cfg, cq.build_plan_messages(query_text, vocab, max_hops), model=cfg.get("model"),
                                   temperature=0, response_format={"type": "json_object"},
                                   extra_body=no_thinking_extra_body(cfg.get("model")))
         except Exception as e:
             log_trace(f"[Fuseki] Chain plan LLM unavailable ({e}) → LLM SPARQL generation")
             return None
-        plan, notes = cq.validate_plan(rt.parse_json_loose(content), vocab)
+        plan, notes = cq.validate_plan(rt.parse_json_loose(content), vocab, max_hops)
         targeting: Dict[str, Any] = {"mode": "H", "catalog_size": len(vocab), "adjustments": notes}
         if plan is None:
             log_trace(f"[Fuseki] Chain plan rejected: {notes}")

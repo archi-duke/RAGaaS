@@ -308,3 +308,15 @@ def test_contains_accepts_value_list_as_or():
     sp = cq.compile_member_query(r["plan"])
     assert 'CONTAINS(LCASE(STR(?tlf0)), LCASE("변경")) || CONTAINS(LCASE(STR(?tlf0)), LCASE("확장"))' in sp
     assert "['" not in sp
+
+
+def test_resolve_max_hops_and_plan_truncation():
+    from app.services.retrieval import chain_query as chq
+    assert chq.resolve_max_hops({}) == 6                                   # 기본
+    assert chq.resolve_max_hops({"is_auto_hops": True, "hops": 2}) == 6   # 옛 Auto → 기본
+    assert chq.resolve_max_hops({"is_auto_hops": False, "hops": 3}) == 3  # 옛 고정 hops → 상한
+    assert chq.resolve_max_hops({"max_hops": 20}) == 8                    # 절대 상한
+    vocab = [{"name": "영향_줌", "domain": "", "range": "", "description": "", "count": 5}]
+    data = {"chainable": True, "start": "A", "hops": [{"relations": ["영향_줌"], "direction": "out", "expect": ""}] * 5}
+    plan, notes = chq.validate_plan(data, vocab, max_hops=3)
+    assert len(plan["hops"]) == 3 and any("최대 홉 설정 3" in n for n in notes)
