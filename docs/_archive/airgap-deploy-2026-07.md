@@ -76,7 +76,7 @@ cp .env.example ragaas-deploy/.env
 cp -r docker-images ragaas-deploy/
 
 # 배포 가이드 복사
-cp AIRGAP-DEPLOY.md ragaas-deploy/
+cp docs/_archive/airgap-deploy-2026-07.md ragaas-deploy/
 
 # 압축
 tar -czf ragaas-deploy.tar.gz ragaas-deploy/

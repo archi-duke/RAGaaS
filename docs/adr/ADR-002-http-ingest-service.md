@@ -1,11 +1,11 @@
 # ADR-002: 인제스트를 브로커+워커 대신 HTTP 마이크로서비스로 구현
 
 - **상태**: Accepted (2026-07-15 기록)
-- **관련**: docs/arch/architecture.md CA-203(메시지 큐 기반 워커 분산) 설계를 **대체**함
+- **관련**: docs/_archive/arch-2026-02/architecture.md CA-203(메시지 큐 기반 워커 분산) 설계를 **대체**함
 
 ## 맥락
 
-초기 아키텍처(docs/arch/architecture.md §3.1 배치 다이어그램, CA-203)는 인제스트 처리를
+초기 아키텍처(docs/_archive/arch-2026-02/architecture.md §3.1 배치 다이어그램, CA-203)는 인제스트 처리를
 "API 서버 -- AMQP/Redis --> Message Broker -- AMQP/Redis --> Ingestion Worker" 구조로
 설계했다. 목적은 대량 문서 유입 시에도 API 서버가 차단되지 않도록 부하를 평준화하는 것이었다
 (architecture.md 108행, 185행 CA-203 "대량 데이터 유입 시 안정성 보장").
@@ -81,6 +81,6 @@ backend MongoDB 문서 레코드로 이원화하여 관리한다.
 - `backend/app/services/ingestion/ingest_client.py` (`IngestServiceClient`, httpx POST)
 - `ingest_service/app/api/ingest.py` (`jobs` 인메모리 저장, `process_ingest_job`,
   `send_pipeline_status`, preview/confirm 복구 로직)
-- `docs/arch/architecture.md` §3.1 배치 다이어그램, §5 CA-203 결정 항목(대체 대상)
+- `docs/_archive/arch-2026-02/architecture.md` §3.1 배치 다이어그램, §5 CA-203 결정 항목(대체 대상)
 - `deploy/docker-compose.yml` (backend/ingest-service 컨테이너 분리, `SHARED_STORAGE_PATH`,
   `INGEST_SERVICE_URL`, Redis 미사용 확인)

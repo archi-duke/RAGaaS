@@ -88,7 +88,7 @@ rsync -av --exclude='node_modules' \
 
 # Copy deployment files
 cp docker-compose.yml "${PACKAGE_DIR}/"
-cp AIRGAP-DEPLOY.md "${PACKAGE_DIR}/"
+cp docs/_archive/airgap-deploy-2026-07.md "${PACKAGE_DIR}/"
 cp DOCKER.md "${PACKAGE_DIR}/"
 
 # Create docker-compose.airgap.yml

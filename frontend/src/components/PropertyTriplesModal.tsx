@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { X as XIcon } from 'lucide-react';
 import { kbApi, schemaApi } from '../services/api';
 
-// 속성 하나의 실제 트리플 목록 (스키마 편집기: 트리플 수 클릭) — docs/guide-schema-editor.md §2.2
+// 속성 하나의 실제 트리플 목록 (스키마 편집기: 트리플 수 클릭) — docs/guides/schema-editor.md §2.2
 // 상태: ok(목적어가 range 멤버) / gap(멤버 누락) / violation(다른 클래스) / value(서술·수치) / -(range 없음)
 
 interface Row {
@@ -17,7 +17,7 @@ const LABEL: Record<string, { text: string; color: string; bg: string; help: str
     '-': { text: 'range 없음', color: '#64748b', bg: '#f8fafc', help: '이 속성에 range 가 없어 판정하지 않음' },
 };
 
-// 편집 동작 (텍스트 KB) — 그래프를 직접 고치지 않고 규칙으로 남겨 리플레이·재추출 뒤에도 유지 (docs/guide-schema-editor.md §2.7)
+// 편집 동작 (텍스트 KB) — 그래프를 직접 고치지 않고 규칙으로 남겨 리플레이·재추출 뒤에도 유지 (docs/guides/schema-editor.md §2.7)
 // - 위반: 다른 관계로 이동 / 새 관계를 만들어 이동 / 삭제
 // - 멤버 누락: range 멤버로 지정 / 새 클래스를 만들어 멤버로 / 삭제
 type Panel = null | 'move' | 'newclass' | 'delete';
