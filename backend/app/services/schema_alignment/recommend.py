@@ -1,4 +1,4 @@
-"""스키마 AI 추천 — 스키마·데이터 검증 결과·문제 트리플의 근거 청크를 보고 처리안을 제시 (docs/design-schema-editor.md §14).
+"""스키마 AI 추천 — 스키마·데이터 검증 결과·문제 트리플의 근거 청크를 보고 처리안을 제시 (docs/design/schema/design-schema-editor.md §14).
 
 흐름: recommend(처리안 목록) → 사용자가 체크 → preview(체크한 안을 가상으로 적용해 문제 청크 재추출 — 저장 없음)
       → 사용자 승인 → apply(스키마 저장 1회 + 규칙 생성 + 리플레이 1회).

@@ -32,22 +32,22 @@
 
 | 문서 | 상태 | 내용 |
 |---|---|---|
-| `design-graph-relation-targeting.md` | ✅ | 관계 SPARQL → 트리플 → 연결 청크 (11/14) |
-| `design-graph-class-query.md` | ✅ | 유형 질문 질의 계획 → 결정적 SPARQL (11/14) |
-| `design-graph-multihop-chain.md` | ✅ | 다단계 질문 홉별 체인 (11/15, 11/17 보정) |
-| `design-agentic-filter.md` | ✅ | 에이전틱 파이프라인 필터·스크래치패드 (11/16) |
-| `design-query-analysis-merge.md` | ✅ | 질문 분석 LLM 1회 + 엔티티 역할 (07/17) |
-| `design-query-generation-loop.md` | 📖 | LLM SPARQL 재시도·동적 few-shot (07/16) — 지금은 C 폴백 경로에만 |
-| `design-graph-promotion.md` | ✅ | 텍스트 → 그래프 → 스키마 유도·시드 → 리플레이·재추출 (11/14~15) |
-| `design-schema-mismatch.md` | ✅ | 동치 확장 + KB 매핑 규칙 (11/14) |
-| `design-schema-editor.md` | ✅ | 스키마 편집기·AI 추천·데이터 검증 (11/16) |
-| `design-year-attributes.md` | ✅ | 진술 연도 + query_plan 연도 조건 (11/17, PR #64) |
-| `design-structured-json-yaml-ontology.md` | ✅ | JSON/YAML 결정론적 매핑 — main 은 Phase 1+2 만 (Phase 3 미반영) |
-| `design-ingest-entity-typing-b.md` | ✅ | 적재 시 엔티티 타입 (B안, opt-in, 기본 off) |
-| `design-ontology-schema-extraction-v2.md` | 📖 | 승격 스키마 추출 A안 (07/19) — 11/15 시드 스키마 승격으로 대체 |
-| `design-ingest-queue-and-observability.md` | 📐 | 적재 큐(미구현) + 관측성 (Phase A 만 구현) |
-| `design-kb-lexicon.md` | ✅ | KB 용어 사전 (11/16) |
-| `design-mcp-agent-query.md` | ✅ | 외부 에이전트 MCP·query_plan (11/16, ADR-004) |
+| `design/graph/design-graph-relation-targeting.md` | ✅ | 관계 SPARQL → 트리플 → 연결 청크 (11/14) |
+| `design/graph/design-graph-class-query.md` | ✅ | 유형 질문 질의 계획 → 결정적 SPARQL (11/14) |
+| `design/graph/design-graph-multihop-chain.md` | ✅ | 다단계 질문 홉별 체인 (11/15, 11/17 보정) |
+| `design/graph/design-agentic-filter.md` | ✅ | 에이전틱 파이프라인 필터·스크래치패드 (11/16) |
+| `design/graph/design-query-analysis-merge.md` | ✅ | 질문 분석 LLM 1회 + 엔티티 역할 (07/17) |
+| `design/graph/design-query-generation-loop.md` | 📖 | LLM SPARQL 재시도·동적 few-shot (07/16) — 지금은 C 폴백 경로에만 |
+| `design/schema/design-graph-promotion.md` | ✅ | 텍스트 → 그래프 → 스키마 유도·시드 → 리플레이·재추출 (11/14~15) |
+| `design/schema/design-schema-mismatch.md` | ✅ | 동치 확장 + KB 매핑 규칙 (11/14) |
+| `design/schema/design-schema-editor.md` | ✅ | 스키마 편집기·AI 추천·데이터 검증 (11/16) |
+| `design/schema/design-year-attributes.md` | ✅ | 진술 연도 + query_plan 연도 조건 (11/17, PR #64) |
+| `design/schema/design-structured-json-yaml-ontology.md` | ✅ | JSON/YAML 결정론적 매핑 — main 은 Phase 1+2 만 (Phase 3 미반영) |
+| `design/schema/design-ingest-entity-typing-b.md` | ✅ | 적재 시 엔티티 타입 (B안, opt-in, 기본 off) |
+| `design/schema/design-ontology-schema-extraction-v2.md` | 📖 | 승격 스키마 추출 A안 (07/19) — 11/15 시드 스키마 승격으로 대체 |
+| `design/ingest/design-ingest-queue-and-observability.md` | 📐 | 적재 큐(미구현) + 관측성 (Phase A 만 구현) |
+| `design/agent/design-kb-lexicon.md` | ✅ | KB 용어 사전 (11/16) |
+| `design/agent/design-mcp-agent-query.md` | ✅ | 외부 에이전트 MCP·query_plan (11/16, ADR-004) |
 
 ## 가이드 (`guides/`)
 

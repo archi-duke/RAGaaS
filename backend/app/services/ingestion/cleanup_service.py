@@ -339,7 +339,7 @@ class CleanupService:
             except Exception as e:
                 print(f"[Cleanup] ⚠️ Failed to clean triple_chunk_mappings: {e}")
 
-            # 스키마 매핑 (docs/design-schema-mismatch.md): 제안의 문서 참조 제거,
+            # 스키마 매핑 (docs/design/schema/design-schema-mismatch.md): 제안의 문서 참조 제거,
             # 보유 문서가 없어진 대기 제안 삭제, 유형 카탈로그 캐시 무효화.
             # KB 규칙(수락·자동)은 KB 단위 정책이므로 유지한다.
             try:

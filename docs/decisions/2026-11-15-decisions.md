@@ -23,7 +23,7 @@
 
 - **결정**: LLM 이 홉 계획(관계·방향)만 세우고, 각 홉은 결정적 SPARQL 로 따라간다. 계획 관계가 0건이면 노드의 실제 관계 중 한 번 재선택.
 - **폐기**: 다단계를 C(LLM SPARQL 생성)로 보내던 방식 — 다단계 0/10.
-- **설계서**: `design-graph-multihop-chain.md` · PR #55
+- **설계서**: `design/graph/design-graph-multihop-chain.md` · PR #55
 
 ## D5. 그래프로 답할 수 없으면 C 대신 문서 검색(V)
 

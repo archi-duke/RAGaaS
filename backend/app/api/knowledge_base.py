@@ -194,7 +194,7 @@ async def promote_knowledge_base(
         return {"id": kb.id, "is_promoted": kb.is_promoted, "promotion_metadata": kb.promotion_metadata}
     
     # ========================================
-    # 스키마 유도 승격 (기본, docs/design-graph-promotion.md) — 초안을 제안으로 반환.
+    # 스키마 유도 승격 (기본, docs/design/schema/design-graph-promotion.md) — 초안을 제안으로 반환.
     # 기존 7단계 파이프라인은 {"mode": "legacy"} 로만 실행한다.
     # ========================================
     if payload.get("mode", "induce") != "legacy" and kb.graph_backend == "ontology":

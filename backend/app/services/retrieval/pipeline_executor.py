@@ -129,7 +129,7 @@ class PipelineExecutor:
 
     async def _execute_agentic(self, ctx: ExecutionContext, params: dict,
                                stages: List[PipelineStage]) -> ExecutionContext:
-        """에이전틱 필터 — 검색 스테이지를 도구로 삼아 단계별로 검색 (docs/design-agentic-filter.md)."""
+        """에이전틱 필터 — 검색 스테이지를 도구로 삼아 단계별로 검색 (docs/design/graph/design-agentic-filter.md)."""
         from app.services.retrieval import agentic as ag
         from app.core.models_resolver import resolve_model_config
 

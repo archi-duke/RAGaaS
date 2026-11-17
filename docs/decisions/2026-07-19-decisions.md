@@ -1,6 +1,6 @@
 # 2026-07-19 ~ 20 의사결정 로그
 
-> 11/17 복원 — `design-ontology-schema-extraction-v2.md`, `design-ingest-entity-typing-b.md`, `design-structured-json-yaml-ontology.md`, PR #38 (07-19), PR #39 (07-20) 에서 옮겼다.
+> 11/17 복원 — `design/schema/design-ontology-schema-extraction-v2.md`, `design/schema/design-ingest-entity-typing-b.md`, `design/schema/design-structured-json-yaml-ontology.md`, PR #38 (07-19), PR #39 (07-20) 에서 옮겼다.
 
 ## D1. A안 — 승격 스키마 추출에 그래프 프로파일 주입 (PR #38)
 

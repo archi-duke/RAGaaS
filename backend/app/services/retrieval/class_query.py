@@ -1,6 +1,6 @@
 """유형 수준(class-level) 그래프 질문 — 질의 계획 기반 SPARQL (순수 함수).
 
-설계: docs/design-graph-class-query.md
+설계: docs/design/graph/design-graph-class-query.md
 
 앵커 엔티티가 없거나 앵커가 '조건 값'인 질문(필터·역방향·집계)을 처리한다.
   1. 스키마 카탈로그: 데이터에서 유형(kind)별 경로·값 종류·값 어휘를 추출
@@ -567,7 +567,7 @@ def validate_plan(
     by_key = {c["key"]: c for c in full_catalog}
 
     def _one(idx) -> Optional[Dict[str, Any]]:
-        # 외부 계약(query_plan, docs/design-mcp-agent-query.md §4.4)은 경로 key 문자열 — 전체 카탈로그에서 찾는다
+        # 외부 계약(query_plan, docs/design/agent/design-mcp-agent-query.md §4.4)은 경로 key 문자열 — 전체 카탈로그에서 찾는다
         if isinstance(idx, str) and not idx.strip().lstrip("-").isdigit():
             return by_key.get(idx.strip())
         try:

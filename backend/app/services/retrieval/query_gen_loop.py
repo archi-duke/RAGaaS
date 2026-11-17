@@ -1,6 +1,6 @@
 """Inner Loop for LLM-generated graph query retry logic.
 
-See docs/design-query-generation-loop.md §3, §4.1 for the design rationale.
+See docs/design/graph/design-query-generation-loop.md §3, §4.1 for the design rationale.
 
 QueryGenerationLoop wraps a backend-agnostic "generate -> execute" cycle with
 error feedback re-generation: if a generated query is missing, throws, or

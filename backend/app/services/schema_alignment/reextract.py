@@ -1,4 +1,4 @@
-"""스키마 기준 재추출 (승격 L2, 옵션) — docs/design-graph-promotion.md §3(c) L2
+"""스키마 기준 재추출 (승격 L2, 옵션) — docs/design/schema/design-graph-promotion.md §3(c) L2
 
 확정된 스키마로 저장된 청크를 다시 추출한다. LLM 비용이 들고 결과가 스키마 품질에 좌우되므로
 사용자가 설명을 보고 선택해 실행하는 옵션이다 (UI: 문서 탭 "고급" → "스키마 기준 재추출").

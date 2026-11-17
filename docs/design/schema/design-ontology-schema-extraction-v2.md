@@ -1,5 +1,8 @@
 # 설계문서: 온톨로지 스키마 추출 개선 (A안 — 구조 컨텍스트 주입)
 
+> **문서 상태 (2026-11-17)**: 📖 대체됨 — A안(2026-07-19)은 11/15 시드 스키마 승격(design/schema/design-graph-promotion.md)으로 대체 · 지도: [`docs/README.md`](../../README.md)
+
+
 - **상태**: Draft
 - **작성일**: 2026-07-17
 - **대상 코드**: `backend/app/graph2ontology/promoters/ontology_promoter.py`

@@ -1,6 +1,6 @@
 """관계 타게팅 그래프 검색 — 순수 함수 모음.
 
-설계: docs/design-graph-relation-targeting.md
+설계: docs/design/graph/design-graph-relation-targeting.md
 
 그래프 검색은 "엔티티 주변을 통째로 가져오기"가 아니라 다음 순서로 동작해야 한다.
   1. 앵커 엔티티의 관계 경로 카탈로그를 만든다 (구조 노드 root_N_… 를 따라 깊이 3).

@@ -1,4 +1,4 @@
-"""KB 스키마 매핑 규칙 / 제안 (docs/design-schema-mismatch.md §5)."""
+"""KB 스키마 매핑 규칙 / 제안 (docs/design/schema/design-schema-mismatch.md §5)."""
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 

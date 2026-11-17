@@ -1,7 +1,7 @@
 # 운영 참고: 스키마 품질과 잘못된 답변 위험
 
 작성일: 2026-11-16
-관련: `docs/guides/schema-editor.md`(스키마 편집기 사용 설명서), `docs/design-schema-editor.md`(설계)
+관련: `docs/guides/schema-editor.md`(스키마 편집기 사용 설명서), `docs/design/schema/design-schema-editor.md`(설계)
 
 온톨로지 KB 를 운영하면서 자주 나올 두 질문에 대한 정리다.
 

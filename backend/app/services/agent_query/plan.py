@@ -1,6 +1,6 @@
 """P2: query_plan — 클라이언트 에이전트가 쓴 질의 계획을 검증·컴파일·실행 (LLM 없음).
 
-docs/design-mcp-agent-query.md §4.4
+docs/design/agent/design-mcp-agent-query.md §4.4
 
 계획:
   {"kind": "ArchitectureStyle",

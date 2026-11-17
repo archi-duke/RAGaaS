@@ -33,7 +33,7 @@ const SEARCH_STAGES: { type: StageType; label: string; category: 'search' }[] = 
     { type: 'graph', label: 'Graph', category: 'search' },
 ];
 
-// agentic: 등록된 검색 스테이지를 도구로 삼아 검색 방식·순서를 정하고 단계별로 진행 (docs/design-agentic-filter.md).
+// agentic: 등록된 검색 스테이지를 도구로 삼아 검색 방식·순서를 정하고 단계별로 진행 (docs/design/graph/design-agentic-filter.md).
 // 파이프라인에 하나만, Gate 뒤·검색 스테이지 앞에 자동 배치.
 const FILTER_STAGES: { type: StageType; label: string; category: 'filter' }[] = [
     { type: 'agentic', label: 'Agentic', category: 'filter' },

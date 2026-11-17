@@ -9,7 +9,7 @@ description: 문서·지식 그래프에서 검색용 온톨로지 스키마(클
 **개별 엔티티 분류와 range 확인은 데이터로** 해야 한다. 절차는 *질문 → 시드 → 유도 → 데이터 검증 → 사람 검토 → 재추출 → 재측정*.
 
 RAGaaS 에서의 구현 위치: 유도 프롬프트 `backend/app/services/schema_alignment/induction.py`(`build_induction_messages`),
-데이터 검증 `schema_editor.range_check`, 편집기 Schema 탭(표·그래프·데이터 검증), 설계 `docs/design-schema-editor.md` §10.
+데이터 검증 `schema_editor.range_check`, 편집기 Schema 탭(표·그래프·데이터 검증), 설계 `docs/design/schema/design-schema-editor.md` §10.
 
 ## 1. 시작 전
 1. 이 KB 에 올 질문 10~20개를 적는다. 질문의 대상 = 클래스, 대상 사이 연결 = 관계, 조건 값 = 값 속성.

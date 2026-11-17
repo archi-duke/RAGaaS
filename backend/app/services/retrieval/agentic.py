@@ -1,4 +1,4 @@
-"""에이전틱 필터 — 검색 방식을 정하고 검색 과정을 단계별로 진행한다 (docs/design-agentic-filter.md).
+"""에이전틱 필터 — 검색 방식을 정하고 검색 과정을 단계별로 진행한다 (docs/design/graph/design-agentic-filter.md).
 
 파이프라인에 `agentic` 스테이지가 있으면 실행기가 제어권을 이 모듈에 넘긴다.
 - 도구 = 파이프라인에 등록된 검색 스테이지 (graph → 그래프 검색, ann → 벡터, bm25 → 키워드).

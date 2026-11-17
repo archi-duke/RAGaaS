@@ -1,4 +1,4 @@
-"""에이전틱 필터 단위 테스트 (docs/design-agentic-filter.md)."""
+"""에이전틱 필터 단위 테스트 (docs/design/graph/design-agentic-filter.md)."""
 import asyncio
 import json
 from types import SimpleNamespace

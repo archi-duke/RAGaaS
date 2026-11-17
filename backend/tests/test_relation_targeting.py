@@ -1,6 +1,6 @@
 """관계 타게팅(relation_targeting) 단위 테스트.
 
-설계: docs/design-graph-relation-targeting.md
+설계: docs/design/graph/design-graph-relation-targeting.md
 픽스처는 test-ontology(구조화 YAML)의 micro_frontend 실제 카탈로그 일부와
 서사형 그래프(스승/제자) 가상 카탈로그다.
 """

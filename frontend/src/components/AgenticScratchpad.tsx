@@ -1,7 +1,7 @@
 import React from 'react';
 
 // 에이전틱 필터의 추론 과정 — 단계별 계획·검색·관찰과 스크래치패드(에이전트 메모)
-// docs/design-agentic-filter.md §9. 스크래치패드는 짧은 마크다운(## 제목, - 목록, | 표 |)이라 간단히 그린다.
+// docs/design/graph/design-agentic-filter.md §9. 스크래치패드는 짧은 마크다운(## 제목, - 목록, | 표 |)이라 간단히 그린다.
 
 function cellColor(t: string): React.CSSProperties {
     const v = t.trim();

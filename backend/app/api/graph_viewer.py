@@ -202,7 +202,7 @@ async def get_schema(
     if backend != "ontology":
         raise HTTPException(status_code=400, detail="Schema view only supported for ontology backend")
     
-    # 승격 스키마(TBox, urn:ontology:{kb})를 클래스 노드 + 속성 링크로 (docs/design-schema-editor.md §8)
+    # 승격 스키마(TBox, urn:ontology:{kb})를 클래스 노드 + 속성 링크로 (docs/design/schema/design-schema-editor.md §8)
     # - 클래스: label·comment(설명)
     # - 속성: range 가 클래스면 클래스 간 링크, 아니면 domain 클래스 노드의 attributes 로
     # 질의를 둘로 나눠 OPTIONAL 조합으로 행이 불어나 LIMIT 에 잘리던 문제를 없앴다.

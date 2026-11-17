@@ -1,8 +1,11 @@
 # 설계: 외부 에이전트용 MCP — 스키마를 받아 에이전트가 직접 질의
 
+> **문서 상태 (2026-11-17)**: ✅ 현행 (2026-11-16 구현, ADR-004) · 지도: [`docs/README.md`](../../README.md)
+
+
 작성일: 2026-11-16
 상태: 초안 (구현 전)
-관련: `docs/design-graph-class-query.md`(질의 계획), `docs/design-agentic-filter.md`, `docs/design-schema-editor.md`,
+관련: `docs/design/graph/design-graph-class-query.md`(질의 계획), `docs/design/graph/design-agentic-filter.md`, `docs/design/schema/design-schema-editor.md`,
 `docs/platform-contract/05-backend-contract.md`(인증)
 
 ---

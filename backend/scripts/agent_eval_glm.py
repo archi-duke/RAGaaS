@@ -1,6 +1,6 @@
 """GLM 에이전트 평가 — ragaas-query 스킬 + agent 도구(MCP 와 같은 기능)로 질문을 풀고 토큰을 잰다.
 
-docs/design-mcp-agent-query.md §7 평가. 운영에서 쓸 GLM-5 계열 에이전트를 흉내 낸다:
+docs/design/agent/design-mcp-agent-query.md §7 평가. 운영에서 쓸 GLM-5 계열 에이전트를 흉내 낸다:
   - 질문마다 새 대화. 시스템 프롬프트 = 스킬 + 캐시된 스키마(describe_kb compact) — 클라이언트가 KB 당 한 번 받아 두는 상황.
   - 도구는 서비스 함수를 직접 부른다 (HTTP 왕복 없음, 결과는 REST 와 동일).
   - Z.ai 응답의 usage 로 질문별 입력·출력 토큰을 합산한다.

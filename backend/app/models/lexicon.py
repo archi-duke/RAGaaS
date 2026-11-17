@@ -1,4 +1,4 @@
-"""KB 용어 사전 항목 (docs/design-kb-lexicon.md §3)."""
+"""KB 용어 사전 항목 (docs/design/agent/design-kb-lexicon.md §3)."""
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 

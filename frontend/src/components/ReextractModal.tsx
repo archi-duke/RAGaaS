@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { X as XIcon, Play, RotateCcw, AlertTriangle } from 'lucide-react';
 import { schemaApi } from '../services/api';
 
-// 스키마 기준 재추출 (승격 L2, 옵션) — docs/design-graph-promotion.md §3(c) L2
+// 스키마 기준 재추출 (승격 L2, 옵션) — docs/design/schema/design-graph-promotion.md §3(c) L2
 interface Props {
     kbId: string;
     onClose: () => void;

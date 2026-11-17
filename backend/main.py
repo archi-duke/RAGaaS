@@ -45,18 +45,18 @@ app.include_router(knowledge_base.router, prefix="/api/v2/knowledge-bases", tags
 app.include_router(document.router, prefix="/api/v2/knowledge-bases", tags=["Documents"])
 app.include_router(retrieval.router, prefix="/api/v2/knowledge-bases", tags=["Retrieval"])
 
-# KB 스키마 매핑 제안·규칙 (docs/design-schema-mismatch.md)
+# KB 스키마 매핑 제안·규칙 (docs/design/schema/design-schema-mismatch.md)
 from app.api import schema_alignment
 app.include_router(schema_alignment.router, prefix="/api/v2/knowledge-bases", tags=["Schema Alignment"])
 
 from app.api import graph_viewer
 app.include_router(graph_viewer.router, prefix="/api/v2/graph", tags=["Graph Viewer"])
 
-# 외부 에이전트용 조회 (docs/design-mcp-agent-query.md) — 읽기 전용, LLM 없음
+# 외부 에이전트용 조회 (docs/design/agent/design-mcp-agent-query.md) — 읽기 전용, LLM 없음
 from app.api import agent_query
 app.include_router(agent_query.router, prefix="/api/v2/knowledge-bases", tags=["Agent Query"])
 
-# MCP 서버 (Streamable HTTP, /api/mcp → 게이트웨이 /ragaas/api/mcp) — docs/design-mcp-agent-query.md §5
+# MCP 서버 (Streamable HTTP, /api/mcp → 게이트웨이 /ragaas/api/mcp) — docs/design/agent/design-mcp-agent-query.md §5
 try:
     from app.mcp_server import mount as _mount_mcp
     _mount_mcp(app)

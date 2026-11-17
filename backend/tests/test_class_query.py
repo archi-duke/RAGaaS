@@ -1,6 +1,6 @@
 """유형 수준 질문(class_query) 단위 테스트.
 
-설계: docs/design-graph-class-query.md
+설계: docs/design/graph/design-graph-class-query.md
 픽스처: 아키텍처 스타일 3개(rdf:type 없음)의 멤버 시그니처와 경로 카탈로그.
 """
 from app.services.retrieval.class_query import (

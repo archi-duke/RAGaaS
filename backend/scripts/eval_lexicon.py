@@ -1,4 +1,4 @@
-"""용어 사전 평가 (docs/design-kb-lexicon.md §6).
+"""용어 사전 평가 (docs/design/agent/design-kb-lexicon.md §6).
 
 사용: python backend/scripts/eval_lexicon.py [--base http://localhost:44300/ragaas/api/v2] [--kb test-ontology2]
 에이전트가 실제로 받는 결과(/agent/values + /agent/entities)로 잰다.

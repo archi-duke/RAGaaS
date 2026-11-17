@@ -1,4 +1,4 @@
-"""스키마 편집기 (사람 검수 1단계) — docs/design-schema-editor.md
+"""스키마 편집기 (사람 검수 1단계) — docs/design/schema/design-schema-editor.md
 
 승격(유도·시드)으로 확정된 텍스트 KB 스키마(promotion_metadata.induction)를 사람이 직접 고친다.
 - 편집 대상: 클래스(이름·설명), 속성(이름·정의·domain·range·별칭)
@@ -208,7 +208,7 @@ def _objects_of(kb_id: str, pred_names: List[str]) -> Dict[str, int]:
 
 
 async def range_check(kb_id: str, props: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
-    """속성별 range 데이터 검증 (docs/design-schema-editor.md §10).
+    """속성별 range 데이터 검증 (docs/design/schema/design-schema-editor.md §10).
 
     - 목적어: 대표 이름 + 별칭 술어의 목적어 합산, 서술·수치·20자 초과 제외, 서로 다른 목적어 기준
     - 부호·강도 계열(family_key 가 같은 속성 2개 이상)은 목적어를 합쳐 판정 → 같은 range

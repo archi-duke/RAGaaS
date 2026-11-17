@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { X as XIcon, Sparkles } from 'lucide-react';
 import { schemaApi } from '../services/api';
 
-// 스키마 AI 추천 (docs/design-schema-editor.md §14, 설명서 §2.9)
+// 스키마 AI 추천 (docs/design/schema/design-schema-editor.md §14, 설명서 §2.9)
 // 추천(처리안 목록) → 체크 → 효과 미리보기(가상 적용 + 문제 청크 재추출, 저장 없음) → 승인하고 반영
 // 처리안은 모두 기존 편집 동작(정의·range·관계/클래스 추가·멤버 지정·병합·트리플 이동/삭제)으로 반영된다.
 

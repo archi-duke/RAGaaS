@@ -1,7 +1,7 @@
 """P1: describe_kb / lookup_values / resolve_entities / get_chunks — LLM 호출 없음.
 
 출처는 질의 계획이 쓰는 유형·경로 카탈로그(FusekiBackend._class_catalog, 지문+TTL 캐시)다.
-docs/design-mcp-agent-query.md §4.2 ~ §4.6
+docs/design/agent/design-mcp-agent-query.md §4.2 ~ §4.6
 """
 from __future__ import annotations
 
@@ -248,7 +248,7 @@ async def lookup_values(kb_id: str, terms: Sequence[str], kind: Optional[str] = 
     await _prefetch_fallback(kb_id, idx, terms, terms_en)
     for term in terms:
         hits, rel = [], []
-        # 용어 사전 (한영·음역·동의어) — docs/design-kb-lexicon.md §5
+        # 용어 사전 (한영·음역·동의어) — docs/design/agent/design-kb-lexicon.md §5
         for m in lx.match_term(idx, term):
             for w in where.get(m["label"], []):
                 hits.append({**w, "score": m["score"], "via": f"lexicon:{m['via']}"})

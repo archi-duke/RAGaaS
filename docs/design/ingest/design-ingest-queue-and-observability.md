@@ -1,7 +1,10 @@
 # 인제스트/삭제 진행률·오류알림·무결성·멀티유저 동시성 개선 설계
 
+> **문서 상태 (2026-11-17)**: 📐 설계만 — 적재 큐는 미구현(ADR-002 현행), 관측성은 Phase A 만 구현 · 지도: [`docs/README.md`](../../README.md)
+
+
 > 상태: 검증 완료 (Reviewed, 2026-07-17) — 라인 번호/코드 인용 대조 확인, WS 채널 키 불일치 버그 실증 확인. 구현 전, 착수 순서는 §1.4 참조.
-> 관련 문서: `docs/design-query-generation-loop.md` (스타일 참고), `docs/platform-contract/05`(플랫폼 신원 확정 계약, `backend/app/core/platform_auth.py`가 어댑터)
+> 관련 문서: `docs/design/graph/design-query-generation-loop.md` (스타일 참고), `docs/platform-contract/05`(플랫폼 신원 확정 계약, `backend/app/core/platform_auth.py`가 어댑터)
 
 ---
 
@@ -536,7 +539,7 @@ chunks_data = [{
 
 | 오늘 적용된 수정 | 대응 Phase | 비고 |
 |---|---|---|
-| Milvus 동기 `load`/`query`를 `asyncio.to_thread` + `wait_for`로 격리(5개 경로: retrieval `_fetch_chunks`, document `get_document_chunks`, `graph_viewer`, `cleanup_service` 4곳) | Phase D의 전신(임시 완화) | 이벤트루프 블로킹의 **증상**을 스레드 격리로 완화한 조치. Phase D(워커 프로세스 분리)가 적용되면 무거운 인제스트 자체가 API 프로세스 밖으로 나가므로 이 완화책의 중요도는 낮아지지만, Milvus 클라이언트 호출 자체는 여전히 동기이므로 **워커 프로세스 내부에서도 동일한 스레드 격리 패턴을 유지해야 한다**(워커도 async 루프 위에서 돈다). §3.2, 교훈은 `docs/design-query-generation-loop.md` §9.1의 "외부 I/O 격리 — 시간 격리 필수" 교훈과 동일 계열. |
+| Milvus 동기 `load`/`query`를 `asyncio.to_thread` + `wait_for`로 격리(5개 경로: retrieval `_fetch_chunks`, document `get_document_chunks`, `graph_viewer`, `cleanup_service` 4곳) | Phase D의 전신(임시 완화) | 이벤트루프 블로킹의 **증상**을 스레드 격리로 완화한 조치. Phase D(워커 프로세스 분리)가 적용되면 무거운 인제스트 자체가 API 프로세스 밖으로 나가므로 이 완화책의 중요도는 낮아지지만, Milvus 클라이언트 호출 자체는 여전히 동기이므로 **워커 프로세스 내부에서도 동일한 스레드 격리 패턴을 유지해야 한다**(워커도 async 루프 위에서 돈다). §3.2, 교훈은 `docs/design/graph/design-query-generation-loop.md` §9.1의 "외부 I/O 격리 — 시간 격리 필수" 교훈과 동일 계열. |
 | `num_entities == 0`이면 조회 스킵 | Phase C의 전신 | 빈/손상 컬렉션에 대한 방어. §6.9의 검증 로직 구현 시 동일한 빈 컬렉션 가드를 재사용해야 한다. |
 | WS 복구(이벤트루프 수정의 부작용 해소) | §4.0과는 별개 층위 | 이 수정은 "연결이 유지되는가"를 고쳤을 뿐, §1.2.4/§4.0에서 확인한 "브로드캐스트가 올바른 채널로 가는가"는 별도의 미해결 버그다. 둘 다 고쳐야 WS 알림이 실제로 동작한다. |
 | KB 생성 수정(`pipeline_config` 필드) | 범위 밖 | 이 설계와 직접 관련 없음. |

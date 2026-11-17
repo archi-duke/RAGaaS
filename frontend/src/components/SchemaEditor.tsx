@@ -9,7 +9,7 @@ import RecommendPanel from './RecommendPanel';
 import LexiconPanel from './LexiconPanel';
 import DirectionAuditPanel from './DirectionAuditPanel';
 
-// 스키마 편집기 — 승격된 텍스트 KB 의 클래스·속성을 사람이 직접 고친다 (docs/design-schema-editor.md)
+// 스키마 편집기 — 승격된 텍스트 KB 의 클래스·속성을 사람이 직접 고친다 (docs/design/schema/design-schema-editor.md)
 // 저장 시: 검증 → 이전 버전 이력 보관 → TBox 재생성. 이름 변경은 규칙 + 리플레이로 기존 그래프에 반영.
 // 정의·방향·별칭 변경은 "스키마 기준 재추출"을 돌려야 데이터에 반영된다.
 

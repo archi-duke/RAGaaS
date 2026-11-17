@@ -5,7 +5,7 @@ Ontology Aligner (C안 Phase 2)
 후보 클래스/속성을 **기존 TBox와 대조**하여 matched / similar / new / disjoint로
 분류한다. 이 결과(alignment proposal)가 불일치 검토 UI의 데이터 소스가 된다.
 
-design: docs/design-structured-json-yaml-ontology.md §6 (온톨로지 인지 정렬)
+design: docs/design/schema/design-structured-json-yaml-ontology.md §6 (온톨로지 인지 정렬)
 
 Phase 2 범위:
     - 기존 TBox 로드(Fuseki urn:ontology 그래프) + 정렬 제안 생성(결정론적: 정확 + difflib 유사).

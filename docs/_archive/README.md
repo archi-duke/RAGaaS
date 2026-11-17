@@ -28,7 +28,7 @@ git show 38eeae3:<원래 경로>      # 정리 직전 main
 
 ### `.analysis/` 5개 (2026-01-27 ~ 30)
 - 업로드 모달 흐름 분석, 파이프라인 문제 분석(sampling_size 미전달·청킹 설정 중첩·Docker 콜백 URL·graph_config 누락·파일 경로), 상태 업데이트·임시 파일 저장 개선 계획과 완료 보고.
-- **지금**: 적재 상태·관측성은 `design-ingest-queue-and-observability.md` Phase A (2026-07-17), 적재 단계는 `architecture/ingestion_pipeline_reference.md`.
+- **지금**: 적재 상태·관측성은 `design/ingest/design-ingest-queue-and-observability.md` Phase A (2026-07-17), 적재 단계는 `architecture/ingestion_pipeline_reference.md`.
 
 ### `graph-optimization-report.md`, `graph-optimization-implementation-complete.md` (2026-01)
 - 그래프 추출 최적화: UI 기본값, 대명사 해소 규칙(Rule 5), 후처리(노이즈 predicate·조사 제거·S-P-O 중복 제거), Fuseki 폴백 후처리, Doc2Onto 통합, 테스트.
@@ -36,11 +36,11 @@ git show 38eeae3:<원래 경로>      # 정리 직전 main
 
 ### `refined_implementation_plan.md` (2026-07-06)
 - Entity-Centric 동적 스키마 — 질문을 3패턴(`? → P → O`, `S → ? → O`, `S → P → ?`)으로 나눠 Fuseki 질의, 폴백 Global-P.
-- **지금**: 11/14 관계 타게팅(`design-graph-relation-targeting.md`)과 유형 질의 계획(`design-graph-class-query.md`)이 대체. 질문 분석의 subject/object 역할(`design-query-analysis-merge.md`)에 흔적.
+- **지금**: 11/14 관계 타게팅(`design/graph/design-graph-relation-targeting.md`)과 유형 질의 계획(`design/graph/design-graph-class-query.md`)이 대체. 질문 분석의 subject/object 역할(`design/graph/design-query-analysis-merge.md`)에 흔적.
 
 ### `guide-sparql-generation.md`, `guide-cypher-generation.md` (2026-01)
 - 자연어 → Intent + Slots → SPARQL/Cypher 템플릿 → 엔티티·속성 매핑 → 쿼리 생성 개발 지침 (바이브 코딩 가이드).
-- **지금**: LLM SPARQL 생성은 C 경로(폴백)에만 남았고 재시도 루프는 `design-query-generation-loop.md`. 상위 경로는 관계 타게팅·질의 계획·체인, 외부 계약은 query_plan (ADR-004).
+- **지금**: LLM SPARQL 생성은 C 경로(폴백)에만 남았고 재시도 루프는 `design/graph/design-query-generation-loop.md`. 상위 경로는 관계 타게팅·질의 계획·체인, 외부 계약은 query_plan (ADR-004).
 
 ### 플랫폼 온보딩 통지 5개 — `platform-contract/ragaas-*.md` (2026-07-06 ~ 07)
 - GoJIRA 팀의 셸 합류 작업 지시서와 통지: 게이트웨이 경로 단순화, `@platform/web-ui` tarball, frontend shared-net 조인, 셸 탭 활성화, C1~C3 합동 검증 통과(**온보딩 Phase 1 완료, 2026-07-07**), API 폴백 계약 수용(05 §5), standalone `/ragaas/` 진입 폐지, Account/Notice 앱 스코핑(조치 불필요).

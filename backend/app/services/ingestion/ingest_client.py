@@ -82,7 +82,7 @@ class IngestServiceClient:
             "subject_restoration_llm": subject_restoration_llm,
             "noun_extraction_llm": noun_extraction_llm,
             "embedding_model": embedding_model,
-            # KB 스키마 매핑 (docs/design-schema-mismatch.md §5)
+            # KB 스키마 매핑 (docs/design/schema/design-schema-mismatch.md §5)
             "schema_rules": schema_rules,
             "schema_vocab": schema_vocab,
             "replace_existing": replace_existing,
@@ -106,7 +106,7 @@ class IngestServiceClient:
         schema_rules: Optional[List[Dict[str, Any]]] = None,
         generate_inverse: bool = False,
     ) -> Dict[str, Any]:
-        """저장된 추출 트리플에 KB 규칙을 적용해 문서 그래프만 교체 (docs/design-graph-promotion.md)."""
+        """저장된 추출 트리플에 KB 규칙을 적용해 문서 그래프만 교체 (docs/design/schema/design-graph-promotion.md)."""
         async with httpx.AsyncClient(timeout=600.0) as client:
             response = await client.post(
                 f"{self.base_url}/api/v2/replay",

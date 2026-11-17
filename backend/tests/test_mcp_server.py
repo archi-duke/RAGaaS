@@ -1,4 +1,4 @@
-"""MCP 서버 도구 등록 확인 (docs/design-mcp-agent-query.md §5)."""
+"""MCP 서버 도구 등록 확인 (docs/design/agent/design-mcp-agent-query.md §5)."""
 import asyncio
 
 import pytest

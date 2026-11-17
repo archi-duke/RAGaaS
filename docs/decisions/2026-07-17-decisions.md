@@ -1,6 +1,6 @@
 # 2026-07-16 ~ 17 의사결정 로그
 
-> 11/17 복원 — `design-query-generation-loop.md` (07-16), `design-query-analysis-merge.md`, `design-ingest-queue-and-observability.md` (07-17), PR #37 (07-17 머지) 에서 옮겼다.
+> 11/17 복원 — `design/graph/design-query-generation-loop.md` (07-16), `design/graph/design-query-analysis-merge.md`, `design/ingest/design-ingest-queue-and-observability.md` (07-17), PR #37 (07-17 머지) 에서 옮겼다.
 
 ## D1. 쿼리 생성 Inner/Outer Loop
 
