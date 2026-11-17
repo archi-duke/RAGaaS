@@ -1,7 +1,7 @@
 # 서비스 가동 및 트러블슈팅 가이드
 
 > **상태**: ✅ 현행 · **최종 검증**: 2026-11-17 · 플랫폼(MF 셸) 계약은 [`../platform-contract/`](../platform-contract/README.md).
-> `deploy/`(compose·`.env`)는 비밀값 때문에 저장소에 없다 — 운영 호스트에만 있다.
+> `deploy/` 의 compose·Dockerfile·nginx 설정은 저장소에 있다. `deploy/.env` 는 비밀값이라 커밋하지 않는다 — `deploy/.env.example` 을 복사해 채운다.
 > 구(로컬 인프라 + venv) 방식 가이드는 폐기됨 — 인프라는 이제 **shared-infra**(외부 호스트)를 참조한다.
 
 ## 1. 운영 기동 (Docker — 표준)
@@ -14,7 +14,7 @@ docker compose up -d            # shared-net 외부 네트워크 필요 (GoJIRA 
 ```
 
 전제:
-- `deploy/.env` 존재 (shared-infra 엔드포인트 + **기존 `ENCRYPTION_KEY`**).
+- `deploy/.env` 존재 (`deploy/.env.example` 참고 — shared-infra 엔드포인트 + **기존 `ENCRYPTION_KEY`**).
 - 컨테이너 재생성 후 게이트웨이가 새 IP를 못 잡으면, GoJIRA deploy 에서 `docker compose restart gateway`.
 
 ### 기동 검증
