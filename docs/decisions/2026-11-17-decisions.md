@@ -106,5 +106,8 @@
   - 이력 저장소는 **공용 Gitea** (`ragaas/ragaas-pipelines` 저장소, KB 별 `pipeline.json`, 반영 = 커밋).
   - 공용 Gitea: shared-infra 에 Git 이 없어(인프라 세션 확인) 고지라의 Mac Gitea 를 **데이터째 이관해 활성화** (B안, "나중에 사내망 배포하기 편하게"). `gitea/gitea:1.25.5` 고정, HTTP `44372` (방화벽 대역 44370~44399), SSH 없음. 작업은 인프라 세션(compose·복원)과 고지라 세션(백업·전환·웹훅)에 요청. 폐기: Mac Gitea 를 그대로 쓰는 A안 (사내망 배포 때 다시 옮겨야 함).
   - 검색은 Mongo 의 운영 구성만 읽어 Gitea 장애와 무관. 자체 버전 테이블안은 폐기.
-- **설계서**: `design/agent/design-search-entry-and-pipeline-versions.md` (구현 전, PR #68 머지 뒤 main 기준)
+- **설계서**: `design/agent/design-search-entry-and-pipeline-versions.md`
+- **구현 (11/17)**: `/chat` 을 단일 진입점으로, MCP 정책 연동, 운영/테스트 탭·이력 패널. 공용 Gitea `ragaas/ragaas-pipelines` 에 KB 5개 첫 커밋.
+  - Gitea 토큰은 `ragaas-bot` 계정, **organization 쓰기** 필요 (조직 저장소 생성 — 읽기만이면 403).
+  - 옛 '레거시 전략' 검색 경로 제거 (검색 필터 없으면 disabled). MCP 근거 청크에 후처리(Re-Rank) 미적용 — 질문이 없는 도구라서.
 

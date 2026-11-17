@@ -1,6 +1,6 @@
 # 설계: 단일 검색 진입점 + 파이프라인 운영/테스트 분리·버전 이력
 
-> **문서 상태 (2026-11-17)**: 📝 설계 (구현 전) · 지도: [`docs/README.md`](../../README.md)
+> **문서 상태 (2026-11-17)**: ✅ 현행 (구현 — S1~S4, 공용 Gitea 연동 확인) · 지도: [`docs/README.md`](../../README.md)
 
 작성일: 2026-11-17
 관련: `design-mcp-agent-query.md` (MCP·query_plan, ADR-004), `design-typo-synonym-matching.md`, `../graph/design-agentic-filter.md`, `../../architecture/model-config-and-pipeline-contract.md`
@@ -152,7 +152,9 @@ ragaas-pipelines/
 | `pipeline_draft_base` | 테스트 구성이 어느 커밋에서 출발했는지 |
 
 - **이관**: KB 마다 지금 `pipeline_config` 를 첫 커밋("초기 구성")으로 올리고 `pipeline_live_ref` 를 채운다. draft 는 같은 내용으로 시작.
-- **자격 정보**: RAGaaS 전용 Gitea 계정(또는 토큰)을 `.env` 의 `GITEA_TOKEN` 에 둔다. 고지라의 토큰을 같이 쓰지 않는다.
+- **자격 정보**: RAGaaS 전용 계정 `ragaas-bot` (`ragaas` 조직 Owners 팀)의 토큰을 `deploy/.env` 의 `GITEA_TOKEN` 에 둔다. 고지라의 토큰을 같이 쓰지 않는다.
+  - 토큰 권한: **repository 읽기·쓰기 + organization 읽기·쓰기**. 조직 안에 저장소를 만들 때 Gitea 가 `write:organization` 을 요구한다 (organization 읽기만 주면 403 — 2026-11-17 확인).
+  - 컨테이너는 `deploy/.env` 를 읽는다 (루트 `.env` 가 아님).
 
 ### 5.3 동작
 
@@ -215,6 +217,22 @@ ragaas-pipelines/
 | S5 | 스킬 갱신, 설계서(MCP·계약 문서) 갱신, 결정 이력 | — |
 
 - PR #68 (그래프 옵션 3개를 추가함) 머지 뒤 main 기준으로 진행한다. 화면(`PipelineBuilder.tsx`)과 실행기가 겹친다.
+
+### 7.1 결과 (2026-11-17, 브랜치 `feat/search-entry-pipeline-versions`)
+
+| 항목 | 결과 |
+|---|---|
+| 진입점 | 별도 `search_entry` 모듈 대신 **`/chat` 함수 자체를 단일 진입점**으로 (`/chat/stream`·MCP `search` 가 감쌈). 파라미터 `config`·`agentic`·`answer`·`caller`, 응답 `status`·`applied_policy` |
+| 정책 해석 | `retrieval/search_policy.py` — `resolve_pipeline`, `summarize`, `guard`, `policy_view` |
+| 검색 필터 없음 | `status=disabled`. 옛 '레거시 전략' 경로(파이프라인 없을 때 전략 이름으로 검색)는 제거 |
+| MCP | `search` 에이전틱 건너뜀·근거만 (에이전틱 KB 4.6초, 답변 생성 없음). 조회 도구 6개 + REST `/agent/*` 에 `guard`, `lookup_values` Typo 연동, `describe_kb.policy` |
+| 이력 | `services/pipeline_versions.py` — Gitea REST. KB 5개 첫 커밋, `test vec` 로 반영 → 이력 → 보기 → 불러오기 → 되돌리기 확인 (v1 → v2 → v3 '되돌림: v1') |
+| 화면 | 운영/테스트 탭, 운영에 반영(차이·메모), 운영 구성으로 되돌리기, 이력 패널, JSON 내보내기·가져오기 |
+
+**설계와 다르게 남긴 것**
+- `/retrieve` (옛 검색 전용 API)는 손대지 않았다 — 화면·MCP 가 쓰지 않는다. 정리는 별도.
+- MCP 조회 도구의 근거 청크에 **후처리 필터(Re-Rank 등)는 적용하지 않았다**. `get_chunks`·`query_plan` 에는 질문이 없어 리랭크 기준이 없다. `policy.post_filters` 로 알리기만 한다. `search` 는 파이프라인 전체를 타므로 적용된다.
+- Max Hop 은 서버가 강제하지 않고 `policy.max_hops` 로 알린다 (설계대로).
 
 ## 8. 위험과 대응
 
