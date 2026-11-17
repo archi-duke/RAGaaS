@@ -1,7 +1,7 @@
 import os
 import re
 
-out_dir = "/Users/dukekimm/Works/RAGaaS/docs/arch/system"
+out_dir = "/Users/dukekimm/Works/RAGaaS/docs/_archive/arch-2026-02/system"
 os.makedirs(out_dir, exist_ok=True)
 
 # UC-001

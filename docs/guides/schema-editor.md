@@ -3,7 +3,7 @@
 대상: 지식베이스(KB)의 스키마를 확인하고 다듬는 사람. 온톨로지를 처음 다뤄도 따라 할 수 있게 개념부터 설명한다.
 위치: KB 상세 화면 → **Schema** 탭 (온톨로지로 승격된 KB 에만 보인다).
 설계 문서: `docs/design-schema-editor.md` · 스키마 추출 절차: `.claude/skills/ontology-schema-extraction/SKILL.md`
-운영 참고(품질과 잘못된 답변 위험): `docs/ops-schema-quality-and-answer-risk.md`
+운영 참고(품질과 잘못된 답변 위험): `docs/guides/ops-schema-quality-and-answer-risk.md`
 
 ---
 

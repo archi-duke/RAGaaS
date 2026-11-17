@@ -1,16 +1,18 @@
 # arch/ — 초기 아키텍처 설계 산출물 (설계 이력 🏛️)
 
+> **2026-11-17 보관**: `docs/arch/` → `docs/_archive/arch-2026-02/`. 결정 요약과 지금 상태는 [`../../technical-decisions.md`](../../technical-decisions.md) 0장.
+
 > **주의**: 이 디렉토리는 2026-02 설계 단계의 산출물이다. ASR→QS→후보구조(CA)→결정으로 이어지는
 > 추적 체계는 유지 가치가 있으나, **다음 내용은 현행 구현과 다르다**:
 >
 > | 문서 기술 | 현행 | 정정 기록 |
 > |---|---|---|
-> | 메타데이터 DB = SQLite | MongoDB + Beanie | [ADR-003](../adr/ADR-003-mongodb-metadata-store.md) |
-> | 메시지 브로커 + Ingestion Worker (CA-203) | HTTP 마이크로서비스 + 콜백 | [ADR-002](../adr/ADR-002-http-ingest-service.md) |
-> | CA-102 파이프라인 기각 | 스테이지 파이프라인 **채택됨** | [ADR-001](../adr/ADR-001-pipeline-based-retrieval.md) |
-> | 헥사고날 폴더 구조 (`app/domain/ports` 등) | 미채택 — 실구조는 [`../architecture/코드_구조_분석.md`](../architecture/코드_구조_분석.md) | — |
+> | 메타데이터 DB = SQLite | MongoDB + Beanie | [ADR-003](../../adr/ADR-003-mongodb-metadata-store.md) |
+> | 메시지 브로커 + Ingestion Worker (CA-203) | HTTP 마이크로서비스 + 콜백 | [ADR-002](../../adr/ADR-002-http-ingest-service.md) |
+> | CA-102 파이프라인 기각 | 스테이지 파이프라인 **채택됨** | [ADR-001](../../adr/ADR-001-pipeline-based-retrieval.md) |
+> | 헥사고날 폴더 구조 (`app/domain/ports` 등) | 미채택 — 실구조는 [`../architecture/코드_구조_분석.md`](../../architecture/코드_구조_분석.md) | — |
 >
-> **현행 사양은 [`../specification-v2.md`](../specification-v2.md) 를 볼 것.**
+> **현행 사양은 [`../specification-v2.md`](../../specification-v2.md) 를 볼 것.**
 
 ## 디렉토리 역할
 

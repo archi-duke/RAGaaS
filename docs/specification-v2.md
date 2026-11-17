@@ -2,7 +2,7 @@
 
 > **상태**: ✅ 현행 · **최종 검증**: 2026-07-15 (코드 전수 조사 기반)
 > v1(초기 사양, SQLite/모놀리스 전제)은 [`_archive/specification-v1.md`](_archive/specification-v1.md) 로 아카이브됨.
-> 배포·플랫폼 연계는 [`PLATFORM-INTEGRATION.md`](PLATFORM-INTEGRATION.md), 모델 설정·파이프라인 계약은
+> 배포·플랫폼 연계는 [`platform-contract/README.md`](platform-contract/README.md), 모델 설정·파이프라인 계약은
 > [`architecture/model-config-and-pipeline-contract.md`](architecture/model-config-and-pipeline-contract.md) 참조.
 
 ## 1. 시스템 개요
@@ -147,7 +147,7 @@ Mongo `:44370`(authSource=admin, DB=ragaas) · Redis `:44375` · Milvus `:44380`
 ## 10. 관련 문서
 
 - [`docs/README.md`](README.md) — 문서 색인·상태
-- [`PLATFORM-INTEGRATION.md`](PLATFORM-INTEGRATION.md) — 셸 연계·배포·함정
+- [`platform-contract/README.md`](platform-contract/README.md) — 셸 연계·배포·함정
 - [`architecture/model-config-and-pipeline-contract.md`](architecture/model-config-and-pipeline-contract.md) — 모델 해석 체인·스테이지 계약
 - [`architecture/ingestion_pipeline_reference.md`](architecture/ingestion_pipeline_reference.md), [`architecture/kb_isolation_and_storage.md`](architecture/kb_isolation_and_storage.md)
 - [`adr/`](adr/) — 결정 기록 (ADR-001~003)

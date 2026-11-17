@@ -1,7 +1,7 @@
 # 그래프 검색 쿼리 생성 개선 설계: Inner/Outer Loop 도입
 
 > 상태: 구현·테스트 완료 (Implemented & Tested, 2026-07-16) — 구현 결정 사항 및 구현 중 개정 내역은 §9 참조
-> 관련 문서: `docs/guide-cypher-generation.md` (Cypher Vibe Coding 프롬프트 가이드)
+> 관련 문서: `docs/_archive/README.md` (가이드 요약) (Cypher Vibe Coding 프롬프트 가이드)
 
 ---
 

@@ -1,11 +1,11 @@
 # ADR-001: 스테이지 기반 검색 파이프라인 채택 (CA-102 결정 번복)
 
 - **상태**: Accepted (2026-07-15 기록; 실제 채택 시점은 2026-02~03 구현기)
-- **관련**: `docs/arch/architecture.md` 부록 B의 CA-102 기각 결정을 **supersede** 함
+- **관련**: `docs/_archive/arch-2026-02/architecture.md` 부록 B의 CA-102 기각 결정을 **supersede** 함
 
 ## 맥락
 
-초기 아키텍처 설계 단계(`docs/arch/architecture.md` 부록 B, 후보구조 결정 표)에서는 두 개의 검색 흐름 제어 후보가 비교되었다.
+초기 아키텍처 설계 단계(`docs/_archive/arch-2026-02/architecture.md` 부록 B, 후보구조 결정 표)에서는 두 개의 검색 흐름 제어 후보가 비교되었다.
 
 | 후보 | 이름 | 결정 | 사유 |
 |---|---|---|---|
@@ -43,7 +43,7 @@ CA-102 기각 결정을 번복하고, **스테이지 기반 Search Pipeline**을
 
 ## 참조 파일
 
-- `docs/arch/architecture.md` (부록 B, CA-101/CA-102 결정 표 — 181~182행)
+- `docs/_archive/arch-2026-02/architecture.md` (부록 B, CA-101/CA-102 결정 표 — 181~182행)
 - `backend/app/schemas/pipeline.py`
 - `backend/app/services/retrieval/pipeline_executor.py`
 - `backend/app/api/retrieval.py` (`/chat` 이중 모드 분기: 134~138행, 364~420행; `/retrieve` 레거시 전용: 219행)

@@ -256,7 +256,7 @@ LLM 기반 그래프 추출에서 **정밀도와 재현율의 균형**을 맞추
 
 - [RAGaaS GitHub Repository](https://github.com/yourusername/RAGaaS)
 - [Doc2Onto: Document to Ontology Pipeline](https://github.com/yourusername/Doc2Onto)
-- [그래프 추출 최적화 상세 보고서](/docs/graph-optimization-report.md)
+- [그래프 추출 최적화 상세 보고서](../_archive/README.md)
 
 ---
 
