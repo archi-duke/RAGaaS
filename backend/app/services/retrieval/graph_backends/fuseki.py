@@ -1380,7 +1380,7 @@ class FusekiBackend(GraphBackend):
         except Exception:
             return empty
 
-    async def _plan_with_llm(self, query_text, kinds, catalogs, value_hints, kwargs, retry_note=""):
+    async def _plan_with_llm(self, query_text, kinds, catalogs, value_hints, kwargs, retry_note="", term_hints=None):
         from app.core.models_resolver import resolve_model_config
         from app.core.llm import achat, no_thinking_extra_body
         from app.services.retrieval import class_query as cq
@@ -1388,7 +1388,7 @@ class FusekiBackend(GraphBackend):
 
         cfg = await resolve_model_config(kwargs.get("llm_model_config") or {})
         hint_labels = [cq.local_name(u) for u in value_hints]
-        messages = cq.build_plan_messages(query_text, kinds, catalogs, hint_labels, retry_note)
+        messages = cq.build_plan_messages(query_text, kinds, catalogs, hint_labels, retry_note, term_hints)
         content = await achat(
             cfg, messages, model=cfg.get("model"), temperature=0,
             response_format={"type": "json_object"},
@@ -1427,9 +1427,20 @@ class FusekiBackend(GraphBackend):
                 "mode": "C", "reason": "그래프에서 유형(레코드 집합)을 찾지 못함 → 자유 Text-to-SPARQL"}}
             return None, all_preds
 
+        # 질문 말이 값에 들어 있는 경로를 앞으로 (멤버 적은 스키마 밖 관계가 계획 LLM 목록에서 잘리지 않게)
+        term_hints = cq.term_matched_paths(kwargs.get("_class_terms") or [], kinds, catalogs)
+        if term_hints:
+            catalogs = cq.promote_paths(catalogs, term_hints)
+            targeting["term_hints"] = [f"{k}: {pk}='{v}'" for k, pairs in term_hints.items() for pk, v in pairs]
+            log_trace(f"[Fuseki] 질문 말이 값에 든 경로 {sum(len(v) for v in term_hints.values())}개를 계획 후보 앞에: "
+                      f"{targeting['term_hints'][:6]}")
+        hint_keys = {pk for pairs in term_hints.values() for pk, _ in pairs}
+
         try:
             raw, checked = None, None
             spec = kwargs.pop("_speculative_plan", None)
+            if spec is not None and hint_keys:
+                spec = None   # 미리 만든 계획은 경로 힌트 없이 만들어졌다 → 힌트를 넣어 다시 만든다
             if spec is not None:
                 # 질문 분석과 동시에 만든 계획 — 검증을 통과하면 그대로 쓴다 (LLM 호출 1회 절약, 약 3초)
                 try:
@@ -1443,12 +1454,12 @@ class FusekiBackend(GraphBackend):
                     else:
                         log_trace("[Fuseki] 질의 계획: 질문 분석과 동시에 만든 계획 사용")
             if raw is None:
-                raw = await self._plan_with_llm(query_text, kinds, catalogs, value_hints, kwargs)
+                raw = await self._plan_with_llm(query_text, kinds, catalogs, value_hints, kwargs, term_hints=term_hints)
                 checked = cq.validate_plan(raw, kinds, catalogs, value_hints)
             if checked["status"] == "reject":
                 log_trace(f"[Fuseki] Plan rejected: {checked['message']} — retrying once")
                 note = f"\n이전 계획이 반려됨: {checked['message']}. 목록의 번호·값만 사용해 다시 작성하라."
-                raw = await self._plan_with_llm(query_text, kinds, catalogs, value_hints, kwargs, note)
+                raw = await self._plan_with_llm(query_text, kinds, catalogs, value_hints, kwargs, note, term_hints)
                 checked = cq.validate_plan(raw, kinds, catalogs, value_hints)
         except Exception as e:
             log_trace(f"[Fuseki] Plan LLM unavailable ({e}); delegating to free Text-to-SPARQL")
@@ -1740,6 +1751,7 @@ class FusekiBackend(GraphBackend):
                     else:
                         go_class = True  # 앵커 없음 → 유형 경로
                     if go_class:
+                        kwargs["_class_terms"] = list(entities or []) + [n for n, _ in (resolved_uris or [])]
                         class_result, class_preds = await self._class_level_query(
                             kb_id, query_text, value_hints, kwargs, log_trace
                         )

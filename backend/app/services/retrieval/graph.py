@@ -20,6 +20,10 @@ _CLASS_Q_RE = re.compile(
     r"|(모두|목록|전부|몇\s*개|몇\s*가지|어떤\s+\S+(들|것))")
 
 
+
+# 목록 질문(질의 계획 P) 결과 엔티티가 이 수보다 적으면 문서 검색으로 보강한다 (6.4)
+SUPPLEMENT_MIN_ENTITIES = 2
+
 def looks_class_query(query: str) -> bool:
     """유형 수준 질문(조건으로 대상을 고르는 질문)처럼 보이는가 — 질의 계획을 미리 시작할지 판단용 (틀려도 LLM 1회 낭비뿐)."""
     return bool(_CLASS_Q_RE.search((query or "").strip()))
@@ -242,6 +246,27 @@ class GraphRetrievalStrategy(RetrievalStrategy):
              log(f"DEBUG: Strict Mode - Fallback search disabled. Returning empty/metadata-only results.")
 
         
+        # 6.4 목록 질문의 재현율 보강: 질의 계획(P) 결과 엔티티가 적으면 문서 검색 결과를 그래프 근거 뒤에 붙인다.
+        # 그래프의 스키마 밖 관계·표기 차이로 놓친 사실이 문서에는 있는 경우 ('원자 폭탄 개발에 기여한 사람' →
+        # 그래프 결과 아인슈타인 1명, 문서에는 파인만·보어도 있음 — 2026-11-17). 그래프 근거는 앞에 그대로 둔다.
+        tg0 = ((graph_result.get("reasoning") or {}).get("targeting") or {})
+        if (kwargs.get("graph_fallback") or "vector") == "vector" and tg0.get("mode") == "P" and results \
+                and results[0].get("chunk_id") != "GRAPH_METADATA_ONLY" \
+                and len(tg0.get("result_entities") or []) < SUPPLEMENT_MIN_ENTITIES:
+            extra = await self._fallback_search(kb_id, query, entities, top_k, emb_service=emb_service)
+            have = {r.get("chunk_id") for r in results}
+            extra = [r for r in extra if r.get("chunk_id") not in have][:max(top_k // 2, 3)]
+            if extra:
+                results = list(results) + extra
+                n_ent = len(tg0.get("result_entities") or [])
+                tg0["supplement"] = f"그래프 결과 엔티티 {n_ent}개 → 문서 검색 {len(extra)}건 보강 (그래프 근거 뒤)"
+                tg0.setdefault("warnings", []).append(tg0["supplement"])
+                if graph_result.get("result_summary"):
+                    graph_result["result_summary"] += (
+                        f"\n주의: 그래프에서 찾은 것은 {n_ent}개뿐이다. 관계 이름·표기가 달라 그래프에서 놓친 사실이"
+                        " 문서 근거(뒤쪽 청크)에 있을 수 있으니 함께 보고 답할 것 — 그래프 결과만으로 '그 밖에는 없다' 고 단정하지 말 것.")
+                log(f"DEBUG: 📄 목록 질문 그래프 결과 {n_ent}개 → 문서 검색 {len(extra)}건 보강")
+
         # 6.5 추론 리포트 (Execution Log 맨 앞) — docs/design/graph/design-graph-relation-targeting.md
         reasoning = self._build_reasoning(graph_result, query_analysis, entities, results, ordered, llm_model_name)
         from app.services.retrieval.relation_targeting import render_reasoning_report

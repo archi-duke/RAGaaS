@@ -265,3 +265,19 @@ def test_followup_ask_detection():
     assert not has_followup_ask("특수상대성이론이 계승·발전시킨 두 선행 개념(원리·변환)은 무엇이며, "
                                 "특수상대성이론을 기하학적으로 계승·발전시킨 개념은 무엇인가?")
     assert not has_followup_ask("뉴턴이 저술한 책은 무엇인가?")
+
+
+def test_term_matched_paths_promotes_tail_paths():
+    vals = lambda *ls: [{"uri": f"http://x/{l}", "label": l, "members": 1} for l in ls]
+    cat = [{"key": f"p{i}", "uris": [f"http://r/p{i}"], "type": "text", "values": vals(f"값{i}"), "examples": [], "dv": 1} for i in range(200)]
+    cat.append({"key": "자문", "uris": ["http://r/a"], "type": "text", "values": vals("원자폭탄 개발"), "examples": [], "dv": 1})
+    cat.append({"key": "참여", "uris": ["http://r/b"], "type": "text", "values": vals("전시 원자폭탄 개발 계획"), "examples": [], "dv": 1})
+    kinds = [{"name": "Person", "members": ["http://x/p"], "examples": [], "class_uri": "http://c/P"}]
+    cats = {"Person": cat}
+    hits = cq.term_matched_paths(["원자 폭탄", "atomic bomb"], kinds, cats)
+    assert [k for k, _ in hits["Person"]] == ["자문", "참여"]
+    promoted = cq.promote_paths(cats, hits)
+    assert [p["key"] for p in promoted["Person"][:2]] == ["자문", "참여"] and len(promoted["Person"]) == len(cat)
+    msg = cq.build_plan_messages("원자 폭탄 개발에 기여한 사람은?", kinds, promoted, None, "", hits)[1]["content"]
+    assert "0. 자문 = '원자폭탄 개발'" in msg and "1. 참여 = '전시 원자폭탄 개발 계획'" in msg
+    assert cq.term_matched_paths(["a"], kinds, cats) == {}   # 1글자·영문만은 힌트 안 만듦
