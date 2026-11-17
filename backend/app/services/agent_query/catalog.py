@@ -221,7 +221,8 @@ def _contains(term: str, label: str) -> bool:
 
 
 async def lookup_values(kb_id: str, terms: Sequence[str], kind: Optional[str] = None,
-                        limit: int = 8, terms_en: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+                        limit: int = 8, terms_en: Optional[Dict[str, str]] = None,
+                        use_fuzzy: bool = True) -> Dict[str, Any]:
     """terms_en: 클라이언트가 보낸 영어 표기 (오탈자 교정 포함). 사전에 없을 때만 쓴다 (§5.1)."""
     from app.services.agent_query import lexicon as lx
     _kb_, kinds, catalogs, version = await load_catalog(kb_id)
@@ -250,7 +251,8 @@ async def lookup_values(kb_id: str, terms: Sequence[str], kind: Optional[str] = 
     from app.services.agent_query import fuzzy_match as fm
     weak = [t for t in terms if not any(m["score"] >= lx.SCORE_STRIPPED for m in lx.match_term(idx, t))
             and not any(_score(t, lab) >= 100 for lab in where)]
-    fz = await fm.candidates(kb_id, weak, list(where.keys())) if weak else {}
+    # use_fuzzy=False: KB 정책의 Typo·Synonym 이 꺼져 있으면 후보 단계를 건너뛴다 (사전만)
+    fz = await fm.candidates(kb_id, weak, list(where.keys())) if (weak and use_fuzzy) else {}
     for term in terms:
         hits, rel = [], []
         # 용어 사전 (한영·음역·동의어) — docs/design/agent/design-kb-lexicon.md §5
