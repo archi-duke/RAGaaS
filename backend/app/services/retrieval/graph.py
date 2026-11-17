@@ -434,6 +434,8 @@ class GraphRetrievalStrategy(RetrievalStrategy):
         base = [e for e in (qa.get("primary_entities") or []) if e]
         variants = qa.get("term_variants") or {}
         terms = list(dict.fromkeys(base + [v for e in base for v in variants.get(e, [])]))[:12]
+        # 연도·시기·수치는 해석 대상이 아니다 (연도 조건으로 쓴다) — '1930년대 → 1950년대' 해석 문구가 답에 섞였다
+        terms = [t for t in terms if not re.search(r"\d", t)]
         out = {"auto": [], "hints": [], "log": []}
         if not terms:
             return out

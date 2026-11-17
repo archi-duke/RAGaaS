@@ -559,63 +559,7 @@ export default function PipelineBuilder({
                             {stageInfo?.label || stage.type}
                         </span>
 
-                        {stage.type === 'graph' && (graphBackend === 'neo4j' || graphBackend === 'ontology') && (
-                            isOntologyPromoted ? (
-                                // Promoted: Show toggleable Schema On/Off button
-                                <button
-                                    onClick={() => {
-                                        const current = !!(stage.params.use_schema_mode ?? true);
-                                        const nextSchemaMode = !current;
-                                        const newStages = [...stages];
-                                        const p = { ...newStages[index].params };
-
-                                        p.use_schema_mode = nextSchemaMode;
-                                        // 옛 옵션(Rel Filter·Inverse·Entity Expand) 백업 값은 정리 — 2026-11-17 옵션 제거
-                                        delete p._prev_use_relation_filter;
-                                        delete p._prev_enable_inverse;
-                                        delete p._prev_inverse_mode;
-                                        delete p._prev_enable_entity_expansion;
-
-                                        newStages[index] = { ...newStages[index], params: p };
-                                        setStages(newStages);
-                                    }}
-                                    style={{
-                                        fontSize: '0.65rem',
-                                        color: !!(stage.params.use_schema_mode ?? true) ? '#fff' : '#1e40af',
-                                        backgroundColor: !!(stage.params.use_schema_mode ?? true) ? '#1e40af' : '#eff6ff',
-                                        border: '1px solid #1e40af',
-                                        padding: '2px 8px',
-                                        borderRadius: '12px',
-                                        fontWeight: 600,
-                                        lineHeight: '1.2',
-                                        cursor: 'pointer',
-                                        transition: 'all 0.2s ease',
-                                        marginLeft: '8px'
-                                    }}
-                                >
-                                    {!!(stage.params.use_schema_mode ?? true) ? 'Schema On' : 'Schema Off'}
-                                </button>
-                            ) : (
-                                // Not promoted: Show disabled "Schema None" text
-                                <span
-                                    style={{
-                                        fontSize: '0.65rem',
-                                        color: '#cbd5e1',
-                                        backgroundColor: '#f8fafc',
-                                        border: '1px solid #e2e8f0',
-                                        padding: '2px 8px',
-                                        borderRadius: '12px',
-                                        fontWeight: 600,
-                                        lineHeight: '1.2',
-                                        cursor: 'default',
-                                        marginLeft: '8px'
-                                    }}
-                                >
-                                    Schema None
-                                </span>
-                            )
-                        )}
-
+                        {/* Schema On/Off 제거 (2026-11-17) — LLM SPARQL 생성(C) 경로에만 쓰이던 옵션, C 는 화면에서 쓰지 않음 */}
                         <button
                             onClick={() => handleMoveStage(index, 'right')}
                             disabled={index === stages.length - 1}
@@ -867,24 +811,13 @@ export default function PipelineBuilder({
                                         onChange={(v) => handleParamChange(index, 'graph_fallback', v)}
                                     />
                                 </div>
-                                {/* Dynamic Schema (승격 전 KB 만) */}
-                                {!isOntologyPromoted && (
-                                    <div style={{ display: 'flex', flexDirection: 'row', gap: '0.3rem', alignItems: 'center' }}>
-                                        <ParamCheckbox
-                                            label="Dynamic Schema"
-                                            checked={params.use_dynamic_schema ?? true}
-                                            onChange={(v) => handleParamChange(index, 'use_dynamic_schema', v)}
-                                        />
-                                    </div>
-                                )}
-                                {/* 4행: Model (Graph는 기본 LLM) */}
+                                {/* Model — 질문 분석·경로 선택·질의 계획·체인 계획에 쓰는 LLM (Dynamic Schema·쿼리 프롬프트는 C 경로 전용이라 제거) */}
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', flexWrap: 'wrap' }}>
                                     <span style={{ fontSize: '0.7rem', color: '#475569', flexShrink: 0 }}>Model</span>
                                     <ModelSelector
                                         type="llm"
                                         value={params.llm_model || DEFAULT_LLM_CONFIG}
                                         onChange={(cfg) => handleParamChange(index, 'llm_model', cfg)}
-                                        onEditPrompt={() => openGraphPromptEditor(index)}
                                     />
                                 </div>
                             </div>

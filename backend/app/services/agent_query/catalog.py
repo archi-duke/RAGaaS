@@ -220,6 +220,44 @@ def _contains(term: str, label: str) -> bool:
     return bool(tc) and len(tc) >= 2 and tc in lc
 
 
+def value_labels(kinds: List[Dict[str, Any]], catalogs: Dict[str, List[Dict[str, Any]]]) -> List[str]:
+    """오탈자·유사어 후보의 대상 — 카탈로그의 값 라벨 전체 (lookup_values 의 where 키와 같은 집합)."""
+    out: Dict[str, None] = {}
+    for k in kinds:
+        for p in catalogs.get(k["name"], []):
+            for v in p.get("values") or []:
+                out[v.get("label") or ""] = None
+    return list(out)
+
+
+async def warm(kb_id: str) -> None:
+    """캐시 미리 채우기 — 유형 카탈로그 + 라벨 임베딩 행렬 (LLM 없음, 임베딩만).
+
+    서버 시작·그래프 변경(카탈로그 무효화) 뒤 백그라운드로 돌려, 첫 질문·첫 MCP 호출이
+    카탈로그(약 4초)와 라벨 임베딩(약 4초)을 떠안지 않게 한다 (2026-11-17).
+    """
+    import time as _t
+    from app.services.agent_query import fuzzy_match as fm
+    from app.services.agent_query import lexicon as lx
+    try:
+        t0 = _t.time()
+        _kb_, kinds, catalogs, _v = await load_catalog(kb_id)
+        labels = value_labels(kinds, catalogs)
+        await fm._label_matrix(kb_id, labels)
+        await lx.get_index(kb_id)
+        print(f"[warm] {kb_id[:8]} 카탈로그·라벨 {len(labels)}개 임베딩·사전 준비 {_t.time() - t0:.1f}초")
+    except Exception as e:      # 워밍업 실패는 조용히 — 다음 요청이 평소처럼 만든다
+        print(f"[warm] {kb_id[:8]} 실패: {str(e)[:120]}")
+
+
+async def warm_all() -> None:
+    from app.models.knowledge_base import KnowledgeBase
+    print("[warm] 그래프 KB 캐시 준비 시작")
+    for kb in await KnowledgeBase.find_all().to_list():
+        if (kb.graph_backend or "") == "ontology":
+            await warm(str(kb.id))
+
+
 async def lookup_values(kb_id: str, terms: Sequence[str], kind: Optional[str] = None,
                         limit: int = 8, terms_en: Optional[Dict[str, str]] = None,
                         use_fuzzy: bool = True) -> Dict[str, Any]:

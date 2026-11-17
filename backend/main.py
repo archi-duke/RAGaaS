@@ -85,6 +85,12 @@ async def startup():
     await init_db()
     print("[Startup] MongoDB Connected & Beanie Initialized.", file=sys.stdout, flush=True)
 
+    # 그래프 KB 캐시 미리 채우기 (카탈로그 + 라벨 임베딩 + 용어 사전) — 재시작 직후 첫 질문·MCP 호출이
+    # 수 초를 떠안지 않게. 참조를 app.state 에 보관 (GC 로 작업이 사라지지 않게) — 2026-11-17
+    import asyncio as _asyncio
+    from app.services.agent_query import catalog as _cat
+    app.state.warm_task = _asyncio.get_running_loop().create_task(_cat.warm_all())
+
     # Connect to Milvus
     try:
         connect_milvus()

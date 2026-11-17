@@ -112,12 +112,21 @@ def build_plan_messages(question: str, vocab: List[Dict[str, Any]], max_hops: in
    - expect: 이 홉에서 얻는 대상 설명 (예: "인물", "1847년에 제안된 법칙"). 연도·국적 같은 조건은 여기에만 적는다.
    - '출발한', '이어진', '바탕으로 한', '영향을 받은' 처럼 어느 관계인지 애매한 표현은 relations 에 그럴듯한 관계 2~3개를
      함께 넣는다 (예: "~에서 출발한 방정식" → ["계승_발전", "기반함"]). 하나만 골라 엇나가지 않게.
+   - 노드를 **옮기지 않고 거르기만 하는 수식어**("할스테트 연구소의 물리학자", "독일 국적의 과학자", "노벨상을 받은 학자")는
+     "filter": true 와 "value"(조건 값, 질문 표기 그대로)를 단 홉으로 적는다. 그 관계를 가진 노드만 남기고 다음 홉은 같은 노드에서 이어간다.
+     답이 그 관계의 반대쪽 노드를 거쳐 가면(예: "1903년에 수행한 측정이 확인한 법칙" 은 측정 노드를 거친다) filter 가 아니라 보통 홉이다.
+     연도·시기는 filter 가 아니다 — expect 에만 적는다.
+   - **같은 노드에서 나가는 관계 둘을 함께 물으면**("측정이 확인한 법칙과 반박한 법칙", "제안한 이론과 반박한 이론")
+     마지막 홉의 relations 에 둘 다 넣는다 (예: ["확인함", "반박함"]). final_relations 로 미루면 다음 노드에서 찾게 된다.
+     예) "줄의 영향을 받은 할스테트 연구소의 물리학자가 저술한 책" →
+         [{{"relations": ["영향_줌"], "direction": "out"}}, {{"relations": ["소속"], "direction": "out", "filter": true, "value": "할스테트"}},
+          {{"relations": ["저술함"], "direction": "out"}}]
 3. 마지막 노드에 대해 여러 가지를 묻는다면(예: "어떤 원리를 제안했고 몇 년에 상을 받았나") 마지막 홉 다음에
    final_relations 로 그 노드에서 더 볼 관계들을 적는다 (방향 포함).
    "…은 무엇이며, 누가 (몇 년에) 제안했는가" 처럼 마지막 노드를 만든 주체를 물으면, 마지막 노드가 목적어이므로
    {{"relation": "제안함", "direction": "in"}} 처럼 direction=in. 연도는 관계(진술)에 붙어 있으니 따로 관계를 찾지 않는다.
 4. 체인으로 표현할 수 없는 질문(같은 해 비교, 기간 계산 등)이면 {{"chainable": false}}.
-JSON 만: {{"chainable": true, "start": "...", "hops": [{{"relations": [...], "direction": "out|in", "expect": "..."}}],
+JSON 만: {{"chainable": true, "start": "...", "hops": [{{"relations": [...], "direction": "out|in", "expect": "...", "filter": false, "value": null}}],
  "final_relations": [{{"relation": "...", "direction": "out|in"}}]}}"""
     return [
         {"role": "system", "content": "You decompose multi-hop questions into relation chains over a given closed vocabulary. Output JSON only."},
@@ -173,8 +182,15 @@ def validate_plan(data: Optional[Dict[str, Any]], vocab: List[Dict[str, Any]],
         #  - 그 밖(클래스가 다른 관계: 제안함 등): 0건이면 반대 방향 재시도 (뒤집어도 뜻이 섞이지 않음)
         vs = [by_name.get(r) or {} for r in rels]
         same_class = all((v.get("domain") or "").strip() and v.get("domain") == v.get("range") for v in vs)
-        hops.append({"relations": rels, "direction": d, "expect": str(h.get("expect") or "")[:80],
-                     "lineage": all(is_lineage_relation(v) for v in vs), "same_class": same_class})
+        hop = {"relations": rels, "direction": d, "expect": str(h.get("expect") or "")[:80],
+               "lineage": all(is_lineage_relation(v) for v in vs), "same_class": same_class}
+        fval = str(h.get("value") or "")
+        if h.get("filter") and len(raw_hops) > 1 and not re.search(r"\d", fval):
+            # 숫자 값(연도 등)은 조건 홉이 아니다 — '1903년에 수행한 측정' 을 조건으로 적어 측정 노드로 못 간 경우 (Q34)
+            # 조건 홉: 노드를 옮기지 않고 그 관계를 가진 노드만 남긴다 (Q35 '할스테트 연구소의 물리학자' — 2026-11-17)
+            hop["filter"] = True
+            hop["value"] = str(h.get("value") or "")[:60] or None
+        hops.append(hop)
     if not hops:
         return None, notes + ["홉 없음"]
     finals = []
@@ -298,11 +314,40 @@ def order_chunks_by_hop(triples: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 def hop_label(h: Dict[str, Any], n_from: int, n_triples: int, n_next: int, flipped: bool) -> str:
     arrow = "↔" if h.get("both") else ("→" if h["direction"] == "out" else "←")
-    kind = "추가 속성" if h.get("final") else f"홉{h['no']}"
+    kind = "추가 속성" if h.get("final") else (f"홉{h['no']}(조건{': ' + h['value'] if h.get('value') else ''})"
+                                              if h.get("filter") else f"홉{h['no']}")
     flip = " (반대 방향으로 재시도해 찾음)" if flipped else ""
     exp = f" — 기대: {h['expect']}" if h.get("expect") else ""
     return (f"{kind}: 노드 {n_from}개 {arrow}[{'|'.join(h['relations'])}]{arrow} 트리플 {n_triples}건,"
             f" 다음 노드 {n_next}개{flip}{exp}")
+
+
+def apply_filter_hop(triples: List[Dict[str, Any]], base: Sequence[str],
+                     value: Optional[str]) -> Tuple[List[Dict[str, Any]], List[str], bool]:
+    """조건 홉: (남길 트리플, 조건을 만족한 출발 노드, 조건 값으로 걸렀는지).
+
+    value 가 있으면 반대쪽 끝 라벨에 값이 들어간 트리플만 남긴다. 하나도 없으면 값 없이 관계만으로 (표기 차이 대비).
+    """
+    bset = set(base)
+
+    def far_label(t):
+        return t["object"] if t["s_uri"] in bset else t["subject"]
+
+    keep = triples
+    by_value = False
+    if value:
+        from app.services.agent_query.fuzzy_match import jamo_distance
+        v = _compact(value)
+        # 포함 일치 또는 자모 거리 0.25 이하 (계획 LLM 이 '할스테트'를 '할스테드'로 적는 등 표기 차이)
+        hit = [t for t in triples if v and (v in _compact(far_label(t)) or jamo_distance(value, far_label(t)) <= 0.25)]
+        if hit:
+            keep, by_value = hit, True
+    near: List[str] = []
+    for t in keep:
+        u = t["s_uri"] if t["s_uri"] in bset else t["o_uri"]
+        if u in bset and u not in near:
+            near.append(u)
+    return keep, [u for u in base if u in near], by_value
 
 
 def frontier_names(uris: Sequence[str], limit: int = 8) -> str:

@@ -383,7 +383,8 @@ def term_matched_paths(terms: Sequence[str], kinds: List[Dict[str, Any]],
     keys = []
     for t in terms or []:
         k = _re.sub(r"[\s_\-·]", "", str(t or "")).lower()
-        if len(k) >= 2 and _re.search(r"[가-힣]", k) and k not in keys:
+        # 연도·시기('1930년대')는 값이 아니라 연도 조건(year)으로 쓴다 — 값 힌트에서 뺀다
+        if len(k) >= 2 and _re.search(r"[가-힣]", k) and not _re.search(r"\d", k) and k not in keys:
             keys.append(k)
     out: Dict[str, List[Tuple[str, str]]] = {}
     if not keys:
@@ -465,6 +466,9 @@ def build_plan_messages(
   "X와 잘 어울리는/관련된 Y" 같은 역방향 질문은 X 가 값으로 들어가는 경로의 eq 필터로 표현한다.
   질문에 시기가 있으면 그 사실의 연도를 필터에 "year" 로 붙인다 (관계 경로만, 값에 연도 문자열을 contains 로 넣지 않는다):
   "1933년" → "year": 1933, "1930년대" → "year": {{"gte": 1930, "lte": 1939}}, "1900년 이후" → "year": {{"gte": 1900}}.
+  연도는 관계 진술(예: 수상함 → 노벨 물리학상)에 붙어 있다 — **연도·시기를 나타내는 경로가 목록에 따로 없어도 된다.**
+  "연도 경로가 없다" 는 이유로 unsupported 로 하지 말고, 그 사실의 관계 경로 필터에 "year" 를 붙여라.
+  예) "1930년대에 노벨 물리학상을 받은 인물" → {{"path": <수상함 경로>, "op": "eq", "value": "노벨 물리학상", "year": {{"gte": 1930, "lte": 1939}}}}
 - return: 결과 엔티티마다 보여줄 경로 번호 (질문이 묻는 속성, 최대 {MAX_RETURNS}개, 없으면 []).
 - aggregate: 개수/최대/최소를 물으면 {{"fn": "count|max|min|count_members", "path": 경로번호, "order": "desc|asc", "limit": 1}}
   (count = 경로 값 개수로 엔티티 순위, count_members = 조건을 만족하는 엔티티 수, max/min 은 number 경로)
