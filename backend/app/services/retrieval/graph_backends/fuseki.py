@@ -1751,7 +1751,8 @@ class FusekiBackend(GraphBackend):
                     else:
                         go_class = True  # 앵커 없음 → 유형 경로
                     if go_class:
-                        kwargs["_class_terms"] = list(entities or []) + [n for n, _ in (resolved_uris or [])]
+                        kwargs["_class_terms"] = (list(entities or []) + [n for n, _ in (resolved_uris or [])]
+                                                  + list(kwargs.get("term_hint_labels") or []))
                         class_result, class_preds = await self._class_level_query(
                             kb_id, query_text, value_hints, kwargs, log_trace
                         )

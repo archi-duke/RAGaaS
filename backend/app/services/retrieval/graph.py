@@ -131,6 +131,24 @@ class GraphRetrievalStrategy(RetrievalStrategy):
             except Exception as _e:
                 log(f"[Lexicon] 사용 안 함: {_e}")
         
+        # 오탈자·유사어 (docs/design/agent/design-typo-synonym-matching.md): 원래 말 + 교정한 말 + 동의어를
+        # 그래프의 현재 값 라벨에 맞춘다 (MCP lookup_values 와 같은 규칙). 자동 확정은 엔티티로, 후보는 질의 계획 힌트로.
+        doc_query = query_analysis.get("corrected_query") or query
+        if graph_backend_type == "ontology":
+            try:
+                interp = await self._resolve_terms(kb_id, query_analysis)
+                if interp["auto"]:
+                    all_entities = list(dict.fromkeys(all_entities + interp["auto"]))
+                if interp["hints"]:
+                    kwargs["term_hint_labels"] = interp["hints"]
+                if interp["log"]:
+                    kwargs["_interpretation"] = interp["log"]
+                    log(f"[해석] {'; '.join(interp['log'])}")
+            except Exception as _e:
+                log(f"[해석] 오탈자·유사어 단계 건너뜀: {_e}")
+        if doc_query != query:
+            log(f"[해석] 오탈자 교정 질문: '{doc_query}' (문서 검색에 사용)")
+
         graph_backend_for_check = kwargs.get("graph_backend", "ontology")
         if not all_entities and graph_backend_for_check != "ontology":
             log(f"No entities found in query: {query}")
@@ -232,7 +250,7 @@ class GraphRetrievalStrategy(RetrievalStrategy):
             # 실패한 질의 계획의 "만족하는 엔티티 0개" 요약이 답변 컨텍스트에 들어가면
             # 답변 LLM 이 문서 근거가 있어도 "답할 수 없음" 으로 거절한다 → 제거
             graph_result.pop("result_summary", None)
-            results = await self._fallback_search(kb_id, query, entities, top_k, emb_service=emb_service)
+            results = await self._fallback_search(kb_id, doc_query, entities, top_k, emb_service=emb_service)
             ordered = False
             log(f"DEBUG: 📄 그래프로 답할 수 없음 → 문서 검색 {len(results)}건")
         elif not results or (len(results) == 1 and results[0].get("chunk_id") == "GRAPH_METADATA_ONLY"):
@@ -246,6 +264,13 @@ class GraphRetrievalStrategy(RetrievalStrategy):
              log(f"DEBUG: Strict Mode - Fallback search disabled. Returning empty/metadata-only results.")
 
         
+        if kwargs.get("_interpretation"):
+            tgi = graph_result.setdefault("reasoning", {}).setdefault("targeting", {})
+            tgi["interpretation"] = kwargs["_interpretation"]
+            if graph_result.get("result_summary"):
+                graph_result["result_summary"] = ("질문 표기 해석: " + "; ".join(kwargs["_interpretation"])
+                                                  + " — 이 해석으로 찾았음을 답변에 밝힐 것.\n" + graph_result["result_summary"])
+
         # 6.4 목록 질문의 재현율 보강: 질의 계획(P) 결과 엔티티가 적으면 문서 검색 결과를 그래프 근거 뒤에 붙인다.
         # 그래프의 스키마 밖 관계·표기 차이로 놓친 사실이 문서에는 있는 경우 ('원자 폭탄 개발에 기여한 사람' →
         # 그래프 결과 아인슈타인 1명, 문서에는 파인만·보어도 있음 — 2026-11-17). 그래프 근거는 앞에 그대로 둔다.
@@ -253,7 +278,7 @@ class GraphRetrievalStrategy(RetrievalStrategy):
         if (kwargs.get("graph_fallback") or "vector") == "vector" and tg0.get("mode") == "P" and results \
                 and results[0].get("chunk_id") != "GRAPH_METADATA_ONLY" \
                 and len(tg0.get("result_entities") or []) < SUPPLEMENT_MIN_ENTITIES:
-            extra = await self._fallback_search(kb_id, query, entities, top_k, emb_service=emb_service)
+            extra = await self._fallback_search(kb_id, doc_query, entities, top_k, emb_service=emb_service)
             have = {r.get("chunk_id") for r in results}
             extra = [r for r in extra if r.get("chunk_id") not in have][:max(top_k // 2, 3)]
             if extra:
@@ -394,6 +419,41 @@ class GraphRetrievalStrategy(RetrievalStrategy):
                 clickable.append(e)
         return clickable
 
+    async def _resolve_terms(self, kb_id: str, qa: Dict[str, Any]) -> Dict[str, Any]:
+        """질문의 말 → 그래프 값 라벨 (자동 확정 / 후보). 원래 말 + 교정 질문의 말 + 질문 분석의 동의어."""
+        from app.services.agent_query import catalog as _cat
+        from app.services.retrieval.entity_linking import _compact
+        base = [e for e in (qa.get("primary_entities") or []) if e]
+        variants = qa.get("term_variants") or {}
+        terms = list(dict.fromkeys(base + [v for e in base for v in variants.get(e, [])]))[:12]
+        out = {"auto": [], "hints": [], "log": []}
+        if not terms:
+            return out
+        r = await _cat.lookup_values(kb_id, terms, limit=6)
+        # 원래 말이 그래프에 그대로 있으면 동의어 해석은 힌트로만 (답변에 '해석' 을 밝히지 않는다)
+        base_found = {e for e in base if any(_compact(m["value"]) == _compact(e) for m in (r["matches"].get(e) or []))}
+        for t in terms:
+            ms, sug = r["matches"].get(t) or [], r["suggestions"].get(t) or []
+            exact = any(_compact(m["value"]) == _compact(t) for m in ms)
+            auto = [m["value"] for m in ms if not exact]
+            cands = [s["value"] for s in sug][:2]
+            for v in auto:
+                if v not in out["auto"]:
+                    out["auto"].append(v)
+            for v in auto + cands + ([m["value"] for m in ms] if exact else []):
+                if v not in out["hints"]:
+                    out["hints"].append(v)
+            src = "" if t in base else " (동의어)"
+            owner = t if t in base else next((e for e in base if t in variants.get(e, [])), None)
+            if owner in base_found:
+                continue
+            if auto and not exact:
+                out["log"].append(f"'{t}'{src} → {', '.join(dict.fromkeys(auto[:3]))}")
+            elif cands and not ms:
+                out["log"].append(f"'{t}'{src} → 후보 {', '.join(dict.fromkeys(cands))}")
+        out["hints"] = out["hints"][:10]
+        return out
+
     async def _analyze_and_extract(self, kb_id: str, query: str, llm_cfg=None, llm_model: str = "gpt-4o-mini") -> Tuple[List[str], Dict[str, Any]]:
         """질의 분석 + 엔티티 추출을 단일 LLM 호출로 병합 (기존 2회 → 1회).
 
@@ -477,6 +537,16 @@ class GraphRetrievalStrategy(RetrievalStrategy):
                                 max/min — not an attribute of one named entity
                                 ("테스트 복잡도가 high인 스타일은?", "X와 잘 어울리는 스타일 모두",
                                  "pros가 가장 많은 스타일은?", "스타일은 몇 개야?")
+        10. corrected_query: if the query has obvious typos or misspellings, the query with ONLY those fixed
+            (same language, same meaning) — e.g. "핵폭틴 개방에 기여한 사람은?" -> "핵폭탄 개발에 기여한 사람은?",
+            "슈레딩거 방정식을 제안한 사람" -> "슈뢰딩거 방정식을 제안한 사람". null if there is no typo.
+            Never use it to reinterpret the question.
+        11. term_variants: for each entity, up to 4 other names that documents in the query's language may use
+            for the SAME thing — formal name, common synonym, spelled-out abbreviation, older/newer term
+            (e.g. "핵폭탄" -> ["원자폭탄", "원자 폭탄"]; "QED" -> ["양자 전기역학"]; "중력 법칙" -> ["만유인력의 법칙"]).
+            If the entity itself is misspelled, put the corrected spelling FIRST
+            (e.g. "핵폭틴 개방" -> ["핵폭탄 개발", "원자폭탄 개발"]).
+            Only true synonyms of the same thing — not related concepts. {{}} if none.
         9. target_class: for class_query, the kind of entity being asked for as written
            (e.g. "아키텍처 스타일", "스타일", "참가자"), else null. Values or names that appear as
            CONDITIONS (e.g. "high", "microservices" in "microservices와 잘 어울리는 스타일") stay in entities.
@@ -493,7 +563,9 @@ class GraphRetrievalStrategy(RetrievalStrategy):
           "alternatives": [],
           "relation_aliases": ["스승", "master", "teacher", "mentor"],
           "intent": "attribute",
-          "target_class": null
+          "target_class": null,
+          "corrected_query": null,
+          "term_variants": {{"홍길동": []}}
         }}
         """
         try:
@@ -557,6 +629,13 @@ class GraphRetrievalStrategy(RetrievalStrategy):
                 for e in data.get("entities", [])
                 if (e.get("name") if isinstance(e, dict) else e)
             ]
+            cq_txt = data.get("corrected_query")
+            if isinstance(cq_txt, str) and cq_txt.strip() and cq_txt.strip() != query.strip():
+                analysis["corrected_query"] = cq_txt.strip()
+            tv = data.get("term_variants")
+            if isinstance(tv, dict):
+                analysis["term_variants"] = {str(k): [str(x).strip() for x in (v or []) if str(x).strip()][:4]
+                                             for k, v in tv.items() if isinstance(v, list)}
             if not analysis["relation_aliases"] and data.get("relationship_type"):
                 analysis["relation_aliases"] = [str(data["relationship_type"])]
             # 관계어와 같은 엔티티는 엔티티에서 제거 ("pros" 가 앵커 후보가 되는 것 방지)

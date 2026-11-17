@@ -48,6 +48,7 @@
 | `design/ingest/design-ingest-queue-and-observability.md` | 📐 | 적재 큐(미구현) + 관측성 (Phase A 만 구현) |
 | `design/agent/design-kb-lexicon.md` | ✅ | KB 용어 사전 (11/16) |
 | `design/agent/design-mcp-agent-query.md` | ✅ | 외부 에이전트 MCP·query_plan (11/16, ADR-004) |
+| `design/agent/design-typo-synonym-matching.md` | ✅ | 오탈자·유사어 — 자모 편집거리·라벨 임베딩 후보 + 질문 분석 교정 (11/17) |
 
 ## 가이드 (`guides/`)
 

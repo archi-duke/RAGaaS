@@ -730,9 +730,15 @@ def validate_plan(
             except (TypeError, ValueError):
                 return {"status": "reject", "message": f"{p['key']} 에 숫자가 아닌 값 {f.get('value')}"}
         elif op == "contains":
-            nf["text"] = str(f.get("value") or "").strip()
-            if not nf["text"]:
+            # 값 목록이면 '이 중 하나라도 포함' (OR). 목록을 문자열로 바꿔 찾던 버그 —
+            # 계획 LLM 이 경로 힌트의 값 둘을 한 번에 넣어 0건이 됐다 (2026-11-17)
+            raw_v = f.get("value")
+            texts = [str(x).strip() for x in (raw_v if isinstance(raw_v, list) else [raw_v]) if str(x or "").strip()]
+            if not texts:
                 return {"status": "reject", "message": f"{p['key']} contains 값 없음"}
+            nf["text"] = texts[0]
+            if len(texts) > 1:
+                nf["texts"] = list(dict.fromkeys(texts))[:8]
         elif strict and op == "in" and isinstance(f.get("value"), list) and len(f["value"]) > 1:
             # 외부 계획의 in: 목록 밖 값은 빼고 나머지로 평가 (하나라도 맞으면). GoJIRA style-score 보고(2026-11-16):
             # ["small", "medium_or_lower"] 에서 목록 밖 값 하나 때문에 small 매칭까지 사라지던 문제
@@ -855,7 +861,7 @@ def plan_summary(plan: Dict[str, Any]) -> Dict[str, Any]:
             sym = _NUM_OPS.get(op, "=" if op == "eq" else op)
             return f"{k} {sym} {', '.join(f'{n:g}' for n in f['numbers'])}"
         if "text" in f:
-            return f"{k} contains '{f['text']}'"
+            return f"{k} contains " + " | ".join(f"'{t}'" for t in (f.get("texts") or [f["text"]]))
         return f"{k} {op}"
     agg = plan.get("aggregate")
     agg_txt = None
@@ -921,8 +927,9 @@ def _filter_condition(f: Dict[str, Any], v: str, tag: str) -> str:
         return f"OPTIONAL {{ {v} rdfs:label {lbl}_ }} BIND(COALESCE({lbl}_, STR({v})) AS {lbl}) FILTER({conds})"
     if "text" in f:
         lbl = f"?tl{tag}"
+        conds = " || ".join(f"CONTAINS(LCASE(STR({lbl})), LCASE({_sparql_str(t)}))" for t in (f.get("texts") or [f["text"]]))
         return (f"OPTIONAL {{ {v} rdfs:label {lbl}_ }} BIND(COALESCE({lbl}_, STR({v})) AS {lbl}) "
-                f"FILTER(CONTAINS(LCASE(STR({lbl})), LCASE({_sparql_str(f['text'])})))")
+                f"FILTER({conds})")
     return ""
 
 

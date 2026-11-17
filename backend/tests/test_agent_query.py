@@ -281,3 +281,30 @@ def test_term_matched_paths_promotes_tail_paths():
     msg = cq.build_plan_messages("원자 폭탄 개발에 기여한 사람은?", kinds, promoted, None, "", hits)[1]["content"]
     assert "0. 자문 = '원자폭탄 개발'" in msg and "1. 참여 = '전시 원자폭탄 개발 계획'" in msg
     assert cq.term_matched_paths(["a"], kinds, cats) == {}   # 1글자·영문만은 힌트 안 만듦
+
+
+def test_fuzzy_match_jamo_typos_and_auto_rule():
+    from app.services.agent_query import fuzzy_match as fm
+    labels = ["슈뢰딩거 방정식", "디랙 방정식", "하이젠베르크", "원자폭탄 개발", "불확정성 원리",
+              "확률 해석·불확정성 원리·상보성 원리를 거침", "광전 효과"]
+    top = lambda t: fm.fuzzy_candidates(t, labels)
+    assert top("슈레딩거 방정식")[0]["label"] == "슈뢰딩거 방정식" and top("슈레딩거 방정식")[0]["auto"]
+    assert top("하이젠베르그")[0]["label"] == "하이젠베르크"
+    assert top("광전효과")[0] == {"label": "광전 효과", "distance": 0.0, "via": "fuzzy", "auto": True}
+    # 긴 설명형 라벨은 부분 일치여도 자동 확정하지 않는다
+    long_ = [c for c in top("불확정성원리") if c["label"].startswith("확률")]
+    assert long_ and not long_[0]["auto"]
+    # 오타가 큰 말은 후보일 뿐 자동 확정 안 함
+    c = top("핵폭틴 개방")
+    assert c and c[0]["label"] == "원자폭탄 개발" and not c[0]["auto"]
+    assert fm.fuzzy_candidates("QED", labels) == []      # 한글 없는 말은 자모 대상 아님
+
+
+def test_contains_accepts_value_list_as_or():
+    kinds, cats = _catalog()
+    f = [{"path": "has_positive_effect_on", "op": "contains", "value": ["변경", "확장"]}]
+    r = cq.validate_plan({"kind": "Style", "filters": f}, kinds, cats, strict=True)
+    assert r["status"] == "ok" and r["plan"]["filters"][0]["texts"] == ["변경", "확장"]
+    sp = cq.compile_member_query(r["plan"])
+    assert 'CONTAINS(LCASE(STR(?tlf0)), LCASE("변경")) || CONTAINS(LCASE(STR(?tlf0)), LCASE("확장"))' in sp
+    assert "['" not in sp
