@@ -56,6 +56,9 @@ const DEFAULT_PARAMS: Record<StageType, Record<string, any>> = {
     graph: {
         max_hops: 6,     // 다단계 체인의 최대 홉 — 질문이 요구하는 홉 수로 가되 이 값을 넘지 않음
         top_k: 10,
+        resolve_terms: true,      // 오탈자·유사어 해석 (질문 표기 → 그래프 값). 끄면 문항당 약 6초 빠름
+        list_supplement: true,    // 목록 질문의 그래프 결과가 적으면(2개 미만) 문서 검색으로 보강
+        graph_fallback: 'vector', // 그래프로 못 찾으면: vector(문서 검색) | none(빈 결과 — 그래프만의 성능 측정)
         use_schema_mode: false,
         use_dynamic_schema: true,  // 실제 술어 목록을 LLM 에 주어 지어낸 술어(prop:장점 등) 방지
         merge_mode: 'union',
@@ -693,6 +696,34 @@ export default function PipelineBuilder({
                             </div>
                             {/* 슬라이더 옆: 2x2 체크박스 → Inverse Search → QueryLLM */}
                             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '0.3rem', paddingBottom: 0, minWidth: 0 }}>
+                                {/* 오탈자·유사어 | 목록 보강 */}
+                                <div style={{ display: 'flex', flexDirection: 'row', gap: '0.3rem', alignItems: 'center' }}>
+                                    <ParamCheckbox
+                                        label="Typo·Synonym"
+                                        checked={params.resolve_terms ?? true}
+                                        onChange={(v) => handleParamChange(index, 'resolve_terms', v)}
+                                    />
+                                    <ParamCheckbox
+                                        label="List Supplement"
+                                        checked={params.list_supplement ?? true}
+                                        onChange={(v) => handleParamChange(index, 'list_supplement', v)}
+                                        disabled={(params.graph_fallback ?? 'vector') === 'none'}
+                                    />
+                                </div>
+                                {/* 그래프로 못 찾으면 */}
+                                <div style={{ display: 'flex', alignItems: 'center' }}>
+                                    <ParamSelect
+                                        label="No Graph Result"
+                                        layout="inline"
+                                        minWidth="90px"
+                                        value={params.graph_fallback ?? 'vector'}
+                                        options={[
+                                            { value: 'vector', label: 'Doc Search' },
+                                            { value: 'none', label: 'Empty' }
+                                        ]}
+                                        onChange={(v) => handleParamChange(index, 'graph_fallback', v)}
+                                    />
+                                </div>
                                 {/* Dynamic Schema (승격 전 KB 만) */}
                                 {!isOntologyPromoted && (
                                     <div style={{ display: 'flex', flexDirection: 'row', gap: '0.3rem', alignItems: 'center' }}>

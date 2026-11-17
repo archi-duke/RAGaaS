@@ -364,6 +364,10 @@ class PipelineExecutor:
             enable_graph_search=True,
             graph_hops=hops,
             max_hops=max_hops,
+            # 오늘 추가한 그래프 옵션 (2026-11-17)
+            resolve_terms=params.get("resolve_terms", True),          # 오탈자·유사어 해석
+            list_supplement=params.get("list_supplement", True),      # 목록 질문 결과가 적으면 문서 검색 보강
+            graph_fallback=params.get("graph_fallback", "vector"),    # 그래프로 못 찾으면: vector(문서 검색) | none(빈 결과)
             graph_backend=ctx.graph_backend,
             # 역방향 탐색은 옵션에서 뺐다 — 내부 기본값 (Neo4j·LLM SPARQL 경로만 사용, 2026-11-17)
             enable_inverse_search=True,

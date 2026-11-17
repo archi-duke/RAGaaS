@@ -1080,10 +1080,19 @@ class FusekiBackend(GraphBackend):
                 triples += cq.parse_hop(self._bindings(kb_id, q), h["no"])
             if not triples and not h.get("both"):
                 d2 = "in" if h["direction"] == "out" else "out"
-                q2 = cq.build_hop_query(frontier, h["relations"], d2, tag)
-                t2 = cq.parse_hop(self._bindings(kb_id, q2), h["no"])
-                if t2:
-                    return t2, [q2], {**h, "direction": d2}, True
+                if h.get("lineage"):
+                    # 계보 관계: 계획 방향 0건 → 양방향으로 넓힘 (추출 방향이 섞인 데이터 대비)
+                    q2 = cq.build_hop_query(frontier, h["relations"], d2, tag)
+                    t2 = cq.parse_hop(self._bindings(kb_id, q2), h["no"])
+                    if t2:
+                        return t2, qs + [q2], {**h, "both": True}, False
+                elif not h.get("same_class"):
+                    # 클래스가 다른 관계(제안함 등)는 뒤집어도 뜻이 섞이지 않는다 → 반대 방향 재시도
+                    q2 = cq.build_hop_query(frontier, h["relations"], d2, tag)
+                    t2 = cq.parse_hop(self._bindings(kb_id, q2), h["no"])
+                    if t2:
+                        return t2, [q2], {**h, "direction": d2}, True
+                # 같은 클래스 인물 관계(지도교수_of·영향_줌)는 방향이 곧 의미 — 재시도하지 않는다
             return triples, qs, h, False
 
         async def repick(frontier: List[str], h: Dict[str, Any]):
@@ -1153,6 +1162,8 @@ class FusekiBackend(GraphBackend):
                                  "equivalents": [x for x in frontier if x != start_uri]}]
 
         all_triples: List[Dict[str, Any]] = []
+        hop_runs: List[Tuple[List[str], List[Dict[str, Any]]]] = []   # 가지치기용 (홉 출발 노드, 트리플)
+        final_triples: List[Dict[str, Any]] = []
         sparqls: List[str] = []
         steps: List[str] = []
         visited = set(frontier)
@@ -1189,6 +1200,10 @@ class FusekiBackend(GraphBackend):
             steps.append(label + (f" | 다음: {cq.frontier_names(nxt)}" if nxt else ""))
             log_trace(f"[Fuseki] Chain {steps[-1]}")
             all_triples.extend(triples)
+            if h.get("final"):
+                final_triples.extend(triples)
+            elif triples:
+                hop_runs.append((list(base), triples))
             if not h.get("final"):
                 if not triples:
                     break
@@ -1203,6 +1218,14 @@ class FusekiBackend(GraphBackend):
             return None
         if reached < len(hops):
             targeting["warnings"] = [f"체인이 홉{reached} 까지만 이어짐 (전체 {len(hops)}홉) — 답변은 찾은 범위의 근거로 제한"]
+        elif len(hop_runs) >= 2:
+            # 끝까지 이어진 경로만 근거로 (막다른 갈래는 답변을 헷갈리게 하고 청크 자리를 차지한다)
+            kept, removed = cq.prune_dead_branches(hop_runs, lambda u: self._equivalent_uris(kb_id, u))
+            if removed:
+                all_triples = [t for ts in kept for t in ts] + final_triples
+                steps.append(f"막다른 갈래 가지치기: 마지막 홉까지 이어지지 않는 트리플 {removed}건 제외")
+                log_trace(f"[Fuseki] Chain {steps[-1]}")
+        targeting["hops_reached"] = reached
         targeting.update({"selected_paths": steps,
                           "reason": f"출발 '{plan['start']}' → {len(hops)}홉 계획, {reached}홉 도달"})
         reasoning["targeting"] = targeting
@@ -1768,16 +1791,18 @@ class FusekiBackend(GraphBackend):
                 # 결정적 경로(A/B/P/H/E)가 모두 근거를 못 찾았다. 기본 정책은 LLM SPARQL 생성(C) 대신
                 # 문서 검색(V)으로 넘기는 것 — C 는 문항당 40초 이상 걸리고 정답률이 낮았다
                 # (docs/design/graph/design-graph-multihop-chain.md §7.9). graph_fallback="llm_sparql" 이면 기존 C.
-                if not skip_llm_generation and (kwargs.get("graph_fallback") or "vector") == "vector":
+                fb_mode = kwargs.get("graph_fallback") or "vector"
+                if not skip_llm_generation and fb_mode in ("vector", "none"):
                     rs = kwargs.setdefault("_reasoning", {})
                     prev = (rs.get("targeting") or {}).get("reason") or chain_reason
                     why = "그래프의 결정적 경로로 표현할 수 없거나 근거 없음"
-                    rs["targeting"] = {**(rs.get("targeting") or {}), "mode": "V",
-                                       "reason": f"{why}" + (f" ({prev})" if prev else "") + " → 문서 검색으로 답함"}
+                    tail = " → 문서 검색으로 답함" if fb_mode == "vector" else " → 빈 결과 (설정: 그래프로 못 찾으면 문서 검색 안 함)"
+                    rs["targeting"] = {**(rs.get("targeting") or {}), "mode": "V" if fb_mode == "vector" else "none",
+                                       "reason": f"{why}" + (f" ({prev})" if prev else "") + tail}
                     rs.setdefault("warnings", [])
-                    log_trace("[Fuseki] 결정적 경로 근거 없음 → LLM SPARQL 생성(C) 대신 문서 검색(V)")
+                    log_trace(f"[Fuseki] 결정적 경로 근거 없음 → {'문서 검색(V)' if fb_mode == 'vector' else '빈 결과'}")
                     return {"chunk_ids": [], "sparql_query": "", "triples": [], "found_entities": [],
-                            "fallback": "vector", "reasoning": rs, "trace_logs": trace_logs}
+                            "fallback": fb_mode, "reasoning": rs, "trace_logs": trace_logs}
                 if not skip_llm_generation:
                     log_trace(f"[Fuseki] Calling LLM SPARQL Generator (skip_llm_generation={skip_llm_generation})")
 

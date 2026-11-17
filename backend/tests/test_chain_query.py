@@ -75,12 +75,14 @@ LINEAGE_VOCAB = cq.build_vocab(
 
 
 def test_lineage_relation_is_bidirectional_but_person_relation_is_not():
+    # 2026-11-17: 계보 관계는 계획 방향을 먼저 조회하고 0건일 때만 양방향(both)으로 넓힌다 (fuseki run_hop).
+    # 인물 관계(지도교수_of)는 같은 클래스라 반대 방향 재시도도 하지 않는다.
     plan, _ = cq.validate_plan({"start": "광양자 가설", "hops": [
         {"relations": ["계승_발전"], "direction": "out"}, {"relations": ["지도교수_of"], "direction": "in"}]},
         LINEAGE_VOCAB)
-    assert plan["hops"][0]["both"] is True
-    assert plan["hops"][1]["both"] is False
-    assert "↔" in cq.hop_label({**plan["hops"][0], "no": 1}, 1, 2, 2, False)
+    assert plan["hops"][0]["lineage"] is True and not plan["hops"][0].get("both")
+    assert plan["hops"][1]["lineage"] is False
+    assert "↔" in cq.hop_label({**plan["hops"][0], "both": True, "no": 1}, 1, 2, 2, False)
 
 
 def test_next_frontier_takes_far_end_and_skips_visited():

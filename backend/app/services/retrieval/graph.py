@@ -133,8 +133,8 @@ class GraphRetrievalStrategy(RetrievalStrategy):
         
         # 오탈자·유사어 (docs/design/agent/design-typo-synonym-matching.md): 원래 말 + 교정한 말 + 동의어를
         # 그래프의 현재 값 라벨에 맞춘다 (MCP lookup_values 와 같은 규칙). 자동 확정은 엔티티로, 후보는 질의 계획 힌트로.
-        doc_query = query_analysis.get("corrected_query") or query
-        if graph_backend_type == "ontology":
+        doc_query = (query_analysis.get("corrected_query") if kwargs.get("resolve_terms", True) else None) or query
+        if graph_backend_type == "ontology" and kwargs.get("resolve_terms", True):
             try:
                 interp = await self._resolve_terms(kb_id, query_analysis)
                 if interp["auto"]:
@@ -220,8 +220,15 @@ class GraphRetrievalStrategy(RetrievalStrategy):
         results = []
         ordered = graph_result.get("chunk_order") == "linkage"
         if chunk_ids:
+            # 깊은 체인은 홉마다 근거가 필요하다 — Top K 10 으로는 6홉에서 홉당 1~2개뿐 (2026-11-17)
+            tgh = ((graph_result.get("reasoning") or {}).get("targeting") or {})
+            k_eff = top_k
+            if tgh.get("mode") == "H" and int(tgh.get("hops_reached") or 0) > 2:
+                k_eff = min(max(top_k, top_k + 3 * (int(tgh["hops_reached"]) - 2)), 24)
+                if k_eff != top_k:
+                    log(f"DEBUG: 체인 {tgh['hops_reached']}홉 → 근거 청크 {top_k} → {k_eff}")
             results = await self._fetch_chunks(
-                kb_id, chunk_ids, query, top_k, emb_service=emb_service, ordered=ordered
+                kb_id, chunk_ids, query, k_eff, emb_service=emb_service, ordered=ordered
             )
         
         # 6. Graph-Guided Fallback: If SPARQL found entities but no chunks, or if no results at all
@@ -275,7 +282,8 @@ class GraphRetrievalStrategy(RetrievalStrategy):
         # 그래프의 스키마 밖 관계·표기 차이로 놓친 사실이 문서에는 있는 경우 ('원자 폭탄 개발에 기여한 사람' →
         # 그래프 결과 아인슈타인 1명, 문서에는 파인만·보어도 있음 — 2026-11-17). 그래프 근거는 앞에 그대로 둔다.
         tg0 = ((graph_result.get("reasoning") or {}).get("targeting") or {})
-        if (kwargs.get("graph_fallback") or "vector") == "vector" and tg0.get("mode") == "P" and results \
+        if kwargs.get("list_supplement", True) and (kwargs.get("graph_fallback") or "vector") == "vector" \
+                and tg0.get("mode") == "P" and results \
                 and results[0].get("chunk_id") != "GRAPH_METADATA_ONLY" \
                 and len(tg0.get("result_entities") or []) < SUPPLEMENT_MIN_ENTITIES:
             extra = await self._fallback_search(kb_id, doc_query, entities, top_k, emb_service=emb_service)

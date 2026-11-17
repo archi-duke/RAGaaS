@@ -320,3 +320,30 @@ def test_resolve_max_hops_and_plan_truncation():
     data = {"chainable": True, "start": "A", "hops": [{"relations": ["영향_줌"], "direction": "out", "expect": ""}] * 5}
     plan, notes = chq.validate_plan(data, vocab, max_hops=3)
     assert len(plan["hops"]) == 3 and any("최대 홉 설정 3" in n for n in notes)
+
+
+def test_prune_dead_branches_keeps_only_complete_paths():
+    from app.services.retrieval import chain_query as chq
+    T = lambda s, o: {"s_uri": f"u:{s}", "o_uri": f"u:{o}"}
+    hop_runs = [
+        (["u:맥스웰"], [T("맥스웰", "아인슈타인"), T("맥스웰", "볼츠만")]),
+        (["u:아인슈타인", "u:볼츠만"], [T("아인슈타인", "광양자"), T("볼츠만", "엔트로피공식")]),
+        (["u:광양자", "u:엔트로피공식"], [T("광양자", "물질파")]),          # 엔트로피공식 은 막다른 갈래
+    ]
+    kept, removed = chq.prune_dead_branches(hop_runs, lambda u: [u])
+    assert removed == 2
+    assert kept[0] == [T("맥스웰", "아인슈타인")] and kept[1] == [T("아인슈타인", "광양자")]
+
+
+def test_hop_direction_flags():
+    from app.services.retrieval import chain_query as chq
+    vocab = [{"name": "지도교수_of", "domain": "Person", "range": "Person", "description": "", "count": 9},
+             {"name": "계승_발전", "domain": "TheoryOrConcept", "range": "TheoryOrConcept", "description": "", "count": 20},
+             {"name": "제안함", "domain": "Person", "range": "TheoryOrConcept", "description": "", "count": 50}]
+    plan, _ = chq.validate_plan({"chainable": True, "start": "A", "hops": [
+        {"relations": ["지도교수_of"], "direction": "in"}, {"relations": ["계승_발전"], "direction": "out"},
+        {"relations": ["제안함"], "direction": "out"}]}, vocab)
+    h1, h2, h3 = plan["hops"]
+    assert h1["same_class"] and not h1["lineage"]          # 사제: 반대 방향 재시도 안 함
+    assert h2["lineage"] and not h2.get("both")             # 계보: 계획 방향 먼저 (0건이면 양방향)
+    assert not h3["same_class"] and not h3["lineage"]       # 제안함: 재시도 허용
