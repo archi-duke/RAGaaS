@@ -75,7 +75,11 @@ async def run_tool(kb_id: str, name: str, args: Dict[str, Any]) -> Any:
     return {"error": f"unknown tool {name}"}
 
 
-async def quota_pct(cfg) -> float:
+async def quota_pct(cfg, enabled: bool = False):
+    """코딩 플랜 5시간 한도(%). Standard(종량제) 키는 잔액 차감이라 해당 없음 → enabled=False 면 None.
+    코딩 플랜 키를 이 스크립트(직접 API 호출)에 쓰는 것은 Z.ai 약관 위반이다 (2026-11-17)."""
+    if not enabled:
+        return None
     import httpx
     async with httpx.AsyncClient(timeout=20) as c:
         d = (await c.get("https://api.z.ai/api/monitor/usage/quota/limit", headers={"Authorization": cfg["api_key"]})).json()
@@ -143,6 +147,7 @@ async def main():
     ap.add_argument("--model", default="glm-5.2")
     ap.add_argument("--par", type=int, default=3)
     ap.add_argument("--stop-pct", type=float, default=90.0)
+    ap.add_argument("--quota-guard", action="store_true", help="코딩 플랜 한도 조회로 중단 (Standard 키는 끔)")
     a = ap.parse_args()
     from app.core.database import init_db
     await init_db()
@@ -157,7 +162,7 @@ async def main():
               "- 답변은 한국어로 1~3문장, 핵심 이름·연도·용어를 포함. 그래프·원문에 없으면 '지식 그래프에서 찾지 못했다'고 답한다.\n\n"
               "# 캐시된 스키마 (describe_kb, compact)\n" + json.dumps(schema, ensure_ascii=False))
     qs = json.load(open(a.questions))
-    print(f"질문 {len(qs)}개, 모델 {a.model}, 시작 5시간 한도 {await quota_pct(cfg)}%", flush=True)
+    print(f"질문 {len(qs)}개, 모델 {a.model}, 시작 5시간 한도 {await quota_pct(cfg, a.quota_guard)}", flush=True)
     results: List[Dict[str, Any]] = []
     sem = asyncio.Semaphore(a.par)
 
@@ -172,8 +177,8 @@ async def main():
             json.dump(sorted(results, key=lambda x: x["id"]), open(a.out, "w"), ensure_ascii=False, indent=1)
 
     for i in range(0, len(qs), 10):
-        pct = await quota_pct(cfg)
-        if pct >= a.stop_pct:
+        pct = await quota_pct(cfg, a.quota_guard)
+        if pct is not None and pct >= a.stop_pct:
             print(f"5시간 한도 {pct}% — 중단", flush=True)
             break
         await asyncio.gather(*(one(q) for q in qs[i:i + 10]))
@@ -181,7 +186,7 @@ async def main():
     tot_c = sum(r["completion_tokens"] for r in results)
     n = max(len(results), 1)
     print(f"\n완료 {len(results)}문항 | 입력 {tot_p:,} 출력 {tot_c:,} | 문항당 {(tot_p + tot_c) / n:,.0f} 토큰 | "
-          f"끝 5시간 한도 {await quota_pct(cfg)}%", flush=True)
+          f"토큰 합계 {tot_p + tot_c:,} (Standard 키 — 비용은 Z.ai 결제 페이지에서 확인)", flush=True)
 
 
 if __name__ == "__main__":

@@ -19,7 +19,7 @@ HERE = os.path.dirname(os.path.abspath(__file__)) + "/"
 D = os.path.dirname(HERE.rstrip("/")) + "/"   # 데이터셋 폴더 (facts.json, questions.json)
 # 없는 사실(negative) 문항: '찾지 못했다', '받은 적이 없다' 도 부정 답변 (2026-11-17 채점 수정)
 NEG_PAT = re.compile(r"(없습니다|없다|포함되어 있지 않|찾을 수 없|찾지 못|언급되어 있지 않|알 수 없|정보가 없|"
-                     r"받은 적이 없|받지 못|기록이 없|couldn't find|not)", re.I)
+                     r"받은 적이 없|받지 못|받지 않았|기록이 없|couldn't find|not)", re.I)
 # 정답 별칭 (인물의 성·짧은 이름) — answer_aliases.json
 try:
     ALIASES = {k: v for k, v in json.load(open(D + "answer_aliases.json", encoding="utf-8")).items() if not k.startswith("_")}
@@ -63,7 +63,7 @@ def main(kb_id, label, only=None):
     docs = get(BASE + kb_id + "/documents")
     docs = docs if isinstance(docs, list) else docs.get("documents", [])
     id_by_name = {d["filename"]: d["id"] for d in docs}
-    # AGENTIC=auto|always 이면 KB 파이프라인 앞에 에이전틱 필터를 붙여 요청 (docs/design-agentic-filter.md)
+    # AGENTIC=auto|always 이면 KB 파이프라인 앞에 에이전틱 필터를 붙여 요청 (docs/design/graph/design-agentic-filter.md)
     agentic = os.getenv("AGENTIC")
     pipeline = None
     if agentic:

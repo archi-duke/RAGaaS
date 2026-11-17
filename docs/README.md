@@ -42,7 +42,7 @@
 | `design/schema/design-schema-mismatch.md` | ✅ | 동치 확장 + KB 매핑 규칙 (11/14) |
 | `design/schema/design-schema-editor.md` | ✅ | 스키마 편집기·AI 추천·데이터 검증 (11/16) |
 | `design/schema/design-year-attributes.md` | ✅ | 진술 연도 + query_plan 연도 조건 (11/17, PR #64) |
-| `design/schema/design-structured-json-yaml-ontology.md` | ✅ | JSON/YAML 결정론적 매핑 — main 은 Phase 1+2 만 (Phase 3 미반영) |
+| `design/schema/design-structured-json-yaml-ontology.md` | ✅ | JSON/YAML 결정론적 매핑 — Phase 1~3·문서 간 엔티티 동일성 (PR #39) |
 | `design/schema/design-ingest-entity-typing-b.md` | ✅ | 적재 시 엔티티 타입 (B안, opt-in, 기본 off) |
 | `design/schema/design-ontology-schema-extraction-v2.md` | 📖 | 승격 스키마 추출 A안 (07/19) — 11/15 시드 스키마 승격으로 대체 |
 | `design/ingest/design-ingest-queue-and-observability.md` | 📐 | 적재 큐(미구현) + 관측성 (Phase A 만 구현) |

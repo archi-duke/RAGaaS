@@ -23,4 +23,6 @@
 
 ## D4. C안 Phase 3 (JSON Schema → TBox) · 문서 간 엔티티 동일성
 
-- 커밋 92ccd9e·65e1e93 — **main 에 없음** (`feat/structured-json-yaml-ontology` 브랜치에만). PR #39 는 Phase 1+2 로만 머지됐다.
+- JSON Schema 를 감지하면 클래스·속성·domain/range 를 결정적으로 TBox 에 반영 (`graph2ontology/json_schema_converter.py`), 스키마가 없으면 인스턴스로 유도 → A안 승격으로 확정. SHACL 은 후속.
+- 문서 간 같은 엔티티 해소 (`ingest_service/app/core/entity_resolver.py`).
+- PR #39 에 함께 squash 머지됨 (head 65e1e93) — main 에 있다. (11/17 '미반영' 으로 잘못 기록했다가 정정)

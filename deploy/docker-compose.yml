@@ -1,0 +1,82 @@
+# RAGaaS 배포 compose — platform-app(NETRIX) MF 연계 방식 (GoJIRA deploy 관례)
+# ─────────────────────────────────────────────────────────────────────────────
+# - 인프라(Milvus/Fuseki/Neo4j/Mongo/Redis)는 이 compose 에 없음 — shared-infra
+#   스택(별도 호스트, docs: GoJIRA/docs/shared-infra-handoff.md)을 deploy/.env 로 참조.
+# - 호스트 포트 미노출(expose 전용) — GoJIRA gateway 가 /ragaas/, /ragaas/api/ 로 프록시.
+#   gateway 는 shared-net 에서 container_name(ragaas-frontend/ragaas-backend)으로 해석.
+# - `name: ragaas` 고정 — 구 스택의 named volume(ragaas_backend-data, SQLite/업로드
+#   메타)을 그대로 재사용하기 위함.
+name: ragaas
+
+services:
+  frontend:
+    container_name: ragaas-frontend
+    build:
+      context: ..
+      dockerfile: deploy/images/frontend/Dockerfile
+    image: ragaas/frontend:latest
+    restart: unless-stopped
+    expose:
+      - "80"
+    networks: [default, shared-net]
+    depends_on:
+      - backend
+      - ingest-service
+
+  backend:
+    container_name: ragaas-backend
+    build:
+      context: ..
+      dockerfile: deploy/images/backend/Dockerfile
+    image: ragaas/backend:latest
+    restart: unless-stopped
+    expose:
+      - "8000"
+    networks: [default, shared-net]
+    environment:
+      - MILVUS_HOST=${MILVUS_HOST:?required}
+      - MILVUS_PORT=${MILVUS_PORT:?required}
+      - FUSEKI_URL=${FUSEKI_URL:?required}
+      - NEO4J_URI=${NEO4J_URI:?required}
+      - NEO4J_USER=${NEO4J_USER:?required}
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:?required}
+      - MONGO_URI=${MONGO_URI:?required}
+      - MONGO_DB=${MONGO_DB:-ragaas}
+      - INGEST_SERVICE_URL=http://ingest-service:8001
+      - SHARED_STORAGE_PATH=/data/uploads
+      - CALLBACK_BASE_URL=http://backend:8000
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
+    volumes:
+      - ../data/uploads:/data/uploads
+      - backend-data:/app/data
+
+  ingest-service:
+    container_name: ragaas-ingest
+    build:
+      context: ..
+      dockerfile: deploy/images/ingest/Dockerfile
+    image: ragaas/ingest:latest
+    restart: unless-stopped
+    expose:
+      - "8001"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - REDIS_URL=${REDIS_URL:?required}
+      - MILVUS_HOST=${MILVUS_HOST:?required}
+      - MILVUS_PORT=${MILVUS_PORT:?required}
+      - NEO4J_URI=${NEO4J_URI:?required}
+      - NEO4J_USER=${NEO4J_USER:?required}
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:?required}
+      - FUSEKI_URL=${FUSEKI_URL:?required}
+      - SHARED_STORAGE_PATH=/data/uploads
+      - MAIN_BACKEND_URL=http://backend:8000
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
+    volumes:
+      - ../data/uploads:/data/uploads
+
+volumes:
+  backend-data:
+
+networks:
+  shared-net:
+    external: true
