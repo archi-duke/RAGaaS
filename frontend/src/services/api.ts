@@ -188,7 +188,10 @@ export const schemaApi = {
         api.get(`knowledge-bases/${kbId}/schema/spec/mismatches`, { params: { status, class_name: className } }),
     propertyTriples: (kbId: string, property: string, limit = 300) =>
         api.get(`knowledge-bases/${kbId}/schema/spec/triples`, { params: { property, limit } }),
-    editTriples: (kbId: string, body: { action: 'move' | 'delete'; triples: { subject: string; predicate: string; object: string }[];
+    directionAuditStart: (kbId: string, properties?: string[]) =>
+        api.post(`knowledge-bases/${kbId}/schema/direction-audit`, { properties }),
+    directionAudit: (kbId: string) => api.get(`knowledge-bases/${kbId}/schema/direction-audit`),
+    editTriples: (kbId: string, body: { action: 'move' | 'delete' | 'flip'; triples: { subject: string; predicate: string; object: string }[];
         target_property?: string; new_property?: { name: string; domain?: string; range?: string; description?: string } }) =>
         api.post(`knowledge-bases/${kbId}/schema/spec/triples/edit`, body),
     createClass: (kbId: string, name: string, description: string, members: string[]) =>
@@ -231,6 +234,9 @@ export const lexiconApi = {
         api.post(`knowledge-bases/${kbId}/lexicon/broader`, body),
     review: (kbId: string) => api.get(`knowledge-bases/${kbId}/lexicon/review`),
     duplicates: (kbId: string) => api.get(`knowledge-bases/${kbId}/lexicon/duplicates`),
+    duplicateReview: (kbId: string) => api.get(`knowledge-bases/${kbId}/lexicon/duplicates/review`),
+    duplicateReviewStart: (kbId: string) => api.post(`knowledge-bases/${kbId}/lexicon/duplicates/review`),
+    entry: (kbId: string, q: string) => api.get(`knowledge-bases/${kbId}/lexicon`, { params: { q, limit: 50 } }),
 };
 
 export const retrievalApi = {

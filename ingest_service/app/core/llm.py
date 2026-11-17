@@ -12,9 +12,56 @@ RAGaaS 의 모든 LLM 챗 호출은 이 모듈의 achat()/chat() 한 경로로 �
   호출자·사용자에게 그대로 전달한다. 임의 모델 기본값이나 조용한 빈 결과 반환은 하지 않는다.
   (임의 fallback 은 착오로 인한 잘못된 결과를 유발할 수 있음)
 """
+import asyncio
+import os
+import random
+import threading
+import time
 from typing import Any, Optional, List, Dict
+from urllib.parse import urlparse
 
 import httpx
+
+# 공급자별 동시 호출 제한 + 429 재시도 (backend core/llm 과 같은 정책, PR #60).
+# Z.ai(GLM)는 같은 키로 동시 8개면 429 — 재추출은 문서 2 × 청크 4 = 8 동시라 적재 모델을 GLM 으로 바꾸면 걸린다.
+LLM_MAX_CONCURRENCY = int(os.getenv("LLM_MAX_CONCURRENCY", "4"))
+LLM_RATE_RETRIES = int(os.getenv("LLM_RATE_RETRIES", "3"))
+_async_sems: Dict[tuple, asyncio.Semaphore] = {}
+_sync_sems: Dict[str, threading.BoundedSemaphore] = {}
+_sync_lock = threading.Lock()
+
+
+def _host(url: str) -> str:
+    try:
+        return urlparse(url).netloc or url
+    except Exception:
+        return url
+
+
+def _async_sem(url: str) -> asyncio.Semaphore:
+    key = (_host(url), id(asyncio.get_running_loop()))
+    sem = _async_sems.get(key)
+    if sem is None:
+        sem = _async_sems[key] = asyncio.Semaphore(LLM_MAX_CONCURRENCY)
+    return sem
+
+
+def _sync_sem(url: str) -> threading.BoundedSemaphore:
+    h = _host(url)
+    with _sync_lock:
+        if h not in _sync_sems:
+            _sync_sems[h] = threading.BoundedSemaphore(max(1, LLM_MAX_CONCURRENCY // 2))
+        return _sync_sems[h]
+
+
+def _retry_wait(resp: "httpx.Response", attempt: int) -> float:
+    ra = resp.headers.get("retry-after")
+    try:
+        if ra:
+            return min(10.0, float(ra))
+    except ValueError:
+        pass
+    return min(8.0, (2 ** attempt) * 0.8) + random.uniform(0, 0.4)
 
 DEFAULT_TIMEOUT = 120.0
 
@@ -153,12 +200,18 @@ async def achat(
     payload = _build_payload(cfg, messages, model, temperature, max_tokens, response_format, extra_body)
     url = chat_endpoint((cfg or {}).get("base_url"))
     headers = build_headers((cfg or {}).get("api_key"), (cfg or {}).get("extra_headers"))
-    try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.post(url, headers=headers, json=payload)
-    except httpx.RequestError as e:
-        raise LLMError(f"LLM 게이트웨이 연결 실패 (endpoint={url}): {e}") from e
-    return _handle_response(resp.status_code, resp.text, url, payload["model"])
+    sem = _async_sem(url)
+    for attempt in range(LLM_RATE_RETRIES + 1):
+        try:
+            async with sem:
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    resp = await client.post(url, headers=headers, json=payload)
+        except httpx.RequestError as e:
+            raise LLMError(f"LLM 게이트웨이 연결 실패 (endpoint={url}): {e}") from e
+        if resp.status_code == 429 and attempt < LLM_RATE_RETRIES:
+            await asyncio.sleep(_retry_wait(resp, attempt))
+            continue
+        return _handle_response(resp.status_code, resp.text, url, payload["model"])
 
 
 def chat(
@@ -176,9 +229,15 @@ def chat(
     payload = _build_payload(cfg, messages, model, temperature, max_tokens, response_format, extra_body)
     url = chat_endpoint((cfg or {}).get("base_url"))
     headers = build_headers((cfg or {}).get("api_key"), (cfg or {}).get("extra_headers"))
-    try:
-        with httpx.Client(timeout=timeout) as client:
-            resp = client.post(url, headers=headers, json=payload)
-    except httpx.RequestError as e:
-        raise LLMError(f"LLM 게이트웨이 연결 실패 (endpoint={url}): {e}") from e
-    return _handle_response(resp.status_code, resp.text, url, payload["model"])
+    sem = _sync_sem(url)
+    for attempt in range(LLM_RATE_RETRIES + 1):
+        try:
+            with sem:
+                with httpx.Client(timeout=timeout) as client:
+                    resp = client.post(url, headers=headers, json=payload)
+        except httpx.RequestError as e:
+            raise LLMError(f"LLM 게이트웨이 연결 실패 (endpoint={url}): {e}") from e
+        if resp.status_code == 429 and attempt < LLM_RATE_RETRIES:
+            time.sleep(_retry_wait(resp, attempt))
+            continue
+        return _handle_response(resp.status_code, resp.text, url, payload["model"])

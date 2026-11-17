@@ -30,6 +30,9 @@ export default function LexiconPanel({ kbId, structured }: { kbId: string; struc
     const [total, setTotal] = useState(0);
     const [review, setReview] = useState<{ broader: string; labels: string[] }[]>([]);
     const [dups, setDups] = useState<{ labels: string[]; shared: string[] }[]>([]);
+    // 중복 판정 제안 (데이터 품질 D2): 묶음 라벨 키 → {decision, canonical, reason, remove_aliases}
+    const [dupSug, setDupSug] = useState<Record<string, any>>({});
+    const [aliasOf, setAliasOf] = useState<Record<string, string[]>>({});   // 라벨 → 그 라벨의 별칭 (공유 별칭을 라벨별로 지우기 위함)
     const [msg, setMsg] = useState('');
     const [busy, setBusy] = useState(false);
     const [adding, setAdding] = useState<Record<string, string>>({});
@@ -39,7 +42,23 @@ export default function LexiconPanel({ kbId, structured }: { kbId: string; struc
         setEntries(r.data.entries || []); setTotal(r.data.total || 0);
     }).catch(() => setMsg('사전을 불러오지 못했습니다.')), [kbId, q]);
     const loadReview = useCallback(() => lexiconApi.review(kbId).then((r) => setReview(r.data.groups || [])).catch(() => undefined), [kbId]);
-    const loadDups = useCallback(() => lexiconApi.duplicates(kbId).then((r) => setDups(r.data.groups || [])).catch(() => undefined), [kbId]);
+    const loadDups = useCallback(async () => {
+        try {
+            const r = await lexiconApi.duplicates(kbId);
+            const groups = r.data.groups || [];
+            setDups(groups);
+            const rv = await lexiconApi.duplicateReview(kbId).catch(() => ({ data: { items: [] } }));
+            setDupSug(Object.fromEntries((rv.data.items || []).map((i: any) => [i.labels.join('|'), i])));
+            const labels = Array.from(new Set(groups.flatMap((g: any) => g.labels))) as string[];
+            const m: Record<string, string[]> = {};
+            for (const l of labels.slice(0, 120)) {
+                const e = await lexiconApi.entry(kbId, l).catch(() => null);
+                const hit = (e?.data?.entries || []).find((x: any) => x.label === l);
+                if (hit) m[l] = [...hit.ko, ...hit.en, ...hit.syn];
+            }
+            setAliasOf(m);
+        } catch { /* 무시 */ }
+    }, [kbId]);
 
     useEffect(() => { loadStatus(); loadReview(); loadDups(); }, [loadStatus, loadReview, loadDups]);
     useEffect(() => { const t = setTimeout(loadEntries, 250); return () => clearTimeout(t); }, [loadEntries]);
@@ -200,6 +219,12 @@ export default function LexiconPanel({ kbId, structured }: { kbId: string; struc
                         {dups.map((g) => (
                             <tr key={g.labels.join('|')}>
                                 <td style={{ ...cell, width: '38%' }}>
+                                    {dupSug[g.labels.join('|')] && (() => {
+                                        const sg = dupSug[g.labels.join('|')];
+                                        const color = sg.decision === 'merge' ? '#16a34a' : sg.decision === 'distinct' ? '#d97706' : '#64748b';
+                                        const label = sg.decision === 'merge' ? `제안: 같은 대상 → '${sg.canonical}' 로 병합` : sg.decision === 'distinct' ? '제안: 다른 대상 — 잘못 붙은 별칭만 정리' : '제안: 판단 불가';
+                                        return <div style={{ fontSize: '0.72rem', color, marginBottom: '0.2rem' }}>{label}<div style={{ color: '#64748b' }}>{sg.reason}</div></div>;
+                                    })()}
                                     {g.labels.map((l) => (
                                         <div key={l} style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
                                             <span>{l}</span>
@@ -214,13 +239,22 @@ export default function LexiconPanel({ kbId, structured }: { kbId: string; struc
                                     ))}
                                 </td>
                                 <td style={cell}>
-                                    <div style={{ fontSize: '0.7rem', color: '#64748b' }}>공유 별칭</div>
-                                    {g.shared.map((a) => (
-                                        <span key={a} style={chip}>{a}
-                                            <button style={iconBtn} title="이 묶음의 라벨들에서 이 별칭 삭제" disabled={busy}
-                                                onClick={() => run(() => lexiconApi.removeAlias(kbId, a, g.labels), `'${a}' 별칭을 지웠습니다.`)}><Trash2 size={11} color="#94a3b8" /></button>
-                                        </span>
-                                    ))}
+                                    <div style={{ fontSize: '0.7rem', color: '#64748b' }}>공유 별칭 — 잘못 붙은 라벨에서만 지우세요 (라벨 이름 칩의 ×)</div>
+                                    {g.shared.map((a) => {
+                                        const holders = g.labels.filter((l) => (aliasOf[l] || []).some((x) => x.replace(/\s/g, '').toLowerCase() === a.replace(/\s/g, '').toLowerCase()));
+                                        return (
+                                            <div key={a} style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', flexWrap: 'wrap', marginBottom: '0.15rem' }}>
+                                                <span style={{ ...chip, fontWeight: 600 }}>{a}</span>
+                                                {holders.length === 0 && <span style={{ fontSize: '0.7rem', color: '#94a3b8' }}>(라벨 자체 표기)</span>}
+                                                {holders.map((l) => (
+                                                    <span key={l} style={{ ...chip, background: '#fff' }}>{l}
+                                                        <button style={iconBtn} title={`'${l}' 에서만 '${a}' 별칭 삭제`} disabled={busy}
+                                                            onClick={() => run(() => lexiconApi.removeAlias(kbId, a, [l]), `'${l}' 에서 '${a}' 별칭을 지웠습니다.`)}><X size={11} color="#dc2626" /></button>
+                                                    </span>
+                                                ))}
+                                            </div>
+                                        );
+                                    })}
                                 </td>
                             </tr>
                         ))}

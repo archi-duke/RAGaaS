@@ -864,8 +864,9 @@ JSON: {{"groups": [["대표로 쓸 이름", "같은 개념 이름", ...]]}}"""}]
     return {"class": class_name, "groups": groups}
 
 
-async def merge_entities(kb_id: str, canonical: str, aliases: List[str]) -> Dict[str, Any]:
-    """표기 병합 (entity 규칙, origin=schema_editor:merge) + 리플레이."""
+async def merge_entities(kb_id: str, canonical: str, aliases: List[str], replay: bool = True,
+                         origin: str = "schema_editor:merge") -> Dict[str, Any]:
+    """표기 병합 (entity 규칙) + 리플레이. replay=False 면 규칙만 (여러 병합을 묶어 리플레이 한 번 — merge_entities_batch)."""
     from app.models.knowledge_base import KnowledgeBase
     from app.models.schema_mapping import SchemaMappingRule
     from app.services.retrieval.entity_linking import _compact
@@ -889,13 +890,32 @@ async def merge_entities(kb_id: str, canonical: str, aliases: List[str]) -> Dict
             await r.save()
         else:
             await SchemaMappingRule(kb_id=kb_id, rule_type="entity", source_value=a, target_value=canonical,
-                                    origin="schema_editor:merge").insert()
+                                    origin=origin).insert()
         n += 1
     if n or conflicts:
         kb.schema_rules_version = (kb.schema_rules_version or 0) + 1
         await kb.save()
-    rp = await _replay_text_docs(kb_id) if (n or conflicts) else {"replayed": 0, "errors": []}
+    try:   # 용어 사전: 병합된 이름을 대표 항목의 별칭으로 (병합 뒤에도 옛 이름·성만으로 찾을 수 있게)
+        from app.services.agent_query.lexicon import absorb_merged
+        await absorb_merged(kb_id, canonical, [x for x in aliases if x and x.strip() and x.strip() != canonical])
+    except Exception:
+        pass
+    rp = await _replay_text_docs(kb_id) if (replay and (n or conflicts)) else {"replayed": 0, "errors": []}
     return {"canonical": canonical, "merged": n, "conflicts_disabled": conflicts, **rp}
+
+
+async def merge_entities_batch(kb_id: str, merges: List[Dict[str, Any]], origin: str = "schema_editor:merge") -> Dict[str, Any]:
+    """여러 병합 [{canonical, aliases}] 을 규칙으로 넣고 리플레이는 한 번 (데이터 품질 D2: 중복 30여 묶음)."""
+    done = []
+    for m in merges:
+        c = (m.get("canonical") or "").strip()
+        al = [a for a in (m.get("aliases") or []) if a and a.strip() and a.strip() != c]
+        if not c or not al:
+            continue
+        r = await merge_entities(kb_id, c, al, replay=False, origin=origin)
+        done.append({"canonical": c, "merged": r["merged"], "conflicts_disabled": r["conflicts_disabled"]})
+    rp = await _replay_text_docs(kb_id) if done else {"replayed": 0, "errors": []}
+    return {"groups": len(done), "rules": sum(d["merged"] for d in done), "details": done, **rp}
 
 
 # ---------------------------------------------------------------------------
@@ -1032,8 +1052,9 @@ async def _add_to_schema(kb_id: str, new_class: Optional[Dict[str, Any]] = None,
 
 async def edit_triples(kb_id: str, action: str, triples: List[Dict[str, str]],
                        target_property: Optional[str] = None,
-                       new_property: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """선택한 트리플을 다른 관계로 이동(move) 또는 삭제(delete). new_property 를 주면 그 관계를 스키마에 만들고 이동.
+                       new_property: Optional[Dict[str, Any]] = None,
+                       origin: Optional[str] = None) -> Dict[str, Any]:
+    """선택한 트리플을 다른 관계로 이동(move), 삭제(delete), 방향 뒤집기(flip). new_property 를 주면 그 관계를 스키마에 만들고 이동.
 
     triple 규칙: pair=[주어, 관계, 목적어](그래프 표기), target_path=이동할 관계 (삭제면 None). 같은 트리플의 기존 규칙은 덮는다.
     """
@@ -1042,7 +1063,7 @@ async def edit_triples(kb_id: str, action: str, triples: List[Dict[str, str]],
     kb = await KnowledgeBase.get(kb_id)
     if not kb or kb.schema_source not in EDITABLE_SOURCES:
         raise SchemaEditError(["텍스트(승격) KB 에서만 트리플을 편집할 수 있습니다 — 구조화 KB 는 YAML 원본에서"])
-    if action not in ("move", "delete"):
+    if action not in ("move", "delete", "flip"):
         raise SchemaEditError([f"알 수 없는 동작: {action}"])
     ind = (kb.promotion_metadata or {}).get("induction") or {}
     names = {p["name"] for p in ind.get("properties") or []}
@@ -1071,18 +1092,24 @@ async def edit_triples(kb_id: str, action: str, triples: List[Dict[str, str]],
             continue
         r = await SchemaMappingRule.find_one(SchemaMappingRule.kb_id == kb_id, SchemaMappingRule.rule_type == "triple",
                                              SchemaMappingRule.pair == pair)
-        tgt = target_property if action == "move" else None
+        tgt = target_property if action == "move" else ("@flip" if action == "flip" else None)
         if r:
             r.target_path, r.status = tgt, "active"
             await r.save()
         else:
             await SchemaMappingRule(kb_id=kb_id, rule_type="triple", pair=pair, target_path=tgt,
-                                    origin=f"schema_editor:triple_{action}").insert()
+                                    origin=origin or f"schema_editor:triple_{action}").insert()
         n += 1
     kb = await KnowledgeBase.get(kb_id)
     kb.schema_rules_version = (kb.schema_rules_version or 0) + 1
     await kb.save()
     rp = await _replay_text_docs(kb_id)
+    if action in ("flip", "delete"):
+        try:   # 방향 검증 결과에 반영 표시 (다음 증분 검증이 다시 판정하지 않게)
+            from app.services.schema_alignment.direction_audit import mark_applied
+            await mark_applied(kb_id, rows, action, "auto" if origin == "auto_direction" else "user")
+        except Exception:
+            pass
     return {"action": action, "edited": n, "target_property": target_property if action == "move" else None,
             "created": created, **rp}
 
