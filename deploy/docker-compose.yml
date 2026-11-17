@@ -46,6 +46,11 @@ services:
       - SHARED_STORAGE_PATH=/data/uploads
       - CALLBACK_BASE_URL=http://backend:8000
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
+      # 파이프라인 구성 이력 (공용 Gitea) — 없으면 운영 반영·이력만 안 되고 검색은 그대로
+      - GITEA_SERVER=${GITEA_SERVER:-}
+      - GITEA_TOKEN=${GITEA_TOKEN:-}
+      - GITEA_ORG=${GITEA_ORG:-ragaas}
+      - GITEA_PIPELINE_REPO=${GITEA_PIPELINE_REPO:-ragaas-pipelines}
     volumes:
       - ../data/uploads:/data/uploads
       - backend-data:/app/data
