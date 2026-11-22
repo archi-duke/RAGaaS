@@ -1,5 +1,5 @@
 from typing import List, Dict, Any
-from pymilvus import Collection
+from app.core.milvus import load_collection, run_milvus, MILVUS_OP_TIMEOUT
 from .base import RetrievalStrategy
 from .vector import VectorRetrievalStrategy
 from .graph import GraphRetrievalStrategy
@@ -20,22 +20,22 @@ class HybridRetrievalStrategy(RetrievalStrategy):
         enable_graph = kwargs.get("enable_graph_search", False)
         emb_service = kwargs.get("embedding_service", default_embedding_service)
         
-        # Get existing collection
-        collection_name = f"kb_{kb_id.replace('-', '_')}"
-        collection = Collection(collection_name)
-        collection.load()
-        
         # 1. Embed query
         query_vectors = await emb_service.get_embeddings([query])
         query_vec = query_vectors[0]
         
         # 2. Fetch all docs for BM25 (Note: Not scalable for huge datasets, okay for MVP)
-        all_docs = collection.query(
-            expr="chunk_id != ''",
-            output_fields=["content", "doc_id", "chunk_id", "vector"],
-            limit=10000 
-        )
-        
+        def _sync_query():
+            collection = load_collection(kb_id)
+            return collection.query(
+                expr="chunk_id != ''",
+                output_fields=["content", "doc_id", "chunk_id", "vector"],
+                limit=10000,
+                timeout=MILVUS_OP_TIMEOUT,
+            )
+
+        all_docs = await run_milvus(_sync_query, what="하이브리드 후보 조회")
+
         if not all_docs:
             return []
         

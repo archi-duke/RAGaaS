@@ -5,6 +5,15 @@ from fastapi.responses import JSONResponse
 
 app = FastAPI(title="RAG Management System API")
 
+from app.core.milvus import MilvusUnavailableError
+
+
+@app.exception_handler(MilvusUnavailableError)
+async def milvus_unavailable_handler(request: Request, exc: MilvusUnavailableError):
+    # Milvus 가 멈추거나 컬렉션이 로드되지 않을 때 — 500 대신 503 으로 원인을 알려준다
+    return JSONResponse(status_code=503, content={"detail": str(exc)})
+
+
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     import json

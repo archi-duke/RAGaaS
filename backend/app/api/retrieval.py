@@ -814,26 +814,30 @@ async def get_chunk(kb_id: str, chunk_id: str):
     Fetch a single chunk content from Milvus by ID.
     Used for previewing chunk content in the Graph Data View.
     """
-    from app.core.milvus import create_collection
+    from app.core.milvus import load_collection, run_milvus, MilvusUnavailableError, MILVUS_OP_TIMEOUT
     try:
-        # Load collection (using create_collection handles name mapping and loading)
-        collection = create_collection(kb_id)
-        collection.load()
-        
         # Search for the chunk by chunk_id (VARCHAR), not internal id (INT64)
         expr = f'chunk_id == "{chunk_id}"'
-        res = collection.query(
-            expr=expr,
-            output_fields=["content", "metadata"],
-            limit=1
-        )
-        
+
+        def _sync_query():
+            collection = load_collection(kb_id)
+            return collection.query(
+                expr=expr,
+                output_fields=["content", "metadata"],
+                limit=1,
+                timeout=MILVUS_OP_TIMEOUT,
+            )
+
+        res = await run_milvus(_sync_query, what="청크 조회")
+
         if not res:
             # Fallback: Try searching by id if implicit conversion works or for legacy reasons? 
             # But schema says id is INT64. Let's assume chunk_id is the correct field.
             raise HTTPException(status_code=404, detail=f"Chunk {chunk_id} not found")
             
         return res[0]
+    except (HTTPException, MilvusUnavailableError):
+        raise
     except Exception as e:
         print(f"[ChunkPreview] Error fetching chunk {chunk_id}: {e}")
         # Milvus error or connection error
