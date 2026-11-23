@@ -1,0 +1,16 @@
+RAGaaS
+Copyright 2025-2026 Duke Kimm
+
+This product is licensed under the Apache License, Version 2.0
+(see the LICENSE file).
+
+Third-party components
+----------------------
+The web frontend depends on KendoReact (@progress/kendo-*), which is commercial
+software from Progress Software Corporation and is NOT covered by this license.
+It is not included in this repository; it is installed from npm at build time.
+Using or distributing a build that contains KendoReact requires your own
+KendoReact license (https://www.telerik.com/kendo-react-ui/pricing).
+
+Other dependencies are distributed under their own licenses, as stated in
+their packages.

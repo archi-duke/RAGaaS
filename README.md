@@ -36,4 +36,6 @@ LLM 은 KB 별로 설정한다 (현재 Z.ai GLM `glm-5.2`).
 
 ## 라이선스
 
-MIT
+[Apache License 2.0](LICENSE). 저작권 고지와 제3자 구성요소 안내는 [`NOTICE`](NOTICE) 참고.
+
+프론트엔드가 쓰는 KendoReact(`@progress/kendo-*`)는 Progress 의 상용 소프트웨어로 이 라이선스에 포함되지 않습니다. 빌드·배포하려면 별도의 KendoReact 라이선스가 필요합니다.
