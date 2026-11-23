@@ -1,5 +1,5 @@
 from typing import List, Dict, Any
-from pymilvus import Collection
+from app.core.milvus import load_collection, run_milvus, MILVUS_OP_TIMEOUT
 from .base import RetrievalStrategy
 from .vector import VectorRetrievalStrategy
 from app.services.embedding import embedding_service as default_embedding_service
@@ -21,11 +21,7 @@ class TwoStageRetrievalStrategy(RetrievalStrategy):
         emb_service = kwargs.get("embedding_service", default_embedding_service)
         
         # 1. Candidate Generation (Vector Search with high K)
-        collection_name = f"kb_{kb_id.replace('-', '_')}"
-        collection = Collection(collection_name)
-        collection.load()
-        
-        query_vectors = await emb_service.get_embeddings([query])
+        query_vectors= await emb_service.get_embeddings([query])
         query_vec = query_vectors[0]
         
         search_params = {
@@ -33,14 +29,19 @@ class TwoStageRetrievalStrategy(RetrievalStrategy):
             "params": {"nprobe": 10},
         }
         
-        results = collection.search(
-            data=query_vectors, 
-            anns_field="vector", 
-            param=search_params, 
-            limit=top_k * 5, 
-            output_fields=["content", "doc_id", "chunk_id", "vector"]
-        )
-        
+        def _sync_search():
+            collection = load_collection(kb_id)
+            return collection.search(
+                data=query_vectors,
+                anns_field="vector",
+                param=search_params,
+                limit=top_k * 5,
+                output_fields=["content", "doc_id", "chunk_id", "vector"],
+                timeout=MILVUS_OP_TIMEOUT,
+            )
+
+        results = await run_milvus(_sync_search, what="2-stage 후보 검색")
+
         candidates = []
         for hits in results:
             for hit in hits:

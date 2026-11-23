@@ -1,5 +1,5 @@
 from typing import List, Dict, Any
-from pymilvus import Collection
+from app.core.milvus import load_collection, run_milvus, MILVUS_OP_TIMEOUT
 
 from app.services.embedding import embedding_service as default_embedding_service
 from .base import RetrievalStrategy
@@ -14,11 +14,6 @@ class VectorRetrievalStrategy(RetrievalStrategy):
         
         execution_logs.append(f"[Vector] Starting vector search (Top K: {top_k})")
         execution_logs.append(f"[Vector] Metric: {metric_type}, Threshold: {score_threshold}")
-
-        # Get existing collection (created during KB setup)
-        collection_name = f"kb_{kb_id.replace('-', '_')}"
-        collection = Collection(collection_name)
-        collection.load()
 
         # 1. Embed query
         execution_logs.append(f"[Vector] Generating embedding for query: '{query}'")
@@ -36,14 +31,20 @@ class VectorRetrievalStrategy(RetrievalStrategy):
         # Don't need vector field anymore if we trust Milvus score
         output_fields = ["content", "doc_id", "chunk_id"]
 
-        results = collection.search(
-            data=query_vectors, 
-            anns_field="vector", 
-            param=search_params, 
-            limit=top_k * 3,  # Fetch more for filtering
-            output_fields=output_fields
-        )
-        
+        # load/search 는 동기 블로킹 — 스레드로 넘기고 시간 한도를 건다 (app.core.milvus.run_milvus 참고)
+        def _sync_search():
+            collection = load_collection(kb_id)
+            return collection.search(
+                data=query_vectors,
+                anns_field="vector",
+                param=search_params,
+                limit=top_k * 3,  # Fetch more for filtering
+                output_fields=output_fields,
+                timeout=MILVUS_OP_TIMEOUT,
+            )
+
+        results = await run_milvus(_sync_search, what="벡터 검색")
+
         execution_logs.append(f"[Vector] Milvus returned {len(results[0]) if results else 0} raw hits")
         
         retrieved = []
