@@ -1,3 +1,4 @@
+from app.core.uri_names import sign_words
 from typing import List, Tuple, Dict, Any
 from pathlib import Path
 from app.services.ingestion.spacy_processor import SpacyGraphProcessor
@@ -34,7 +35,7 @@ class GraphProcessor:
     def _sanitize_uri(self, text: str) -> str:
         """Sanitize text to be used in URI."""
         # Replace spaces with underscores, remove special chars (preserve Korean and Cyrillic)
-        clean = re.sub(r'[^a-zA-Z0-9_\uAC00-\uD7A3\u0400-\u04FF]+', '_', text.strip())
+        clean = re.sub(r'[^a-zA-Z0-9_\uAC00-\uD7A3\u0400-\u04FF]+', '_', sign_words(text.strip()))
         return urllib.parse.quote(clean)
 
     async def extract_graph_elements(self, text: str, chunk_id: str, kb_id: str, config: Dict[str, Any] = {}) -> Dict[str, Any]:

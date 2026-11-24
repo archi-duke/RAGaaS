@@ -592,7 +592,7 @@ async def reextract(request: ReextractRequest):
         raise HTTPException(status_code=404, detail=f"저장된 청크가 없음: {request.doc_id}")
     with open(chunks_path, encoding="utf-8") as f:
         chunks = _json.load(f)
-    triples, stats = await reextract_chunks(chunks, request.schema_spec, request.llm)
+    triples, stats = await reextract_chunks(chunks, request.schema_spec, request.llm, request.schema_rules)
     if not triples:
         raise HTTPException(status_code=422, detail=f"재추출 결과가 비어 있음 (기존 그래프 유지): {stats}")
 
@@ -605,6 +605,8 @@ async def reextract(request: ReextractRequest):
         _shutil.copyfile(raw, prev)          # 되돌리기용 직전 원본
     with open(raw, "w", encoding="utf-8") as f:
         _json.dump(triples, f, ensure_ascii=False)
+    from app.core.grounding import save_ungrounded
+    save_ungrounded(request.kb_id, request.doc_id, stats.get("ungrounded") or [])
 
     applied, report = apply_rules_to_triples(triples, request.schema_rules, request.doc_id)
     if request.graph_store == "fuseki":
@@ -645,7 +647,7 @@ async def reextract_preview(request: ReextractPreviewRequest):
     chunks = [c for c in chunks if c.get("node_id") in want][:10]
     if not chunks:
         raise HTTPException(status_code=404, detail="해당 청크를 찾지 못했습니다")
-    triples, stats = await reextract_chunks(chunks, request.schema_spec, request.llm)
+    triples, stats = await reextract_chunks(chunks, request.schema_spec, request.llm, request.schema_rules)
     applied, report = apply_rules_to_triples(triples, request.schema_rules, request.doc_id)
     return {"doc_id": request.doc_id, "chunks": [c.get("node_id") for c in chunks], "triples": applied,
             "stats": stats, "after_rules": report}
