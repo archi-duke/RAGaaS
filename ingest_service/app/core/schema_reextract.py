@@ -130,33 +130,8 @@ def check_domain(t: Dict[str, Any], cls: Dict[str, str], dr: Dict[str, Tuple[str
     return t
 
 
-_YEAR_RE = re.compile(r"^\d{2,4}(?:년|년도|년대)?$")
-
-
-def is_grounded(obj: str, text: str, allowed_values: Optional[set] = None) -> bool:
-    """목적어의 핵심 토큰이 원문에 있는가 — 스키마 맞춤 환각 차단.
-
-    예) 원문 "1931년 세상을 떠났다" → '1931년도_노벨_물리학상' 은 '노벨'·'물리학상' 이 원문에 없어 거부.
-    - 허용 값 어휘(스키마 값 목록)에 있는 표기는 정규화 결과이므로 검사하지 않는다.
-    - 연도 토큰은 숫자만 원문에 있으면 된다.
-    - 핵심 토큰의 절반 이상이 원문(공백 무시)에 있어야 한다.
-    """
-    if allowed_values and _ck(obj) in allowed_values:
-        return True
-    compact_text = _ck(text)
-    toks = [x for x in re.split(r"[\s_\-·,()『』「」]+", obj) if x]
-    if not toks:
-        return True
-    hit = 0
-    for tok in toks:
-        if _YEAR_RE.match(tok):
-            hit += re.sub(r"\D", "", tok) in compact_text
-        elif len(tok) < 2:
-            hit += 1
-        else:
-            # 조사·어미 차이 허용: 앞 2글자 이상이 원문에 있으면 인정 ('측정한' ↔ '측정')
-            hit += any(_ck(tok[:k]) in compact_text for k in range(len(tok), 1, -1))
-    return hit * 2 >= len(toks)
+# 목적어 근거 검사는 app.core.grounding 으로 옮겼다 (초기 인제스트와 함께 쓴다)
+from app.core.grounding import build_alias_index, is_grounded, object_grounded  # noqa: E402,F401
 
 
 _SENT_SPLIT = re.compile(r"(?<=[.!?。])\s+|(?<=다\.)|\n+")
@@ -182,7 +157,7 @@ def grounded_year(year: Any, text: Optional[str], subj: str, obj: str) -> Option
 
 def parse_response(data: Optional[Dict[str, Any]], node_id: str, allowed: set,
                    type_index: Optional[Tuple[Dict[str, str], Dict[str, Tuple[str, str]]]] = None,
-                   text: Optional[str] = None, allowed_values: Optional[set] = None
+                   text: Optional[str] = None, aliases: Optional[Dict[str, set]] = None
                    ) -> List[Dict[str, Any]]:
     """drop 표시(domain 위반·원문 근거 없음)가 붙은 트리플도 반환한다 — 호출부가 걸러 내고 집계한다."""
     out = []
@@ -209,21 +184,24 @@ def parse_response(data: Optional[Dict[str, Any]], node_id: str, allowed: set,
                 out.append(t)
                 continue
             t = check_domain(t, *type_index) if type_index else t
-            if text is not None and not t.get("drop") and not is_grounded(o, text, allowed_values):
+            # 값 어휘에 있는 표기여도 검사한다 — 어휘는 다른 문서에서 온 값일 수 있다
+            # (cqrs.md 청크에 없는 'Availability' 가 어휘에서 골라져 들어간 사례, 2026-11-24)
+            if text is not None and not t.get("drop") and not object_grounded(o, text, aliases):
                 t = {**t, "drop": "ungrounded"}
             out.append(t)
     return out
 
 
 async def reextract_chunks(
-    chunks: List[Dict[str, Any]], spec: Dict[str, Any], llm_cfg: Dict[str, Any]
+    chunks: List[Dict[str, Any]], spec: Dict[str, Any], llm_cfg: Dict[str, Any],
+    rules: Optional[List[Dict[str, Any]]] = None,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     from app.core.llm import achat
 
     schema_text = build_schema_text(spec)
     allowed = {p["name"] for p in spec.get("properties") or []}
     type_index = build_type_index(spec)
-    allowed_values = {_ck(v) for p in spec.get("properties") or [] for v in (p.get("values") or [])}
+    aliases = build_alias_index(rules)   # 정규화 표기 → 원래 표기 ('Availability' ← '가용성')
     sem = asyncio.Semaphore(CONCURRENCY)
     failures = []
 
@@ -237,7 +215,7 @@ async def reextract_chunks(
                 content = await achat(llm_cfg, build_messages(schema_text, text), model=llm_cfg.get("model"),
                                       temperature=0, response_format={"type": "json_object"}, extra_body=extra)
                 return parse_response(_parse_json(content), ch.get("node_id"), allowed, type_index,
-                                      text[:MAX_CHUNK_CHARS], allowed_values)
+                                      text[:MAX_CHUNK_CHARS], aliases)
             except Exception as e:
                 failures.append({"node_id": ch.get("node_id"), "reason": str(e)[:200]})
                 return []
@@ -249,6 +227,8 @@ async def reextract_chunks(
              "dropped_domain": sum(1 for t in raw if t.get("drop") == "domain"),
              "dropped_ungrounded": sum(1 for t in raw if t.get("drop") == "ungrounded"),
              "dropped_absent": sum(1 for t in raw if t.get("drop") == "absent"),
+             "ungrounded": [{k: t.get(k) for k in ("subject", "predicate", "object", "source_node_id")}
+                            for t in raw if t.get("drop") == "ungrounded"],
              "out_of_schema": sum(1 for t in triples if t["out_of_schema"]),
              "direction_fixed": sum(1 for t in triples if t.get("direction_fixed")),
              "chunk_failures": failures}

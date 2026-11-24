@@ -54,7 +54,8 @@ def _sanitize_uri(text: str) -> str:
     identity/reference strings produced here sanitize identically to how the
     connectors will sanitize them when building final RDF/Cypher identifiers.
     """
-    clean = re.sub(r'[^a-zA-Z0-9_가-힣Ѐ-ӿ]+', '_', str(text).strip())
+    from app.core.fuseki_connector import _sign_words
+    clean = re.sub(r'[^a-zA-Z0-9_가-힣Ѐ-ӿ]+', '_', _sign_words(str(text).strip()))
     return clean or "unknown"
 
 

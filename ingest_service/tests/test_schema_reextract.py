@@ -57,7 +57,20 @@ def test_ungrounded_object_is_dropped():
     assert not is_grounded("1931년도_노벨_물리학상", text)          # '노벨'·'물리학상' 이 원문에 없음
     assert is_grounded("1931년", text)
     assert is_grounded("저온_흑체_측정", text)                     # '측정했다' ↔ '측정'
-    assert is_grounded("높다", text, {"높다"})                      # 허용 값 표기는 검사 생략
     out = parse_response({"triples": [{"subject": "아델하이트_피르나우", "predicate": "수상함", "object": "1931년도_노벨_물리학상"}]},
-                         "n1", {"수상함"}, None, text, set())
+                         "n1", {"수상함"}, None, text)
     assert out[0]["drop"] == "ungrounded"
+
+
+def test_vocabulary_value_still_needs_evidence():
+    """값 어휘에 있는 표기라도 청크에 근거가 없으면 제외 (cqrs.md 'Availability' 사례, 2026-11-24)."""
+    from app.core.grounding import build_alias_index
+    from app.core.schema_reextract import parse_response
+    rules = [{"rule_type": "value", "source_value": "가용성", "target_value": "Availability"}]
+    aliases = build_alias_index(rules)
+    cqrs = "- 감사 가능성 요구가 높으면 +2점. 명령 로그를 감사와 재처리의 근거로 활용할 수 있다."
+    eda = "감사 가능성과 가용성에는 중간 정도의 긍정 효과가 있다."
+    t = {"subject": "CQRS", "predicate": "has_moderate_positive_effect_on", "object": "Availability"}
+    assert parse_response({"triples": [t]}, "n1", {"has_moderate_positive_effect_on"}, None, cqrs, aliases)[0]["drop"] == "ungrounded"
+    out = parse_response({"triples": [{**t, "subject": "EDA"}]}, "n2", {"has_moderate_positive_effect_on"}, None, eda, aliases)
+    assert "drop" not in out[0]      # 원래 표기 '가용성' 이 원문에 있음

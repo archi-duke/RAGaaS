@@ -11,6 +11,13 @@ import httpx
 
 from app.core.config import settings
 
+# 숫자 앞 부호는 뜻이 있다 ('+3점' ≠ '-3점'). 아래 정리에서 '_' 로 뭉개지지 않게 먼저 단어로 바꾼다 (2026-11-24).
+_SIGN_RE = re.compile(r"(?<![0-9A-Za-z\uAC00-\uD7A3])([+\-\u2212])(?=\d)")
+
+
+def _sign_words(text: str) -> str:
+    return _SIGN_RE.sub(lambda m: "plus" if m.group(1) == "+" else "minus", text)
+
 
 class FusekiConnector:
     """Fuseki SPARQL Store Connector"""
@@ -27,7 +34,7 @@ class FusekiConnector:
 
     def _sanitize_uri(self, text: str) -> str:
         """URI에 사용할 수 있도록 텍스트 정리"""
-        clean = re.sub(r'[^a-zA-Z0-9_\uAC00-\uD7A3\u0400-\u04FF]+', '_', text.strip())
+        clean = re.sub(r'[^a-zA-Z0-9_\uAC00-\uD7A3\u0400-\u04FF]+', '_', _sign_words(text.strip()))
         return clean
     
     def _convert_triples_to_rdf(

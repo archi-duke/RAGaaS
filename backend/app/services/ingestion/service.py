@@ -1,3 +1,4 @@
+from app.core.uri_names import sign_words
 import io
 from pypdf import PdfReader
 from .text_splitter import chunking_service
@@ -223,7 +224,7 @@ class IngestionService:
         
         def sanitize_uri(text: str) -> str:
             """URI에 사용할 수 있도록 텍스트 정리"""
-            clean = re.sub(r'[^a-zA-Z0-9_\uAC00-\uD7A3\u0400-\u04FF]+', '_', text.strip())
+            clean = re.sub(r'[^a-zA-Z0-9_\uAC00-\uD7A3\u0400-\u04FF]+', '_', sign_words(text.strip()))
             # Return without quote to keep Korean readable (Fuseki supports UTF-8 IRIs)
             return clean
         

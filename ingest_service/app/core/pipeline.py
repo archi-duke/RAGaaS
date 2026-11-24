@@ -679,11 +679,18 @@ class IngestPipeline:
         extraction_examples_yaml: Optional[str] = None,
         custom_prompt: Optional[str] = None,
         entity_dictionary: Optional[Dict[str, Dict[str, Any]]] = None,
-        llm: Any = None
+        llm: Any = None,
+        ungrounded_out: Optional[List[Dict[str, Any]]] = None,
     ) -> List[Dict[str, Any]]:
-        """Extract graph triples from nodes in parallel"""
+        """Extract graph triples from nodes in parallel
+
+        목적어가 그 청크 원문에 없는 트리플은 저장하지 않는다 (app.core.grounding).
+        ungrounded_out 을 주면 제외한 트리플을 거기에 담는다 (검토용 파일 저장).
+        """
         if extractor_type == GraphExtractorType.NONE:
             return []
+        from app.core.grounding import build_alias_index, filter_ungrounded
+        alias_index = build_alias_index(entity_dictionary=entity_dictionary)
         
         num_workers = config.get("num_workers", 5)
         sem = asyncio.Semaphore(num_workers)
@@ -810,7 +817,13 @@ Triplets:"""
                                             "subject_type": _lookup_type(s),
                                             "object_type": _lookup_type(o),
                                         })
-                    return node_triples
+                    kept, dropped = filter_ungrounded(node_triples, {node.node_id: text}, alias_index)
+                    if dropped:
+                        print(f"[Pipeline] 근거 없는 트리플 {len(dropped)}건 제외 (Node {idx}): "
+                              f"{[(t['subject'], t['predicate'], t['object']) for t in dropped[:5]]}")
+                        if ungrounded_out is not None:
+                            ungrounded_out.extend(dropped)
+                    return kept
                 except Exception as e:
                     print(f"Error extracting from node {idx}: {e}")
                     import traceback
@@ -979,6 +992,7 @@ Triplets:"""
                 await status_callback("EXTRACTING_TRIPLES")
                 
             print(f"[Pipeline] Phase 3: Extracting graph triples in parallel...")
+            ungrounded: List[Dict[str, Any]] = []
             triples = await self.extract_graph(
                 nodes, 
                 graph_extractor_type, 
@@ -986,7 +1000,8 @@ Triplets:"""
                 extraction_examples_yaml=extraction_examples_yaml,
                 custom_prompt=custom_prompt,
                 entity_dictionary=entity_dictionary,
-                llm=active_ingest_llm
+                llm=active_ingest_llm,
+                ungrounded_out=ungrounded,
             )
             
             # ✅ 트리플 추출 완료 상태 전송
@@ -997,6 +1012,9 @@ Triplets:"""
             if kb_id and doc_id and triples:
                 from app.utils.temp_storage import temp_storage
                 await temp_storage.save_triples(kb_id, doc_id, triples)
+            if kb_id and doc_id:
+                from app.core.grounding import save_ungrounded
+                save_ungrounded(kb_id, doc_id, ungrounded)
         else:
             print(f"[Pipeline] Phase 3: Skipped (Non-Graph mode - no triple extraction)")
         
