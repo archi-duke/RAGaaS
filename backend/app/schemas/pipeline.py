@@ -7,6 +7,12 @@ class PipelineStage(BaseModel):
     # agentic: 검색 스테이지를 도구로 삼아 검색 방식·순서를 정하고 단계별로 진행 (docs/design/graph/design-agentic-filter.md).
     type: Literal["smalltalk", "agentic", "ann", "bm25", "brute_force", "graph", "rerank", "ner_filter"]
     params: Dict[str, Any] = {}
+    # 스테이지 식별자 (화면이 붙인다). 실패 연결이 이 값으로 대상을 가리킨다.
+    id: Optional[str] = None
+    # 실패/예외 연결 (2026-11-25): 이 스테이지가 실패하면 이 id 의 (뒤쪽) 스테이지로 넘어간다.
+    # 없으면 실패를 알리고 파이프라인을 멈춘다. 정상(성공) 연결은 바로 다음 스테이지.
+    # 실패 연결의 대상 스테이지는 실패했을 때만 실행된다 (성공하면 건너뜀).
+    on_failure: Optional[str] = None
 
 class PipelineConfig(BaseModel):
     """검색 파이프라인 전체 구성"""

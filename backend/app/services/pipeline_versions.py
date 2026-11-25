@@ -41,7 +41,8 @@ def normalize(config: Dict[str, Any]) -> Dict[str, Any]:
     out = {k: v for k, v in config.items() if not k.startswith("_")}
     out["schema"] = SCHEMA
     out["stages"] = [{"type": s.get("type"), "params": s.get("params") or {},
-                      **({"id": s["id"]} if s.get("id") else {})}
+                      **({"id": s["id"]} if s.get("id") else {}),
+                      **({"on_failure": s["on_failure"]} if s.get("on_failure") else {})}
                      for s in config["stages"] if isinstance(s, dict) and s.get("type")]
     return out
 
@@ -55,10 +56,22 @@ def dumps(config: Dict[str, Any]) -> str:
     return json.dumps(normalize(config), ensure_ascii=False, indent=2, sort_keys=False) + "\n"
 
 
+def _link_view(stages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """id 는 화면이 임의로 붙이는 값이라 비교에서 빼고, 실패 연결은 대상 위치(1부터)로 바꾼다."""
+    pos = {s.get("id"): i + 1 for i, s in enumerate(stages) if s.get("id")}
+    out = []
+    for s in stages:
+        row = {"type": s.get("type"), "params": s.get("params") or {}}
+        if s.get("on_failure") in pos:
+            row["on_failure"] = pos[s["on_failure"]]
+        out.append(row)
+    return out
+
+
 def config_hash(config: Optional[Dict[str, Any]]) -> str:
     if not config:
         return ""
-    body = {"stages": normalize(config)["stages"]}
+    body = {"stages": _link_view(normalize(config)["stages"])}
     return hashlib.sha1(json.dumps(body, ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:12]
 
 
@@ -67,11 +80,15 @@ def diff(old: Optional[Dict[str, Any]], new: Optional[Dict[str, Any]]) -> List[s
     def flat(cfg):
         rows: Dict[str, Any] = {}
         order: List[str] = []
-        for s in (cfg or {}).get("stages") or []:
+        stages = (cfg or {}).get("stages") or []
+        types = {s.get("id"): s.get("type") for s in stages if s.get("id")}
+        for s in stages:
             t = s.get("type")
             order.append(t)
             for k, v in (s.get("params") or {}).items():
                 rows[f"{t}.{k}"] = v
+            if s.get("on_failure") in types:
+                rows[f"{t}.실패 연결"] = types[s["on_failure"]]
         return order, rows
     o_ord, o = flat(old)
     n_ord, n = flat(new)

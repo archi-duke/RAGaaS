@@ -11,7 +11,26 @@ export type StageType = 'smalltalk' | 'agentic' | 'ann' | 'bm25' | 'brute_force'
 export interface PipelineStage {
     type: StageType;
     params: Record<string, any>;
+    // 스테이지 식별자 — 실패 연결이 이 값으로 대상을 가리킨다
+    id?: string;
+    // 실패/예외 연결 (2026-11-25): 실패하면 넘어갈 뒤쪽 스테이지 id. 없으면 실패를 알리고 멈춘다.
+    // 정상 연결(카드 위쪽 화살표)은 성공 시 다음 스테이지. 실패 연결 대상은 실패했을 때만 실행된다.
+    on_failure?: string;
 }
+
+const newStageId = () => `s_${Math.random().toString(36).slice(2, 8)}`;
+
+// 실패 연결을 둘 수 있는 스테이지 (Gate·Agentic 은 분기 대상이 아님 — Agentic 은 스스로 순서를 정한다)
+const canBranch = (t: StageType) => t !== 'smalltalk' && t !== 'agentic';
+
+// 실패 연결 정리: 없는 대상·앞쪽 대상을 가리키는 연결은 지운다
+const tidyFailureLinks = (list: PipelineStage[]): PipelineStage[] => list.map((st, i) => {
+    if (!st.on_failure) return st;
+    const t = list.findIndex(x => x.id === st.on_failure);
+    if (t > i && canBranch(st.type) && canBranch(list[t].type)) return st;
+    const { on_failure, ...rest } = st;
+    return rest;
+});
 
 export interface PipelineConfig {
     stages: PipelineStage[];
@@ -130,6 +149,7 @@ export default function PipelineBuilder({
 }: PipelineBuilderProps) {
     const [stages, setStages] = useState<PipelineStage[]>(initialConfig?.stages || []);
     const [showDropdown, setShowDropdown] = useState(false);
+    const [failureMenu, setFailureMenu] = useState<number | null>(null);   // 실패 연결 메뉴가 열린 카드
     const [isLoading, setIsLoading] = useState(true);
     const [copied, setCopied] = useState(false);
     // 운영/테스트 탭 + 버전 이력
@@ -185,7 +205,8 @@ export default function PipelineBuilder({
         : availableStages.filter(s => s.type !== 'graph');
 
     // 저장된 구성을 화면 상태로 (그래프·리랭크는 LLM 모델 유형 고정, 승격 전 KB 는 스키마 모드 끔)
-    const adjustStages = React.useCallback((raw: PipelineStage[]): PipelineStage[] => (raw || []).map((stage: PipelineStage) => {
+    const adjustStages = React.useCallback((raw: PipelineStage[]): PipelineStage[] => tidyFailureLinks((raw || []).map((s: PipelineStage) => {
+        const stage = s.id ? s : { ...s, id: newStageId() };
         const params = { ...(stage.params || {}) };
         if (stage.type === 'graph') {
             if (!isOntologyPromoted) {
@@ -201,7 +222,7 @@ export default function PipelineBuilder({
             return { ...stage, params };
         }
         return { ...stage, params };
-    }), [isOntologyPromoted]);
+    })), [isOntologyPromoted]);
 
     const api = `${config.RAGAAS_API}knowledge-bases/${kbId}/pipeline`;
 
@@ -470,7 +491,8 @@ export default function PipelineBuilder({
 
         const newStage: PipelineStage = {
             type,
-            params
+            params,
+            id: newStageId(),
         };
         // smalltalk 는 검색 앞단 게이트 → 맨 앞에 배치, 그 외는 맨 뒤에 추가
         // agentic 은 검색 과정을 이끄는 필터 → Gate 바로 뒤(없으면 맨 앞)
@@ -487,7 +509,15 @@ export default function PipelineBuilder({
     };
 
     const handleRemoveStage = (index: number) => {
-        setStages(stages.filter((_, i) => i !== index));
+        setStages(tidyFailureLinks(stages.filter((_, i) => i !== index)));
+    };
+
+    const handleSetFailureLink = (index: number, targetId: string | null) => {
+        const next = [...stages];
+        const { on_failure, ...rest } = next[index];
+        next[index] = targetId ? { ...rest, on_failure: targetId } : rest;
+        setStages(next);
+        setFailureMenu(null);
     };
 
     const handleMoveStage = (index: number, direction: 'left' | 'right') => {
@@ -496,7 +526,7 @@ export default function PipelineBuilder({
 
         const newStages = [...stages];
         [newStages[index], newStages[newIndex]] = [newStages[newIndex], newStages[index]];
-        setStages(newStages);
+        setStages(tidyFailureLinks(newStages));
     };
 
     const handleParamChange = (index: number, param: string, value: any) => {
@@ -508,7 +538,67 @@ export default function PipelineBuilder({
         setStages(newStages);
     };
 
-    const renderStageCard = (stage: PipelineStage, index: number) => {
+    const stageLabel = (t: StageType) =>
+        [...GATE_STAGES, ...SEARCH_STAGES, ...FILTER_STAGES].find(s => s.type === t)?.label || t;
+
+    // 카드 우하단 실패/예외 연결부 + 실패 경로 표시
+    const renderFailurePort = (stage: PipelineStage, index: number, shown: PipelineStage[]) => {
+        const agenticOn = shown.some(s => s.type === 'agentic');
+        const sources = shown.map((s, i) => ({ s, i })).filter(({ s }) => s.on_failure && s.on_failure === stage.id);
+        const targetIdx = stage.on_failure ? shown.findIndex(s => s.id === stage.on_failure) : -1;
+        const candidates = shown.map((s, i) => ({ s, i })).filter(({ s, i }) => i > index && canBranch(s.type));
+        const editable = tab === 'test';
+        const linked = targetIdx >= 0;
+        return (
+            <>
+                {sources.length > 0 && (
+                    <div title="앞 스테이지가 실패했을 때만 실행됩니다 (성공하면 건너뜀)"
+                        style={{ position: 'absolute', top: -9, left: 10, fontSize: '0.62rem', color: '#b91c1c',
+                            background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 4, padding: '0 4px' }}>
+                        실패 경로 ← {sources.map(({ s, i }) => `${i + 1}. ${stageLabel(s.type)}`).join(', ')}
+                    </div>
+                )}
+                {canBranch(stage.type) && !agenticOn && (linked || (editable && candidates.length > 0)) && (
+                    <div style={{ position: 'absolute', right: -7, bottom: -7, zIndex: 5 }}>
+                        <button
+                            onClick={() => editable && setFailureMenu(failureMenu === index ? null : index)}
+                            title={linked
+                                ? `실패/예외 시 → ${targetIdx + 1}. ${stageLabel(shown[targetIdx].type)}`
+                                : '실패/예외 연결 — 없으면 실패를 알리고 파이프라인을 멈춥니다'}
+                            style={{ width: 14, height: 14, borderRadius: '50%', padding: 0,
+                                cursor: editable ? 'pointer' : 'default',
+                                border: `2px ${linked ? 'solid' : 'dashed'} #dc2626`,
+                                background: linked ? '#dc2626' : 'white' }} />
+                        {failureMenu === index && editable && (
+                            <div style={{ position: 'absolute', right: 0, top: 18, background: 'white', border: '1px solid #e2e8f0',
+                                borderRadius: 6, boxShadow: '0 6px 12px rgba(0,0,0,0.12)', minWidth: 190, padding: '4px 0', zIndex: 9999 }}>
+                                <div style={{ padding: '2px 10px', fontSize: '0.68rem', color: '#94a3b8', fontWeight: 600 }}>실패/예외 시 연결</div>
+                                {candidates.map(({ s, i }) => (
+                                    <div key={s.id} onClick={() => handleSetFailureLink(index, s.id!)}
+                                        style={{ padding: '4px 10px', fontSize: '0.78rem', cursor: 'pointer',
+                                            fontWeight: s.id === stage.on_failure ? 700 : 400, color: '#b91c1c' }}>
+                                        → {i + 1}. {stageLabel(s.type)}
+                                    </div>
+                                ))}
+                                <div onClick={() => handleSetFailureLink(index, null)}
+                                    style={{ padding: '4px 10px', fontSize: '0.78rem', cursor: 'pointer', color: '#475569',
+                                        fontWeight: linked ? 400 : 700 }}>
+                                    연결 없음 (실패를 알리고 중단)
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                )}
+                {linked && !agenticOn && (
+                    <div style={{ position: 'absolute', right: 12, bottom: -16, fontSize: '0.62rem', color: '#b91c1c', whiteSpace: 'nowrap' }}>
+                        실패 시 ↘ {targetIdx + 1}. {stageLabel(shown[targetIdx].type)}
+                    </div>
+                )}
+            </>
+        );
+    };
+
+    const renderStageCard = (stage: PipelineStage, index: number, shown: PipelineStage[] = stages) => {
         const stageInfo = [...GATE_STAGES, ...SEARCH_STAGES, ...FILTER_STAGES].find(s => s.type === stage.type);
         const isSearch = SEARCH_STAGES.some(s => s.type === stage.type);
 
@@ -596,6 +686,7 @@ export default function PipelineBuilder({
 
                 {/* Stage-specific params */}
                 {renderStageParams(stage, index)}
+                {renderFailurePort(stage, index, shown)}
             </div>
         );
     };
@@ -794,7 +885,7 @@ export default function PipelineBuilder({
                                         label="List Supplement"
                                         checked={params.list_supplement ?? true}
                                         onChange={(v) => handleParamChange(index, 'list_supplement', v)}
-                                        disabled={(params.graph_fallback ?? 'vector') === 'none'}
+                                        disabled={!!stage.on_failure || (params.graph_fallback ?? 'vector') === 'none'}
                                     />
                                 </div>
                                 {/* 그래프로 못 찾으면 */}
@@ -803,7 +894,8 @@ export default function PipelineBuilder({
                                         label="No Graph Result"
                                         layout="inline"
                                         minWidth="90px"
-                                        value={params.graph_fallback ?? 'vector'}
+                                        disabled={!!stage.on_failure}
+                                        value={stage.on_failure ? 'none' : (params.graph_fallback ?? 'vector')}
                                         options={[
                                             { value: 'vector', label: 'Doc Search' },
                                             { value: 'none', label: 'Empty' }
@@ -1031,14 +1123,15 @@ export default function PipelineBuilder({
                     gap: '0.5rem',
                     alignItems: 'flex-start',
                     overflowX: 'auto',
-                    paddingBottom: '2px'
+                    paddingTop: '10px',      // 카드 위 '실패 경로' 표시 자리
+                    paddingBottom: '20px'    // 카드 아래 '실패 시 ↘' 표시·연결부 자리
                 }}>
                     {/* Render stages */}
                     {(tab === 'live' ? liveStages : stages).map((stage, index, shown) => (
                         <React.Fragment key={`${tab}-${index}`}>
-                            {renderStageCard(stage, index)}
+                            {renderStageCard(stage, index, shown)}
                             {index < shown.length - 1 && (
-                                <div style={{ display: 'flex', alignItems: 'center', color: '#94a3b8', flexShrink: 0, height: '48px' }}>
+                                <div title="정상 연결 — 성공하면 다음 스테이지로" style={{ display: 'flex', alignItems: 'center', color: '#94a3b8', flexShrink: 0, height: '48px' }}>
                                     →
                                 </div>
                             )}

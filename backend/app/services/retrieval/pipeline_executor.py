@@ -18,6 +18,14 @@ class ExecutionContext:
     logs: List[str] = field(default_factory=list)
     graph_backend: str = "ontology"
     metric_type: str = "COSINE"
+    # 스테이지 실패 기록 (2026-11-25): [{"stage", "id", "kind": error|empty, "message", "routed_to"}]
+    failures: List[Dict[str, Any]] = field(default_factory=list)
+    # 실패 연결 없이 실패해 파이프라인을 멈췄는가
+    stopped: bool = False
+
+    @property
+    def has_error(self) -> bool:
+        return any(f.get("kind") == "error" for f in self.failures)
 
 
 class PipelineExecutor:
@@ -93,31 +101,81 @@ class PipelineExecutor:
         return ctx
     
     async def _run_sequential(self, ctx: ExecutionContext, stages: List[PipelineStage]) -> ExecutionContext:
-        """스테이지를 순서대로 실행 (기본 경로)."""
-        for i, stage in enumerate(stages):
+        """스테이지를 순서대로 실행 — 성공하면 다음 스테이지, 실패하면 실패 연결로 (2026-11-25).
+
+        - 정상 연결: 바로 다음 스테이지 (화면에서 카드 위쪽 화살표).
+        - 실패 연결(on_failure): 실패/예외 때 넘어갈 뒤쪽 스테이지 (카드 우하단 연결부).
+          그 대상 스테이지는 실패했을 때만 실행되고, 성공하면 건너뛴다.
+        - 실패 연결이 없으면 실패를 기록하고 파이프라인을 멈춘다 (예전처럼 오류를 삼키고 다음으로 가지 않는다).
+        실패 = 예외, 또는 그래프 스테이지가 근거(트리플·청크)를 하나도 찾지 못함.
+        """
+        index_of = {st.id: i for i, st in enumerate(stages) if st.id}
+        skip: set = set()          # 성공 경로에서 건너뛸 스테이지 (실패 연결 대상)
+        i = 0
+        while i < len(stages):
+            stage = stages[i]
+            if i in skip:
+                ctx.logs.append(f"[Pipeline] Stage {i+1}/{len(stages)}: {stage.type} 건너뜀 — 앞 스테이지의 실패 연결 대상 (앞 스테이지 성공)")
+                i += 1
+                continue
             handler = self._handlers.get(stage.type)
             if not handler:
                 msg = f"[Pipeline] Unknown stage type: {stage.type}, skipping"
                 print(msg)
                 ctx.logs.append(msg)
+                i += 1
                 continue
-                
+
+            target = index_of.get(stage.on_failure) if stage.on_failure else None
+            if stage.on_failure and (target is None or target <= i):
+                ctx.logs.append(f"[Pipeline] {stage.type}: 실패 연결 대상({stage.on_failure})이 뒤쪽에 없음 → 연결 없음으로 처리")
+                target = None
+            params = dict(stage.params or {})
+            if target is not None and stage.type == "graph":
+                # 실패 연결이 있으면 그래프 안의 문서 검색 대체를 끈다 — 실패를 파이프라인이 다룬다
+                params["graph_fallback"] = "none"
+
             msg = f"[Pipeline] Stage {i+1}/{len(stages)}: {stage.type} (params: {stage.params})"
             print(msg)
             ctx.logs.append(msg)
-            
+
+            failure = None
+            ctx.metadata.pop("_stage_empty", None)
             try:
-                ctx = await handler(ctx, stage.params)
-                msg = f"[Pipeline] Stage {stage.type} completed, {len(ctx.results)} results"
-                print(msg)
-                ctx.logs.append(msg)
+                ctx = await handler(ctx, params)
+                if ctx.metadata.pop("_stage_empty", None):
+                    failure = {"kind": "empty", "message": ctx.metadata.pop("_stage_empty_reason", None) or "근거를 찾지 못함"}
+                else:
+                    msg = f"[Pipeline] Stage {stage.type} completed, {len(ctx.results)} results"
+                    print(msg)
+                    ctx.logs.append(msg)
             except Exception as e:
-                msg = f"[Pipeline] Error in stage {stage.type}: {str(e)}"
+                failure = {"kind": "error", "message": str(e)[:500]}
+
+            if failure is None:
+                if target is not None:
+                    skip.add(target)
+                i += 1
+                continue
+
+            failure.update(stage=stage.type, id=stage.id, index=i + 1,
+                           routed_to=(stages[target].type if target is not None else None))
+            ctx.failures.append(failure)
+            label = "Error in stage" if failure["kind"] == "error" else "Stage 결과 없음 —"
+            if target is not None:
+                msg = (f"[Pipeline] {label} {stage.type}: {failure['message']} "
+                       f"→ 실패 연결로 Stage {target+1} {stages[target].type}")
                 print(msg)
                 ctx.logs.append(msg)
-                # Decide whether to continue or break. For now, continuing with previous results might be safer or break.
-                # Let's verify if we should stop. Generally pipeline failure should be noted.
-        
+                skip.discard(target)
+                i = target
+                continue
+            msg = f"[Pipeline] {label} {stage.type}: {failure['message']} → 실패 연결 없음, 파이프라인 중단"
+            print(msg)
+            ctx.logs.append(msg)
+            ctx.stopped = True
+            break
+
         return ctx
 
     def _sub_context(self, ctx: ExecutionContext, query: str) -> ExecutionContext:
@@ -382,9 +440,23 @@ class PipelineExecutor:
             **extra_kwargs
         )
         
+        g_meta0 = (new_results[0].get("graph_metadata") if new_results else None) or {}
+        found = any(r.get("chunk_id") != "GRAPH_METADATA_ONLY" for r in new_results or []) \
+            or bool(g_meta0.get("triples"))
+        if not found:
+            # 그래프 스테이지 실패: 근거 없음. 메타데이터 전용 결과는 넘기지 않고, '0개' 요약이 답변에 들어가지 않게 뺀다
+            ctx.metadata["_stage_empty"] = True
+            ctx.metadata["_stage_empty_reason"] = "그래프에서 근거(트리플·청크)를 찾지 못함"
+            g_meta0.pop("result_summary", None)
+            new_results = []
+
         ctx.results = self._update_results_with_history(ctx.results, new_results, "Graph", merge_mode)
         
-        # Store graph metadata if available
+        # Store graph metadata if available (실패해도 추론 리포트는 남긴다)
+        if g_meta0 and not new_results:
+            ctx.metadata["graph_metadata"] = g_meta0
+            if "trace_logs" in g_meta0:
+                ctx.logs.extend(g_meta0["trace_logs"])
         if new_results and new_results[0].get("graph_metadata"):
             g_meta = new_results[0]["graph_metadata"]
             ctx.metadata["graph_metadata"] = g_meta
