@@ -394,6 +394,20 @@ async def _apply_renames(kb_id: str, diff: Dict[str, Any]) -> int:
             await SchemaMappingRule(kb_id=kb_id, rule_type="key", source_path=old, target_path=new,
                                     origin="schema_editor").insert()
         n += 1
+        # 트리플 규칙(뒤집기·삭제·이동·추가)은 key 규칙을 거친 관계 이름으로 맞춘다 — 옛 이름으로 남아 있으면
+        # 이름을 바꾼 뒤 조용히 풀린다 (2026-11-25, '계승_발전' 이름 정리)
+        for r in await SchemaMappingRule.find(SchemaMappingRule.kb_id == kb_id,
+                                              SchemaMappingRule.rule_type == "triple").to_list():
+            changed = False
+            if r.pair and len(r.pair) == 3 and r.pair[1] == old:
+                r.pair = [r.pair[0], new, r.pair[2]]
+                changed = True
+            if r.target_path == old:
+                r.target_path = new
+                changed = True
+            if changed:
+                await r.save()
+                n += 1
     for old, new in diff["classes_renamed"].items():
         for r in await SchemaMappingRule.find(SchemaMappingRule.kb_id == kb_id, SchemaMappingRule.rule_type == "class",
                                               SchemaMappingRule.target_value == old).to_list():
