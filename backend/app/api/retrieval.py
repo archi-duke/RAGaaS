@@ -175,6 +175,8 @@ class ChatResponse(BaseModel):
     # 실패한 검색 스테이지 (2026-11-25): [{stage, index, kind: error|empty, message, routed_to}]
     # routed_to 가 있으면 실패 연결로 그 스테이지가 이어 받았고, 없으면 파이프라인이 거기서 멈췄다.
     stage_failures: List[Dict[str, Any]] = []
+    # 답변 근거 검사 (answer_check 카드, 2026-11-25): {checked, unsupported: [{sentence, reason}], action, model} 또는 {error}
+    answer_check: Optional[Dict[str, Any]] = None
 
 
 from pathlib import Path
@@ -494,10 +496,10 @@ async def chat_with_kb(
     execution_logs = []
     stage_failures: List[Dict[str, Any]] = []
 
-    # 검색 스테이지 = smalltalk(비검색 게이트)를 제외한 실제 검색 필터들
+    # 검색 스테이지 = smalltalk(비검색 게이트)·answer_check(답변 뒤 검사)를 제외한 실제 검색 필터들
     search_stages = [
         s for s in (pipeline_config.get("stages") or [] if pipeline_config else [])
-        if s.get("type") != "smalltalk"
+        if s.get("type") not in ("smalltalk", "answer_check")
     ]
 
     # Pipeline mode execution
@@ -549,8 +551,8 @@ async def chat_with_kb(
         if pipeline_config and pipeline_config.get("stages"):
             names = []
             for stage in pipeline_config["stages"]:
-                if stage.get("type") == "smalltalk":
-                    continue  # smalltalk 는 검색 단계가 아니므로 전략명에서 제외
+                if stage.get("type") in ("smalltalk", "answer_check"):
+                    continue  # 게이트·답변 검사는 검색 단계가 아니므로 전략명에서 제외
                 s_type = stage.get("type", "unknown").upper()
                 names.append("Vector" if s_type == "ANN" else s_type)
             return " → ".join(names)
@@ -694,6 +696,25 @@ async def chat_with_kb(
     except Exception as e_ans:
         print(f"[Answer] grounding summary skipped: {e_ans}")
 
+    # 답변 근거 검사 — 파이프라인 맨 끝의 'answer_check' 카드가 있을 때만 (추출 품질 후속 C)
+    answer_check = None
+    from app.services.retrieval import answer_check as ac
+    _ac_stage = ac.stage_of(pipeline_config)
+    if _ac_stage is not None and answer:
+        _ac_params = _ac_stage.get("params") or {}
+        try:
+            _ac_cfg = llm_cfg
+            if (_ac_params.get("llm_model") or {}).get("model"):
+                from app.core.models_resolver import resolve_model_config
+                _ac_cfg = await resolve_model_config(_ac_params["llm_model"])
+            answer_check = await ac.check_answer(answer, context, _ac_cfg, _ac_params.get("action") or "mark")
+            if answer_check.get("answer"):
+                answer = answer_check.pop("answer")
+            execution_logs.extend(ac.log_lines(answer_check))
+        except Exception as e_ac:   # 검사 실패가 답변을 막지 않는다 — 실패를 알린다
+            answer_check = {"error": str(e_ac)[:300]}
+            execution_logs.append(f"[AnswerCheck] 검사 실패: {str(e_ac)[:200]}")
+
     display_strategy = _display_strategy()
     # Detect error and fallback states — 스테이지 실패 기록이 우선, 로그 스캔은 보조
     has_error = stage_error
@@ -732,6 +753,7 @@ async def chat_with_kb(
         used_fallback=used_fallback,
         applied_policy=applied_policy,
         stage_failures=stage_failures,
+        answer_check=answer_check,
     )
 
 

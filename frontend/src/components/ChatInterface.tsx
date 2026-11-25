@@ -17,6 +17,8 @@ interface Message {
     streaming?: boolean;   // 답변 생성 중 (스트리밍 자리표시)
     // 실패한 검색 스테이지 — routed_to 가 있으면 실패 연결로 넘어갔고, 없으면 거기서 멈췄다
     stage_failures?: { stage: string; index?: number; kind: 'error' | 'empty'; message?: string; routed_to?: string | null }[];
+    // 답변 근거 검사 (Answer Check 카드) — 근거 문맥에 없는 문장
+    answer_check?: { checked?: number; unsupported?: { sentence: string; reason?: string }[]; action?: string; error?: string } | null;
 }
 
 interface ChatInterfaceProps {
@@ -304,6 +306,7 @@ export default function ChatInterface({
                 has_error: response.data.has_error,
                 used_fallback: response.data.used_fallback,
                 stage_failures: response.data.stage_failures,
+                answer_check: response.data.answer_check,
                 pipeline_config: response.data.pipeline_config
             };
 
@@ -416,6 +419,20 @@ export default function ChatInterface({
                                 <div style={{ flex: 1, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
                                     {msg.content}
                                     {msg.streaming && <span style={{ opacity: 0.5 }}>{msg.content ? ' ▍' : '답변 작성 중…'}</span>}
+                                    {msg.role === 'assistant' && msg.answer_check && (
+                                        <div style={{ marginTop: '0.4rem', fontSize: '0.75rem', color: msg.answer_check.unsupported?.length || msg.answer_check.error ? '#b45309' : '#15803d' }}>
+                                            {msg.answer_check.error
+                                                ? `답변 검사 실패: ${msg.answer_check.error.slice(0, 120)}`
+                                                : msg.answer_check.unsupported?.length
+                                                    ? <>
+                                                        <div>답변 검사: {msg.answer_check.checked}문장 중 근거 없음 {msg.answer_check.unsupported.length}개{msg.answer_check.action === 'remove' ? ' (답변에서 뺌)' : ''}</div>
+                                                        {msg.answer_check.unsupported.map((u, i) => (
+                                                            <div key={i} title={u.reason} style={{ paddingLeft: '0.6rem' }}>✗ {u.sentence.slice(0, 140)}{u.reason ? ` — ${u.reason.slice(0, 80)}` : ''}</div>
+                                                        ))}
+                                                    </>
+                                                    : `답변 검사: ${msg.answer_check.checked ?? 0}문장 모두 근거 있음`}
+                                        </div>
+                                    )}
                                     {msg.role === 'assistant' && !!msg.stage_failures?.length && (
                                         <div style={{ marginTop: '0.4rem', fontSize: '0.75rem', color: '#b91c1c' }}>
                                             {msg.stage_failures.map((f, i) => (

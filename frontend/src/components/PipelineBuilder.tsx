@@ -6,7 +6,7 @@ import { useModelSettings } from '../hooks/useModelSettings';
 import config from '../platform/config';
 
 // Stage type definitions
-export type StageType = 'smalltalk' | 'agentic' | 'ann' | 'bm25' | 'brute_force' | 'graph' | 'rerank' | 'ner_filter';
+export type StageType = 'smalltalk' | 'agentic' | 'ann' | 'bm25' | 'brute_force' | 'graph' | 'rerank' | 'ner_filter' | 'answer_check';
 
 export interface PipelineStage {
     type: StageType;
@@ -21,7 +21,7 @@ export interface PipelineStage {
 const newStageId = () => `s_${Math.random().toString(36).slice(2, 8)}`;
 
 // 실패 연결을 둘 수 있는 스테이지 (Gate·Agentic 은 분기 대상이 아님 — Agentic 은 스스로 순서를 정한다)
-const canBranch = (t: StageType) => t !== 'smalltalk' && t !== 'agentic';
+const canBranch = (t: StageType) => t !== 'smalltalk' && t !== 'agentic' && t !== 'answer_check';
 
 // 실패 연결 정리: 없는 대상·앞쪽 대상을 가리키는 연결은 지운다
 const tidyFailureLinks = (list: PipelineStage[]): PipelineStage[] => list.map((st, i) => {
@@ -77,8 +77,15 @@ const GATE_STAGES: { type: StageType; label: string; category: 'gate' }[] = [
     { type: 'smalltalk', label: 'Gate', category: 'gate' },
 ];
 
+// 답변 검사: 파이프라인 맨 끝(답변 뒤). 답변 문장이 검색 근거(청크·트리플)에 있는지 LLM 이 판정 (2026-11-25).
+// 카드가 있으면 검사, 지우면 꺼짐. action: mark(표시만) | remove(근거 없는 문장을 답변에서 뺌)
+const ANSWER_STAGES: { type: StageType; label: string; category: 'answer' }[] = [
+    { type: 'answer_check', label: 'Answer Check', category: 'answer' },
+];
+
 const DEFAULT_PARAMS: Record<StageType, Record<string, any>> = {
     smalltalk: { llm_model: DEFAULT_LLM_CONFIG },
+    answer_check: { llm_model: DEFAULT_LLM_CONFIG, action: 'mark' },
     agentic: { llm_model: DEFAULT_LLM_CONFIG, mode: 'auto', max_steps: 6, time_budget_s: 60 },
     ann: { top_k: 10, threshold: 0.5, index_type: 'IVF_FLAT', embedding_model: DEFAULT_EMBEDDING_CONFIG },
     bm25: { top_k: 50, use_multi_pos: true },
@@ -195,8 +202,9 @@ export default function PipelineBuilder({
     // agentic 도 하나만 의미가 있다
     const hasAgentic = stages.some(s => s.type === 'agentic');
     const filterStages = hasAgentic ? FILTER_STAGES.filter(s => s.type !== 'agentic') : FILTER_STAGES;
+    const hasAnswerCheck = stages.some(s => s.type === 'answer_check');
     const availableStages = hasSearchStage
-        ? [...gateStages, ...SEARCH_STAGES, ...filterStages]
+        ? [...gateStages, ...SEARCH_STAGES, ...filterStages, ...(hasAnswerCheck ? [] : ANSWER_STAGES)]
         : [...gateStages, ...SEARCH_STAGES];
 
     // Filter graph if no graph backend
@@ -474,7 +482,7 @@ export default function PipelineBuilder({
             // we could add ingest_embedding to useModelSettings. 
             // But let's use the current settings for now.
         }
-        if (type === 'smalltalk') {
+        if (type === 'smalltalk' || type === 'answer_check') {
             params.llm_model = settings.chat_llm;
         }
         if (type === 'graph') {
@@ -502,8 +510,12 @@ export default function PipelineBuilder({
             const gateIdx = stages.findIndex(s => s.type === 'smalltalk');
             const at = gateIdx >= 0 ? gateIdx + 1 : 0;
             setStages([...stages.slice(0, at), newStage, ...stages.slice(at)]);
+        } else if (type === 'answer_check') {
+            setStages([...stages, newStage]);   // 답변 뒤 — 맨 끝
         } else {
-            setStages([...stages, newStage]);
+            // 답변 검사 카드가 있으면 그 앞에 넣는다 (답변 검사는 항상 맨 끝)
+            const ac = stages.findIndex(s => s.type === 'answer_check');
+            setStages(ac >= 0 ? [...stages.slice(0, ac), newStage, ...stages.slice(ac)] : [...stages, newStage]);
         }
         setShowDropdown(false);
     };
@@ -539,7 +551,7 @@ export default function PipelineBuilder({
     };
 
     const stageLabel = (t: StageType) =>
-        [...GATE_STAGES, ...SEARCH_STAGES, ...FILTER_STAGES].find(s => s.type === t)?.label || t;
+        [...GATE_STAGES, ...SEARCH_STAGES, ...FILTER_STAGES, ...ANSWER_STAGES].find(s => s.type === t)?.label || t;
 
     // 카드 우하단 실패/예외 연결부 + 실패 경로 표시
     const renderFailurePort = (stage: PipelineStage, index: number, shown: PipelineStage[]) => {
@@ -599,11 +611,12 @@ export default function PipelineBuilder({
     };
 
     const renderStageCard = (stage: PipelineStage, index: number, shown: PipelineStage[] = stages) => {
-        const stageInfo = [...GATE_STAGES, ...SEARCH_STAGES, ...FILTER_STAGES].find(s => s.type === stage.type);
+        const stageInfo = [...GATE_STAGES, ...SEARCH_STAGES, ...FILTER_STAGES, ...ANSWER_STAGES].find(s => s.type === stage.type);
         const isSearch = SEARCH_STAGES.some(s => s.type === stage.type);
 
         const usesLLM =
             stage.type === 'smalltalk' ||
+            stage.type === 'answer_check' ||
             stage.type === 'agentic' ||
             stage.type === 'graph' ||
             (stage.type === 'rerank' && stage.params.use_llm);
@@ -695,6 +708,32 @@ export default function PipelineBuilder({
         const params = stage.params;
 
         switch (stage.type) {
+            case 'answer_check':
+                return (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', paddingTop: '0.15rem' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', flexWrap: 'wrap' }}>
+                            <span style={{ fontSize: '0.7rem', color: '#475569', flexShrink: 0 }}>Model</span>
+                            <ModelSelector
+                                type="llm"
+                                value={params.llm_model || DEFAULT_LLM_CONFIG}
+                                onChange={(cfg) => handleParamChange(index, 'llm_model', cfg)}
+                            />
+                        </div>
+                        <ParamSelect
+                            label="Unsupported"
+                            layout="inline"
+                            minWidth="90px"
+                            value={params.action ?? 'mark'}
+                            options={[
+                                { value: 'mark', label: 'Mark' },
+                                { value: 'remove', label: 'Remove' }
+                            ]}
+                            onChange={(v) => handleParamChange(index, 'action', v)}
+                        />
+                        <span style={{ fontSize: '0.65rem', color: '#94a3b8' }}>답변 문장이 근거에 있는지 검사 (답변 뒤, LLM 1회)</span>
+                    </div>
+                );
+
             case 'smalltalk':
                 return (
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', flexWrap: 'wrap', paddingTop: '0.15rem' }}>
@@ -1230,7 +1269,7 @@ export default function PipelineBuilder({
                                     <div style={{ padding: '0.25rem 1rem', fontSize: '0.75rem', color: '#94a3b8', fontWeight: 600 }}>
                                         Filters
                                     </div>
-                                    {filteredStages.filter(s => s.category === 'filter').map(stage => (
+                                    {filteredStages.filter(s => s.category === 'filter' || s.category === 'answer').map(stage => (
                                         <div
                                             key={stage.type}
                                             onClick={() => handleAddStage(stage.type)}
