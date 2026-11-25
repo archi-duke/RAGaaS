@@ -62,6 +62,7 @@ def summarize(pipeline: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         "post_filters": [t for t in types if t in POST_STAGES],
         "gate": GATE_STAGE in types,
         "agentic": AGENTIC_STAGE in types,
+        "answer_check": "answer_check" in types,      # 답변 근거 검사 카드 (답변 뒤)
         "graph": graph_options(graph.get("params") or {}) if graph else None,
     }
 

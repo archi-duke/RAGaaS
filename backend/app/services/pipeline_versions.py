@@ -23,7 +23,7 @@ import httpx
 
 SCHEMA = "ragaas.pipeline/v1"
 TIMEOUT = 8.0
-KNOWN_STAGES = {"smalltalk", "agentic", "graph", "ann", "bm25", "brute_force", "rerank", "ner_filter"}
+KNOWN_STAGES = {"smalltalk", "agentic", "graph", "ann", "bm25", "brute_force", "rerank", "ner_filter", "answer_check"}
 
 
 class GitUnavailable(RuntimeError):
