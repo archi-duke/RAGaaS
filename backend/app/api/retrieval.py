@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from app.schemas import RetrievalRequest, RetrievalResult
 from app.services.retrieval import retrieval_factory, reranking_service
-from typing import List, Optional, Dict
+from typing import Any, List, Optional, Dict
 from pydantic import BaseModel, Field
 import asyncio
 import openai
@@ -172,6 +172,9 @@ class ChatResponse(BaseModel):
     used_fallback: bool = False  # Fallback search was triggered due to error/no results
     status: str = "ok"           # ok | disabled (검색 필터 없음)
     applied_policy: Optional[Dict] = None   # 실행한 구성·검색 필터·건너뛴 단계·Graph 옵션
+    # 실패한 검색 스테이지 (2026-11-25): [{stage, index, kind: error|empty, message, routed_to}]
+    # routed_to 가 있으면 실패 연결로 그 스테이지가 이어 받았고, 없으면 파이프라인이 거기서 멈췄다.
+    stage_failures: List[Dict[str, Any]] = []
 
 
 from pathlib import Path
@@ -489,6 +492,7 @@ async def chat_with_kb(
         # 모델 미설정/실패/검색필요 시 아래 일반 검색 흐름으로 진행
 
     execution_logs = []
+    stage_failures: List[Dict[str, Any]] = []
 
     # 검색 스테이지 = smalltalk(비검색 게이트)를 제외한 실제 검색 필터들
     search_stages = [
@@ -518,6 +522,7 @@ async def chat_with_kb(
         
         results = exec_ctx.results
         execution_logs = exec_ctx.logs
+        stage_failures = exec_ctx.failures
         graph_metadata = exec_ctx.metadata.get("graph_metadata")
         
         # Attach graph metadata to first result if present
@@ -540,6 +545,24 @@ async def chat_with_kb(
             raise HTTPException(status_code=500, detail="LLM API key/헤더가 설정되지 않았습니다.")
         return resolved, resolved.get("model")
 
+    def _display_strategy() -> str:
+        if pipeline_config and pipeline_config.get("stages"):
+            names = []
+            for stage in pipeline_config["stages"]:
+                if stage.get("type") == "smalltalk":
+                    continue  # smalltalk 는 검색 단계가 아니므로 전략명에서 제외
+                s_type = stage.get("type", "unknown").upper()
+                names.append("Vector" if s_type == "ANN" else s_type)
+            return " → ".join(names)
+        base = request.strategy.lower()
+        name = {"hybrid": "Hybrid", "keyword": "Keyword", "ann": "Vector", "vector": "Vector",
+                "2-stage": "2-Stage (L2)"}.get(base, base.capitalize())
+        if request.enable_graph_search or (kb.enable_graph_rag and kb.graph_backend):
+            return f"Graph → {name}"
+        return name
+
+    stage_error = any(f.get("kind") == "error" for f in stage_failures)
+
     # Parent-Child(small-to-big): child 로 찾은 결과를 parent 로 치환 (해당 청크만).
     # 파이프라인/레거시 경로 모두 여기를 지나므로 한 곳에서 처리한다.
     from app.services.retrieval.parent_child import expand_to_parents
@@ -548,19 +571,38 @@ async def chat_with_kb(
     # 근거만 요청 (MCP 등) — 답변 생성을 하지 않는다 (호출당 LLM 1회·4~8초 절약)
     if not request.answer:
         elapsed = time.time() - start_time
-        asyncio.create_task(_save_chat_trace(kb_id, request.query, "", "근거만", elapsed, False, False,
+        asyncio.create_task(_save_chat_trace(kb_id, request.query, "", "근거만", elapsed, stage_error, False,
                                              execution_logs, results, {**pipeline_config, "_applied": applied_policy}))
         return ChatResponse(answer="", chunks=results or [], execution_time=elapsed, strategy="근거만",
                             execution_log=execution_logs, pipeline_config=pipeline_config,
-                            applied_policy=applied_policy)
+                            applied_policy=applied_policy, has_error=stage_error,
+                            stage_failures=stage_failures)
 
     # 4. Generate LLM response based on retrieved chunks
     if not results:
+        # 결과가 없을 때도 실패를 숨기지 않는다 — 어떤 스테이지가 왜 실패했는지 답변·응답에 싣는다
+        if stage_failures:
+            lines = [f"- {f['stage']} (Stage {f.get('index')}): "
+                     + ("오류 — " if f.get("kind") == "error" else "결과 없음 — ") + str(f.get("message") or "")
+                     + (f" → {f['routed_to']} 로 넘김" if f.get("routed_to") else " → 파이프라인 중단")
+                     for f in stage_failures]
+            answer = ("검색 단계가 실패해 답변할 근거를 찾지 못했습니다.\n" if stage_error
+                      else "관련 정보를 찾지 못했습니다.\n") + "\n".join(lines)
+        else:
+            answer = "I couldn't find any relevant information to answer your question."
+        elapsed = time.time() - start_time
+        display_strategy = _display_strategy()
+        asyncio.create_task(_save_chat_trace(kb_id, request.query, answer, display_strategy, elapsed, stage_error,
+                                             False, execution_logs, [],
+                                             {**(pipeline_config or {}), "_applied": applied_policy}))
         return ChatResponse(
-            answer="I couldn't find any relevant information to answer your question.",
+            answer=answer,
             chunks=[],
+            execution_time=elapsed,
+            strategy=display_strategy,
             execution_log=execution_logs,
             pipeline_config=pipeline_config, applied_policy=applied_policy,
+            has_error=stage_error, stage_failures=stage_failures,
         )
     
     # Build context from top chunks
@@ -652,36 +694,9 @@ async def chat_with_kb(
     except Exception as e_ans:
         print(f"[Answer] grounding summary skipped: {e_ans}")
 
-    # Determine display strategy name
-    if pipeline_config and pipeline_config.get("stages"):
-        # Pipeline Mode
-        stage_names = []
-        for stage in pipeline_config["stages"]:
-            if stage.get("type") == "smalltalk":
-                continue  # smalltalk 는 검색 단계가 아니므로 전략명에서 제외
-            s_type = stage.get("type", "unknown").upper()
-            if s_type == "ANN": s_type = "Vector"
-            stage_names.append(s_type)
-        display_strategy = " → ".join(stage_names)
-    else:
-        # Standard Mode - Mapping to user-friendly names
-        base_strategy = request.strategy.lower()
-        strategy_map = {
-            "hybrid": "Hybrid",
-            "keyword": "Keyword",
-            "ann": "Vector",
-            "vector": "Vector",
-            "2-stage": "2-Stage (L2)"
-        }
-        name = strategy_map.get(base_strategy, base_strategy.capitalize())
-        
-        if request.enable_graph_search or (kb.enable_graph_rag and kb.graph_backend):
-            display_strategy = f"Graph → {name}"
-        else:
-            display_strategy = name
-    
-    # Detect error and fallback states from execution logs
-    has_error = False
+    display_strategy = _display_strategy()
+    # Detect error and fallback states — 스테이지 실패 기록이 우선, 로그 스캔은 보조
+    has_error = stage_error
     used_fallback = False
     in_reasoning_report = False
     for log_entry in execution_logs:
@@ -716,6 +731,7 @@ async def chat_with_kb(
         has_error=has_error,
         used_fallback=used_fallback,
         applied_policy=applied_policy,
+        stage_failures=stage_failures,
     )
 
 

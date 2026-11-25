@@ -15,6 +15,8 @@ interface Message {
     used_fallback?: boolean;
     pipeline_config?: any;
     streaming?: boolean;   // 답변 생성 중 (스트리밍 자리표시)
+    // 실패한 검색 스테이지 — routed_to 가 있으면 실패 연결로 넘어갔고, 없으면 거기서 멈췄다
+    stage_failures?: { stage: string; index?: number; kind: 'error' | 'empty'; message?: string; routed_to?: string | null }[];
 }
 
 interface ChatInterfaceProps {
@@ -301,6 +303,7 @@ export default function ChatInterface({
                 strategy: response.data.strategy,
                 has_error: response.data.has_error,
                 used_fallback: response.data.used_fallback,
+                stage_failures: response.data.stage_failures,
                 pipeline_config: response.data.pipeline_config
             };
 
@@ -413,6 +416,17 @@ export default function ChatInterface({
                                 <div style={{ flex: 1, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
                                     {msg.content}
                                     {msg.streaming && <span style={{ opacity: 0.5 }}>{msg.content ? ' ▍' : '답변 작성 중…'}</span>}
+                                    {msg.role === 'assistant' && !!msg.stage_failures?.length && (
+                                        <div style={{ marginTop: '0.4rem', fontSize: '0.75rem', color: '#b91c1c' }}>
+                                            {msg.stage_failures.map((f, i) => (
+                                                <div key={i}>
+                                                    ⚠ {f.stage}{f.index ? ` (Stage ${f.index})` : ''} {f.kind === 'error' ? '오류' : '결과 없음'}
+                                                    {f.routed_to ? ` → 실패 연결로 ${f.routed_to}` : ' → 파이프라인 중단'}
+                                                    {f.kind === 'error' && f.message ? `: ${f.message.slice(0, 160)}` : ''}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
                                 </div>
                                 {msg.role === 'user' && (
                                     <button
