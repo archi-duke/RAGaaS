@@ -386,11 +386,16 @@ _AUDIT_STATE: dict = {}
 
 class DirectionAuditBody(BaseModel):
     properties: Optional[List[str]] = None
+    # same_class(기본, 같은 클래스끼리 잇는 관계) | all(모든 관계 — 근거 검증). 한 번 정하면 자동 증분 검증도 따른다
+    scope: Optional[str] = None
+    # 판정 후 바로 적용: 확실한 반대 방향 뒤집기 + 근거 없는 트리플 제외 (되돌림 가능한 규칙)
+    auto_apply: bool = False
 
 
 @router.post("/{kb_id}/schema/direction-audit")
 async def start_direction_audit(kb_id: str, body: DirectionAuditBody):
-    """같은 클래스끼리 잇는 관계의 트리플 방향을 원문으로 검증 (백그라운드, LLM). 결과는 GET 으로."""
+    """트리플을 원문으로 검증 (백그라운드, LLM). 기본은 같은 클래스끼리 잇는 관계의 방향,
+    scope=all 이면 모든 관계의 근거. 결과는 GET 으로."""
     import asyncio as _aio
     from app.services.schema_alignment import direction_audit as da
     if _AUDIT_STATE.get(kb_id, {}).get("state") == "running":
@@ -398,7 +403,7 @@ async def start_direction_audit(kb_id: str, body: DirectionAuditBody):
 
     async def _run():
         try:
-            r = await da.run_audit(kb_id, body.properties)
+            r = await da.run_audit(kb_id, body.properties, scope=body.scope, auto_apply=body.auto_apply)
             _AUDIT_STATE[kb_id] = {"state": "done", **r}
         except Exception as e:      # noqa: BLE001
             _AUDIT_STATE[kb_id] = {"state": "error", "error": str(e)[:300]}
