@@ -1122,7 +1122,7 @@ async def edit_triples(kb_id: str, action: str, triples: List[Dict[str, str]],
     if action in ("flip", "delete"):
         try:   # 방향 검증 결과에 반영 표시 (다음 증분 검증이 다시 판정하지 않게)
             from app.services.schema_alignment.direction_audit import mark_applied
-            await mark_applied(kb_id, rows, action, "auto" if origin == "auto_direction" else "user")
+            await mark_applied(kb_id, rows, action, "auto" if (origin or "").startswith("auto_") else "user")
         except Exception:
             pass
     return {"action": action, "edited": n, "target_property": target_property if action == "move" else None,
